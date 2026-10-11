@@ -53,7 +53,8 @@ try:
 except ImportError:
     winsound = None
 
-APP_NAME = "Eternal FishMod"
+APP_VERSION = "0.1.0-beta.1"
+APP_NAME = f"Eternal FishMod v{APP_VERSION}"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TPL_DIR = os.path.join(BASE_DIR, "templates")
 SND_DIR = os.path.join(BASE_DIR, "sounds")
