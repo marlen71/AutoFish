@@ -1,0 +1,5 @@
+opencv-python>=4.8,<5
+numpy>=1.24,<3
+mss>=9,<11
+pydirectinput>=1.0,<2
+keyboard>=0.13,<1

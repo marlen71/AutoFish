@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+fishmod_config.json
+fishmod_stats.json
+fishmod.log
+debug_*.png
+sounds/*.wav
