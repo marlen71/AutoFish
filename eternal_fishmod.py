@@ -79,7 +79,7 @@ except Exception:
     bettercam = None
 
 APP_NAME = "Eternal FishMod"
-APP_VERSION = "1.3.0"            # синхронизируется скриптом scripts/release.py с файлом VERSION
+APP_VERSION = "1.3.1"            # синхронизируется скриптом scripts/release.py с файлом VERSION
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TPL_DIR = os.path.join(BASE_DIR, "templates")
 SND_DIR = os.path.join(BASE_DIR, "sounds")
