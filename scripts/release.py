@@ -36,6 +36,7 @@ import shutil
 import argparse
 import datetime
 import subprocess
+import time
 import urllib.request
 import urllib.error
 
@@ -230,23 +231,75 @@ def build_zip(version, out_path=None):
     return made, added
 
 
+# --------------------------------------------------------------------- ассеты релиза
+def gh_asset_names(tag):
+    """Реально прикреплённые к релизу файлы (gh может вернуть 0 и не прикрепить архив)."""
+    rc, out = run(["gh", "release", "view", tag, "--json", "assets", "--jq", ".assets[].name"])
+    if rc != 0:
+        return []
+    return [l.strip() for l in out.splitlines() if l.strip()]
+
+
+def gh_upload_asset(tag, asset, tries=3):
+    """Прикрепить zip к релизу с повторами и ПРОВЕРКОЙ.
+
+    uploads.github.com — отдельный хост: он отдаёт кратковременные обрывы (EOF), а
+    окружение без прямого доступа к нему (CI-песочницы, прокси) не отдаёт его вообще.
+    Поэтому «rc == 0» вердиктом не считаю: смотрю, появился ли файл в списке ассетов.
+    """
+    if not asset or not os.path.exists(asset):
+        return False
+    name = os.path.basename(asset)
+    last = ""
+    for i in range(1, tries + 1):
+        rc, out = run(["gh", "release", "upload", tag, asset, "--clobber"])
+        last = (out or "").strip()
+        if rc == 0 and name in gh_asset_names(tag):
+            ok("архив %s прикреплён к релизу (%.1f КБ)"
+               % (name, os.path.getsize(asset) / 1024.0))
+            return True
+        if i < tries:
+            warn("архив не прикрепился (попытка %d/%d): %s — повторяю"
+                 % (i, tries, last.splitlines()[-1][:160] if last else "?"))
+            time.sleep(2 * i)
+    err("архив так и не прикрепился.", last[:400])
+    return False
+
+
+def attach_hint(tag, version):
+    """Что делать, если архив в релизе так и не появился."""
+    owner, repo = _slug()
+    print("  Как скачать без аттачмента:")
+    if owner and owner != "?":
+        print("    https://github.com/%s/%s/archive/%s.zip            (исходники тега = те же файлы)"
+              % (owner, repo, tag))
+    print("    gh release upload %s eternal_fishmod_v%s.zip --clobber   (с машины, где доступен"
+          " uploads.github.com)" % (tag, version))
+    print("    либо пуш/повтор тега: workflow Release build приложит архив сам")
+
+
 # ----------------------------------------------------------------------------- релиз
 def create_release_gh(tag, notes_file, asset, draft=False):
+    """Создать/обновить релиз через gh CLI. Возвращает (опубликован, ссылка, архив_в_релизе).
+
+    Архив намеренно довожу отдельной загрузкой: `gh release create <tag> ... file.zip`
+    при обрыве загрузки ассета оставляет релиз либо без архива, либо вообще удалённым
+    (черновик откатывается) — ровно это и было получено одним EOF'ом на практике.
+    """
+    ver = tag[1:] if tag.startswith("v") else tag
     cmd = ["gh", "release", "create", tag, "--title", tag, "--notes-file", notes_file]
-    if asset and os.path.exists(asset):
-        cmd.append(asset)
     if draft:
         cmd.append("--draft")
     rc, out = run(cmd)
     if rc != 0 and "already exists" in out.lower():
-        cmd = ["gh", "release", "edit", tag, "--title", tag, "--notes-file", notes_file]
-        rc2, out2 = run(cmd)
-        if asset and os.path.exists(asset):
-            run(["gh", "release", "upload", tag, asset, "--clobber"])
-        return True, "https://github.com/%s/%s/releases/tag/%s" % (_slug()[0], _slug()[1], tag)
+        rc, out = run(["gh", "release", "edit", tag, "--title", tag, "--notes-file", notes_file])
     if rc != 0:
-        return False, out
-    return True, (out.splitlines()[-1].strip() if out else "")
+        return False, out, False
+    asset_ok = gh_upload_asset(tag, asset)
+    if asset and not asset_ok:
+        attach_hint(tag, ver)
+    url = "https://github.com/%s/%s/releases/tag/%s" % (_slug()[0], _slug()[1], tag)
+    return True, (out.splitlines()[-1].strip() or url), asset_ok
 
 
 def _slug():
@@ -256,6 +309,7 @@ def _slug():
 def create_release_rest(tag, notes, asset_path, token):
     owner, repo = _slug()
     api = "https://api.github.com"
+    ver = tag[1:] if tag.startswith("v") else tag
     payload = json.dumps({"tag_name": tag, "name": tag, "body": notes,
                           "draft": False, "prerelease": False}).encode()
     req = urllib.request.Request(api + "/repos/%s/%s/releases" % (owner, repo), data=payload, method="POST",
@@ -275,25 +329,40 @@ def create_release_rest(tag, notes, asset_path, token):
             except Exception as e2:
                 return False, "HTTP %s: %s (и загрузка существующего релиза не удалась: %s)" % (e.code, body[:200], e2)
         else:
-            return False, "HTTP %s: %s" % (e.code, body[:300])
+            return False, "HTTP %s: %s" % (e.code, body[:300]), False
     except Exception as e:
-        return False, "%s: %s" % (type(e).__name__, e)
+        return False, "%s: %s" % (type(e).__name__, e), False
     url = data.get("html_url", "")
-    if asset_path and os.path.exists(asset_path) and data.get("upload_url"):
-        up = data["upload_url"].split("{")[0] + "?name=" + os.path.basename(asset_path)
-        up = up.replace("https://uploads.github.com", "https://api.github.com")
+    asset_ok = False
+    up_url = (data.get("upload_url") or "").split("{")[0]
+    if asset_path and os.path.exists(asset_path) and up_url:
         with open(asset_path, "rb") as f:
             blob = f.read()
-        req2 = urllib.request.Request(up, data=blob, method="POST",
-                                      headers={"Authorization": "token " + token, "Content-Type": "application/zip",
-                                               "Accept": "application/vnd.github+json", "User-Agent": "efm-release"})
-        try:
-            with urllib.request.urlopen(req2, timeout=120) as r2:
-                json.loads(r2.read().decode("utf-8", "replace"))
-            ok("архив %s (%.1f КБ) прикреплён" % (os.path.basename(asset_path), len(blob) / 1024.0))
-        except Exception as e:
-            warn("архив прикрепить не удалось: %s" % e)
-    return True, url
+        name = os.path.basename(asset_path)
+        hdr_ = {"Authorization": "token " + token, "Content-Type": "application/zip",
+                "Accept": "application/vnd.github+json", "User-Agent": "efm-release"}
+        # uploads.github.com обязателен для ассетов; api.github.com отдаёт на них 404,
+        # поэтому перебиваю хост только если uploads вообще недоступен (тогда хотя бы
+        # попробую) и в любом случае сверяюсь со списком ассетов готового релиза.
+        for cand in [up_url, up_url.replace("https://uploads.github.com", "https://api.github.com")]:
+            if not cand:
+                continue
+            try:
+                req2 = urllib.request.Request(cand + "?name=" + name, data=blob, method="POST", headers=hdr_)
+                with urllib.request.urlopen(req2, timeout=120) as r2:
+                    got = json.loads(r2.read().decode("utf-8", "replace"))
+                if got.get("name") == name:
+                    ok("архив %s (%.1f КБ) прикреплён" % (name, len(blob) / 1024.0))
+                    asset_ok = True
+                    break
+            except Exception as e:
+                warn("загрузка архива на %s: %s" % (cand.split("/")[2], "%s: %s" % (type(e).__name__, e)))
+        if not asset_ok:
+            rc, out = run(["gh", "release", "view", tag, "--json", "assets", "--jq", ".assets[].name"])
+            asset_ok = rc == 0 and name in [l.strip() for l in out.splitlines() if l.strip()]
+            if not asset_ok:
+                attach_hint(tag, ver)
+    return True, url, asset_ok
 
 
 # ----------------------------------------------------------------------------- main
@@ -389,20 +458,22 @@ def main():
         gh_ok, gh_msg = gh_available()
         token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
         method = args.method if args.method != "auto" else ("gh" if gh_ok else ("rest" if token else "none"))
+        asset_ok = False
         if method == "gh":
-            done, info = create_release_gh(tag, notes_file, asset)
+            done, info, asset_ok = create_release_gh(tag, notes_file, asset)
             url = info if done else None
             if not done:
                 err("gh release create не удался.", info)
         if url is None and token and owner:
-            done, info = create_release_rest(tag, io.open(notes_file, encoding="utf-8").read(), asset, token)
+            done, info, ok2 = create_release_rest(tag, io.open(notes_file, encoding="utf-8").read(), asset, token)
             url = info if done else None
+            asset_ok = asset_ok or ok2
             if not done:
                 err("REST-релиз не создан.", info)
         if url is None:
             warn("GitHub Release НЕ создан: нужен авторизованный gh (gh auth login) или GITHUB_TOKEN.")
-        cleanup(notes_file, asset, args, keep=(url is None))
-        summary(tag, new_v, url, pushed=True)
+        cleanup(notes_file, asset, args, keep=(url is None), drop_asset=bool(asset_ok))
+        summary(tag, new_v, url, pushed=True, asset_ok=asset_ok)
         return 0 if url else 6
 
     hdr("1. Версия и CHANGELOG")
@@ -479,6 +550,7 @@ def main():
 
     hdr("5. GitHub Release")
     url = None
+    asset_ok = False
     method = args.method
     gh_ok, gh_msg = gh_available()
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
@@ -486,7 +558,7 @@ def main():
         method = "gh" if gh_ok else ("rest" if token else "none")
     if method == "gh":
         ok("способ: gh CLI (%s)" % gh_msg)
-        done, info = create_release_gh(tag, notes_file, asset)
+        done, info, asset_ok = create_release_gh(tag, notes_file, asset)
         if done:
             url = info
         else:
@@ -503,9 +575,9 @@ def main():
             method = "none"
         else:
             ok("способ: GitHub REST API (GITHUB_TOKEN)")
-            done, info = create_release_rest(tag, open(notes_file, encoding="utf-8").read(), asset, token)
+            done, info, ok2 = create_release_rest(tag, open(notes_file, encoding="utf-8").read(), asset, token)
             if done:
-                url = info
+                url, asset_ok = info, ok2
             else:
                 err("не удалось создать релиз через REST.", info)
                 method = "none"
@@ -519,8 +591,8 @@ def main():
         print("      или через REST (нужен PAT со scope repo):")
         print("          set GITHUB_TOKEN=**** && python scripts/release.py publish-only %s" % new_v)
         method = "none"
-    cleanup(notes_file, asset, args, keep=(url is None))
-    summary(tag, new_v, url, pushed=pushed)
+    cleanup(notes_file, asset, args, keep=(url is None), drop_asset=bool(asset_ok))
+    summary(tag, new_v, url, pushed=pushed, asset_ok=asset_ok)
     return 0 if (pushed and url) or args.no_push else 6
 
 
@@ -533,11 +605,19 @@ def render_release_notes(new_v):
         return "Eternal FishMod v%s" % new_v
     m = re.search(r"^## \[%s\].*?(?=^## \[|\Z)" % re.escape(new_v), text, re.S | re.M)
     body = m.group(0).strip() if m else "Eternal FishMod v%s" % new_v
-    return body + "\n\nАрхив: `eternal_fishmod_v%s.zip` — распакуй в любую папку и запусти `start.bat` " \
-                  "(или `python launch.py`).\n" % new_v
+    owner, repo = _slug()
+    extra = ["", "### Как запустить", "",
+             "Распакуй архив в любую папку и дважды кликни `start.bat` (или `python launch.py`) — "
+             "лаунчер проверит Python, сам поставит зависимости и попросит права администратора.", ""]
+    if owner and owner != "?":
+        extra += ["### Скачать",
+                  "- `eternal_fishmod_v%s.zip` — собранный архив (в аттачментах этого релиза)" % new_v,
+                  "- [Исходники тега v%s (zip)](https://github.com/%s/%s/archive/refs/tags/v%s.zip) — "
+                  "то же самое, если аттачмент недоступен" % (new_v, owner, repo, new_v), ""]
+    return body + "\n" + "\n".join(extra) + "\n"
 
 
-def cleanup(notes_file, asset, args, keep=False):
+def cleanup(notes_file, asset, args, keep=False, drop_asset=False):
     if args.keep_artifacts or keep:
         if keep:
             warn("файл описания релиза оставлен: %s" % notes_file)
@@ -546,9 +626,14 @@ def cleanup(notes_file, asset, args, keep=False):
         os.remove(notes_file)
     except Exception:
         pass
+    if drop_asset and asset:          # архив уже в релизе — локальную копию не плодим
+        try:
+            os.remove(asset)
+        except Exception:
+            pass
 
 
-def summary(tag, new_v, url, pushed=True):
+def summary(tag, new_v, url, pushed=True, asset_ok=None):
     hdr("ИТОГ")
     print("  версия:      %s" % new_v)
     print("  тег:         %s" % tag)
@@ -558,6 +643,9 @@ def summary(tag, new_v, url, pushed=True):
         print("  релиз:       %s" % url)
     else:
         print("  релиз:       не создан (см. подсказки выше)")
+    if asset_ok is not None:
+        print("  архив:       %s" % ("прикреплён к релизу" if asset_ok else
+                                     "НЕ прикреплён (см. подсказку выше; качай исходники тега)"))
     print("")
 
 

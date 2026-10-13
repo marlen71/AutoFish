@@ -365,6 +365,14 @@ python scripts/release.py --publish-only       # релиз для текуще�
 хватает встроенного `secrets.GITHUB_TOKEN` (в workflow прописано `permissions: contents: write`).
 Релиз можно пересоздать вручную: Actions → *Release build* → Run workflow → указать тег.
 
+Прикрепление архива проверяется, а не предполагается: и `release.py`, и workflow после
+загрузки смотрят реальный список ассетов релиза (загрузка идёт на отдельный хост
+`uploads.github.com`, который умеет обрываться; `release.py` поэтому делает до 3 повторов).
+Если архив всё же не прикрепился — скрипт печатает готовую команду `gh release upload ...`;
+до тех пор скачивай `Source code (zip)` со страницы релиза: в теге лежит ровно тот же набор
+файлов, что и в архиве (`eternal_fishmod.py`, `launch.py`, `start*.bat`, `requirements.txt`,
+`templates/`) — его также можно распаковать и запускать.
+
 Где смотреть: **Releases** страницы репозитория — архивы и описания; [`CHANGELOG.md`](CHANGELOG.md) —
 история; версия — в шапке окна бота, в пилюле-оверле, в заголовке лаунчера и в `fishmod.log`.
 

@@ -86,13 +86,13 @@ jobs:
       - name: Write release notes from CHANGELOG
         run: |
           python - <<'PY'
-          import io, re
-          v = "${{ steps.tag.outputs.VERSION }}"
-          text = io.open("CHANGELOG.md", encoding="utf-8").read()
-          m = re.search(r"^## \[%s\].*?(?=^## \[|\Z)" % re.escape(v), text, re.S | re.M)
-          body = m.group(0).strip() if m else "Eternal FishMod v%s" % v
-          body += "\n\nКак запустить: распакуй архив, дважды кликни `start.bat` " \
-                  "(или `python launch.py`). Зависимости лаунчер поставит сам.\n"
+          # Точно тот же код, что у локального `python scripts/release.py`, —
+          # иначе описание релиза из CI и из-под Windows разъезжалось бы.
+          import io, importlib.util, os
+          spec = importlib.util.spec_from_file_location("efm_release", os.path.join("scripts", "release.py"))
+          mod = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(mod)
+          body = mod.render_release_notes("${{ steps.tag.outputs.VERSION }}")
           io.open("release_notes.md", "w", encoding="utf-8").write(body)
           print(body[:400])
           PY
@@ -103,13 +103,34 @@ jobs:
           TAG: ${{ steps.tag.outputs.TAG }}
           ZIP: dist/eternal_fishmod_v${{ steps.tag.outputs.VERSION }}.zip
         run: |
+          set -euo pipefail
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Релиз $TAG уже существует — обновляю текст и переприкрепляю архив"
             gh release edit "$TAG" --title "$TAG" --notes-file release_notes.md
-            gh release upload "$TAG" "$ZIP" --clobber
           else
-            gh release create "$TAG" --title "$TAG" --notes-file release_notes.md "$ZIP"
+            gh release create "$TAG" --title "$TAG" --notes-file release_notes.md
           fi
+          # Архив — отдельным шагом и с повторами: gh release create <tag> ... file.zip
+          # при обрыве загрузки ассета умеет оставить релиз вообще без архива.
+          for i in 1 2 3; do
+            if gh release upload "$TAG" "$ZIP" --clobber; then break; fi
+            echo "попытка $i не удалась, повторяю"; sleep $((i * 5))
+          done
+
+      - name: Verify the archive is attached
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.TAG }}
+          ZIPNAME: eternal_fishmod_v${{ steps.tag.outputs.VERSION }}.zip
+        run: |
+          set -euo pipefail
+          names=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+          echo "ассеты релиза: ${names:-<нет>}"
+          if ! grep -qx "$ZIPNAME" <<<"$names"; then
+            echo "::error::$ZIPNAME не прикреплён к релизу $TAG — скачивай исходники тега"
+            exit 1
+          fi
+          echo "URL: $(gh release view "$TAG" --json assets --jq ".assets[] | select(.name==\"$ZIPNAME\") | .url")" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Summary
         run: |

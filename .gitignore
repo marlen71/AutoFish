@@ -22,5 +22,7 @@ venv/
 .idea/
 .vscode/
 
-# Временные архивы релизов
+# Временные артефакты релизов (собирает scripts/release.py)
 eternal_fishmod_v*.zip
+.release_tmp/
+.release_notes.md
