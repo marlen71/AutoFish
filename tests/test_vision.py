@@ -1,0 +1,399 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Локальная проверка зрения/ПИД/локализации без Windows: подменяем CAP кадрами из скриншотов.
+
+Запуск из корня проекта:  python tests/test_vision.py   (нужны opencv-python и numpy; Windows не требуется.)
+"""
+import os
+import sys
+import json
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import math          # noqa: E402
+import numpy as np   # noqa: E402
+
+import eternal_fishmod as ef  # noqa: E402
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+fails = []
+
+
+class FakeCap:
+    streaming = False
+
+    def __init__(self, img):
+        self.img = img
+        self.backend = "test"
+        self.is_fallback = False
+        self.mon = {"left": 0, "top": 0, "width": 1920, "height": 1080}
+        self.sx = self.sy = 1.0
+        self.fps = 144.0
+        self.avg_ms = 6.9
+        self.grabs = 0
+        self.errors = 0
+        self.last_grab_ms = 0.001
+        self.stream_rect = None
+        self.frame = None
+        self.frames = 0
+        self.streaming = False
+
+    def grab_region(self, l, t, w, h):
+        self.grabs += 1
+        l, t, w, h = int(l), int(t), int(w), int(h)
+        H, W = self.img.shape[:2]
+        x0, y0 = max(0, l), max(0, t)
+        x1, y1 = min(W, l + w), min(H, t + h)
+        if y1 <= y0 or x1 <= x0:
+            return np.zeros((1, 1, 3), np.uint8)
+        return np.ascontiguousarray(self.img[y0:y1, x0:x1])
+
+    def grab_ref(self, rect):
+        x, y, w, h = rect
+        return self.grab_region(x * self.sx, y * self.sy, w * self.sx, h * self.sy)
+
+    def grab_full(self):
+        return self.img
+
+    def stop_stream(self):
+        self.streaming = False
+
+
+def shot(name):
+    import cv2
+    img = cv2.imread(os.path.join(ROOT, name), cv2.IMREAD_COLOR)
+    assert img is not None, name
+    return img
+
+
+def set_screen(img):
+    ef.CAP = FakeCap(img)
+    ef._tpl_cache.clear()
+
+
+def check(label, cond, extra=""):
+    print(("  OK   " if cond else "  FAIL ") + label + ("  " + extra if extra else ""))
+    if not cond:
+        fails.append(label)
+
+
+print("== 1. analyze(): зона / рыба / срыв на реальных скриншотах ==")
+for fn, expect_slip, want_zone in (("1791751386010-image.png", False, (720, 819)),
+                                   ("1791751386672-image.png", False, (756, 1000)),
+                                   ("1791751387184-image.png", True, (769, 1000))):
+    set_screen(shot(fn))
+    rect, inner = ef.bar_rects()
+    r = ef.analyze(ef.grab(rect), inner)
+    z, f_ = r["zone"], r["fish"]
+    print(f"  {fn}: zone={z} fish={f_} slip={r['slip']:.2f} area={r['area']}")
+    check(f"{fn}: зона найдена", z is not None)
+    check(f"{fn}: рыба найдена", f_ is not None)
+    check(f"{fn}: срыв = {expect_slip}", (r["slip"] >= ef.CFG["slip_thr"]) == expect_slip, f"score={r['slip']:.2f}")
+    if z and f_ is not None:
+        check(f"{fn}: координаты внутри шкалы", 0 <= f_ <= r["ih"] and 0 <= z[0] <= z[1] <= r["ih"], f"ih={r['ih']}")
+
+print("== 2. Шаблоны (find/find_all) по инвентарю и HUD ==")
+set_screen(shot("1791751387911-image.png"))
+m = ef.find("rod")
+check("rod найден", m is not None, str(m))
+check("rod: позиция = слот (0,0)", m is not None and abs(m[1] - 126) < 40 and abs(m[2] - 256) < 40, str(m))
+check("bait: >=1 стак", len(ef.find_all("bait")) >= 1, f"{len(ef.find_all('bait'))} шт")
+check("inv_header виден", ef.find("inv_header") is not None)
+set_screen(shot("27033efd-f8b1-489a-97b3-64f476efafbf.png"))
+for n in ("hud_fish", "hud_bait", "hud_shield"):
+    check(f"{n} виден в HUD", ef.find(n) is not None, f"score={ef.best_score(n)}")
+check("inv_header НЕ виден вне инвентаря", ef.find("inv_header") is None)
+set_screen(shot("1791751385077-image.png"))
+check("rod не ложно-срабатывает на игровом экране", ef.best_score("rod") < ef.THR["rod"], f"{ef.best_score('rod'):.2f}")
+
+print("== 3. Контекстное меню: клик по ВЕРХНЕМУ пункту «Использовать» ==")
+set_screen(shot("1791751384528-image.png"))
+info = ef.context_menu_info(126, 255)
+check("меню распознано", info is not None, str(info))
+if info:
+    check("красная строка «Выбросить» найдена (y≈298)", abs(info["red_top"] - 298) <= 3, f"y={info['red_top']}")
+    check("клик выше красной строки", info["use_y"] < info["red_top"], f"use=({info['use_x']},{info['use_y']})")
+    check("центр пункта ≈ (203, 278)", abs(info["use_x"] - 203) <= 6 and abs(info["use_y"] - 278) <= 8)
+set_screen(shot("1791751383742-image.png"))
+check("без меню context_menu_open()=False", ef.context_menu_open(126, 255) is False)
+
+print("== 4. PIDController: усиление, анти-windup, сброс ==")
+c = ef.PIDController(ef.CFG["pid_kp"], ef.CFG["pid_ki"], ef.CFG["pid_kd"], ef.CFG["pid_bias"],
+                     ef.CFG["pid_ilim"], ef.CFG["pid_dband"])
+dt = 1 / 144.0
+u = c.update(0.15, 0.0, dt)
+check("большая ошибка -> duty > 0.5", u > 0.5, f"duty={u:.3f}")
+check("выход в пределах 0..1", 0.0 <= u <= 1.0)
+for _ in range(600):
+    c.update(0.5, 0.0, dt)
+check("анти-windup: |integral| <= i_limit", abs(c.integral) <= c.i_limit + 1e-9, f"I={c.integral:.3f}")
+d = 1.0
+for _ in range(8):
+    d = c.update(-0.5, 0.0, dt)
+check("смена знака -> duty быстро падает", d < 0.1, f"duty={d:.3f}")
+c.reset()
+check("нулевая ошибка -> duty = bias", abs(c.update(0.0, 0.0, dt) - ef.CFG["pid_bias"]) < 1e-6)
+c.set_gains(ef.CFG["pid_em_kp"], ef.CFG["pid_em_ki"], ef.CFG["pid_em_kd"], ef.CFG["pid_em_bias"])
+check("аварийный комплект агрессивнее", c.update(0.05, 0.0, dt) > ef.CFG["pid_bias"])
+
+print("== 5. Замкнутый цикл: модель «зона = скорость от скважности» ==")
+H = 529
+V = 700.0
+FRAME_DT = 1.0 / 144.0
+rng = np.random.RandomState(7)
+st = {"t": 0.0, "y": 430.0, "fish": 260.0, "fv": 60.0, "held": False, "worst": 0.0, "sum": 0.0,
+      "n": 0, "in_zone": 0, "errs": [], "toggles": 0, "slip": False}
+
+
+def step(dt):
+    st["y"] += (V if not st["held"] else -V) * dt          # зажали -> зона едет вверх
+    st["y"] = min(H - 55.0, max(55.0, st["y"]))
+    st["fish"] += st["fv"] * dt                            # рыба скачет хаотично
+    if st["fish"] < 70.0 or st["fish"] > H - 70.0:
+        st["fv"] = -st["fv"]
+        st["fish"] = min(H - 70.0, max(70.0, st["fish"]))
+    if st["n"] % 22 == 0:
+        st["fv"] = float(max(-380.0, min(380.0, st["fv"] + rng.normal(0, 190))))
+    e = abs(st["y"] - st["fish"])
+    st["worst"] = max(st["worst"], e)
+    st["sum"] += e
+    st["n"] += 1
+    st["in_zone"] += 1 if e < 55 else 0
+    st["errs"].append(e)
+
+
+def phys_frame():
+    img = np.full((H + 44, 94, 3), (200, 150, 60), np.uint8)
+    if st.get("slip"):
+        img[:, 0:21] = (30, 30, 210)
+        img[:, 73:94] = (30, 30, 210)
+    top, bot = int(st["y"] - 55), int(st["y"] + 55)
+    img[max(0, 22 + top):min(H + 44, 22 + bot), 22:72] = (60, 200, 60)
+    fy = int(st["fish"])
+    for dy in range(-13, 14):
+        yy = 22 + fy + dy
+        if 0 <= yy < img.shape[0]:
+            wd = int(20 - abs(dy) * 1.2)
+            img[yy, max(22, 47 - wd):min(72, 47 + wd)] = (30, 180, 240) if abs(dy) < 11 else (18, 60, 90)
+    return img
+
+
+class VT:
+    def perf_counter(self):
+        return st["t"]
+
+    def sleep(self, sec):
+        st["t"] += max(0.0, sec or 0.0)
+
+    def time(self):
+        return st["t"]
+
+    def strftime(self, fmt, *a):
+        return "00:00:00"
+
+
+class PhysCap(FakeCap):
+    streaming = True
+
+    def grab_region(self, l, t, w, h):
+        return phys_frame()
+
+    def grab_ref(self, rect):
+        return phys_frame()
+
+    def start_stream(self, *a, **k):
+        return True
+
+    def stop_stream(self):
+        pass
+
+    def wait_frame(self, timeout=0.25):
+        st["t"] += FRAME_DT
+        step(FRAME_DT)
+        return phys_frame(), st["t"]
+
+
+ef.time = VT()
+ef.LOG_PATH = os.path.join(ROOT, "tests", "test.log")
+ef.CAP = PhysCap(np.zeros((1080, 1920, 3), np.uint8))
+ef.CAP.fps = 144.0
+ef._send_mouse = lambda flags, dx=0, dy=0: (st.__setitem__("held", flags == ef.MOUSEEVENTF_LEFTDOWN),
+                                            st.__setitem__("toggles", st["toggles"] + 1))
+ef.check_stop = lambda: None
+real_analyze = ef.analyze
+counter = [0]
+
+
+def counting_analyze(bgr, inner=None):
+    counter[0] += 1
+    if counter[0] > 1400:
+        raise ef.Stopped()
+    return real_analyze(bgr, inner)
+
+
+ef.analyze = counting_analyze
+
+
+def run(label):
+    st.update({"t": 0.0, "y": 430.0, "fish": 260.0, "fv": 60.0, "worst": 0.0, "sum": 0.0, "n": 0,
+               "in_zone": 0, "errs": [], "toggles": 0})
+    ef.CAP.streaming = True
+    counter[0] = 0
+    try:
+        ef.play_minigame()
+    except ef.Stopped:
+        pass
+    n = max(1, st["n"])
+    avg = st["sum"] / n
+    p95 = float(np.percentile(st["errs"], 95)) if st["errs"] else 0.0
+    inz = 100.0 * st["in_zone"] / n
+    dur = max(0.01, st["t"])
+    print(f"  {label}: avg={avg:5.1f}px p95={p95:5.1f} worst={st['worst']:5.1f} в_зоне={inz:5.1f}% "
+          f"перекл/с={st['toggles'] / dur:5.1f}")
+    return avg, p95, inz, st["toggles"] / dur
+
+
+avg, p95, inz, tps = run("pwm (дефолтные коэффициенты)")
+check("ПИД: средняя ошибка < 30 px", avg < 30.0, f"avg={avg:.1f}")
+check("ПИД: в зоне >= 85% времени", inz >= 85.0, f"{inz:.1f}%")
+check("ПИД: p95 < 80 px", p95 < 80.0, f"p95={p95:.1f}")
+check("ШИМ: <= 100 событий/с (2 на ШИМ-цикл)", tps <= 100.0, f"{tps:.1f}/с")
+
+ef.CFG["pid_mode"] = "hyst"
+a2, _p2, i2, _t2 = run("hyst")
+check("hyst: тоже удерживает (avg < 45 px)", a2 < 45.0, f"avg={a2:.1f}")
+ef.CFG["pid_mode"] = "pwm"
+
+print("  сетка коэффициентов (чтобы дефолты не были хуже разумных):")
+best = (1e9, None)
+for kp in (1.6, 2.6, 4.0):
+    for ki in (0.2, 0.55, 1.2):
+        for kd in (0.0, 0.11, 0.3):
+            ef.CFG.update({"pid_kp": kp, "pid_ki": ki, "pid_kd": kd})
+            a3 = run(f"    kp={kp:<4} ki={ki:<5} kd={kd}")
+            if a3[0] < best[0]:
+                best = (a3[0], (kp, ki, kd))
+print(f"  лучший в сетке: kp={best[1][0]} ki={best[1][1]} kd={best[1][2]} -> avg={best[0]:.1f} px")
+check("дефолтные коэффициенты в пределах 1.5x от лучших в сетке", avg < best[0] * 1.5 + 3.0,
+      f"default avg={avg:.1f} vs best={best[0]:.1f}")
+ef.CFG.update({"pid_kp": 3.0, "pid_ki": 1.0, "pid_kd": 0.06})
+
+print("  аварийный режим (красная рамка = «РЫБА СРЫВАЕТСЯ»)")
+st["slip"] = True
+
+
+def phys_frame_slip():
+    img = phys_frame()
+    img[:, 0:21] = (30, 30, 210)          # красная рамка с двух сторон (BGR: R=210)
+    img[:, 73:94] = (30, 30, 210)
+    return img
+
+
+ef.CAP.grab_region = lambda l, t, w, h: phys_frame_slip()
+ef.CAP.grab_ref = lambda rect: phys_frame_slip()
+def wf_slip(timeout=0.25):
+    st["t"] += FRAME_DT
+    step(FRAME_DT)
+    return phys_frame_slip(), st["t"]
+
+
+ef.CAP.wait_frame = wf_slip
+ef.CAP.streaming = True
+st.update({"t": 0.0, "y": 470.0, "fish": 150.0, "fv": 0.0, "worst": 0.0, "sum": 0.0, "n": 0,
+           "in_zone": 0, "errs": [], "toggles": 0})
+counter[0] = 0
+seen_emerg = [False]
+peak_duty = [0.0]
+real_play_frame = ef.analyze
+
+
+def spy(bgr, inner=None):
+    r = real_play_frame(bgr, inner)
+    if r["slip"] >= ef.CFG["slip_thr"]:
+        seen_emerg[0] = True
+    peak_duty[0] = max(peak_duty[0], ef.PID_VIEW.get("duty", 0.0))
+    return r
+
+
+ef.analyze = spy
+try:
+    ef.play_minigame()
+except ef.Stopped:
+    pass
+ef.analyze = counting_analyze
+check("красная рамка распознаётся как срыв", seen_emerg[0], f"mode={ef.PID_VIEW.get('mode')}")
+check("в аварийном режиме duty доходит до 1.0", peak_duty[0] > 0.98, f"peak={peak_duty[0]:.2f}")
+check("аварийный режим выводит зону к рыбе", st["sum"] / max(1, st["n"]) < 60.0,
+      f"avg={st['sum'] / max(1, st['n']):.1f}")
+st["slip"] = False
+ef.CAP.grab_region = lambda l, t, w, h: phys_frame()
+ef.CAP.grab_ref = lambda rect: phys_frame()
+def wf_norm(timeout=0.25):
+    st["t"] += FRAME_DT
+    step(FRAME_DT)
+    return phys_frame(), st["t"]
+
+
+ef.CAP.wait_frame = wf_norm
+
+print("== 6. Локализация: полнота набора и форматирование ==")
+for lang in ef.STRINGS:
+    ef.CFG["lang"] = lang
+    miss = [k for k in ef.STRINGS["ru"] if k not in ef.STRINGS[lang]]
+    check(f"{lang}: все ключи на месте", not miss, str(miss[:5]))
+    empty = [k for k, v in ef.STRINGS[lang].items() if not str(v).strip()]
+    check(f"{lang}: нет пустых строк", not empty, str(empty[:5]))
+    badfmt = [k for k, v in ef.STRINGS[lang].items()
+              if ("{" in v) != ("{" in ef.STRINGS["ru"].get(k, "")) or
+              (v.count("{") != ef.STRINGS["ru"].get(k, "").count("{"))]
+    check(f"{lang}: набор полей формата совпадает с ru", not badfmt, str(badfmt[:5]))
+ef.CFG["lang"] = "en"
+check("t(): данные подставляются (en)", "Caught #7" in ef.t("log_caught", n=7, dur=1.23), ef.t("log_caught", n=7, dur=1.23))
+ef.CFG["lang"] = "ua"
+check("t(): данные подставляются (ua)", "Спіймано #7" in ef.t("log_caught", n=7, dur=1.23), ef.t("log_caught", n=7, dur=1.23))
+ef.CFG["lang"] = "ru"
+check("t(): неизвестный ключ возвращает сам ключ", ef.t("nope_not_here") == "nope_not_here")
+ef.set_state("st_stopped", "st_idle_d", "idle")
+check("set_state/состояния переводятся при отображении (ru)", ef.state_text()[0] == "ОСТАНОВЛЕНО")
+ef.CFG["lang"] = "en"
+check("то же состояние переводится на лету (en)", ef.state_text()[0] == "STOPPED", ef.state_text()[0])
+ef.CFG["lang"] = "ua"
+check("то же состояние переводится на лету (ua)", ef.state_text()[0] == "ЗУПИНЕНО", ef.state_text()[0])
+ef.CFG["lang"] = "ru"
+ef.CFG["lang"] = "de"           # несуществующий язык -> не падаем
+check("t(): неизвестный язык -> откат на ru", ef.t("st_stopped") == "ОСТАНОВЛЕНО")
+ef.CFG["lang"] = "ru"
+check("все PAGE_KEYS существуют", all(k in ef.STRINGS["ru"] for pr in ef.PAGE_KEYS for k in pr))
+check("все TEMPLATE_LABEL_KEYS существуют", all(v in ef.STRINGS["ru"] for v in ef.TEMPLATE_LABEL_KEYS.values()))
+used = set()
+src = open(os.path.join(ROOT, "eternal_fishmod.py"), encoding="utf-8").read()
+import re as _re
+used = set(_re.findall(r'\bt\("([a-z0-9_]+)"', src)) | set(_re.findall(r'set_state\("([a-z0-9_]+)"', src)) \
+    | set(_re.findall(r'set_state\("[a-z_0-9]+",\s*"([a-z_0-9]+)"', src)) | set(_re.findall(r'notify\("([a-z_0-9]+)"', src))
+used.discard("reason_")
+missing = sorted(k for k in used if k not in ef.STRINGS["ru"])
+check("нет обращений к несуществующим ключам", not missing, str(missing))
+
+print("== 7. Конфиг: миграция старого файла, сохранение версии ==")
+tmp = os.path.join(ROOT, "tests", "fishmod_config.json")
+ef.CFG_PATH = tmp
+with open(tmp, "w", encoding="utf-8") as f:
+    json.dump({"bar": [1, 2, 3, 4], "lang": "ru", "cfg_version": 1, "volume": 33, "junk": 1}, f)
+ef.reset_cfg()
+check("старый конфиг читается", ef.load_cfg() is True)
+check("значения пользователя сохранены", ef.CFG["bar"] == [1, 2, 3, 4] and ef.CFG["volume"] == 33)
+check("новые ключи добавлены дефолтами", ef.CFG["pid_kp"] == ef.DEFAULT_CFG["pid_kp"] and "junk" not in ef.CFG)
+check("save_cfg() пишет cfg_version/app_version", ef.save_cfg() and
+      json.load(open(tmp, encoding="utf-8"))["cfg_version"] == ef.CFG_VERSION)
+ef.reset_cfg()
+check("reset_cfg возвращает дефолты", ef.CFG["bar"] == ef.DEFAULT_CFG["bar"])
+saved = json.load(open(tmp, encoding="utf-8"))
+check("PID-ключи сериализуются в JSON", all(k in saved for k in ("pid_kp", "pid_mode", "pwm_hz", "lang", "capture_backend")))
+os.remove(tmp)
+check("APP_VERSION совпадает с файлом VERSION", ef.read_version() == open(os.path.join(ROOT, "VERSION")).read().strip())
+print()
+if fails:
+    print("FAILED:", len(fails))
+    for f in fails:
+        print("  -", f)
+    sys.exit(1)
+print("ALL CHECKS PASSED")

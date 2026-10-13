@@ -1,0 +1,15 @@
+# Eternal FishMod dependencies
+# Primary high-speed DXGI Desktop Duplication screen capture (120-144+ FPS):
+dxcam>=0.0.5; platform_system == "Windows"
+# Note: bettercam (pip install bettercam) is also supported automatically if installed instead of dxcam.
+
+# Emergency fallback screen capture (used ONLY if DXGI / dxcam fails to initialize):
+mss>=9.0.1
+
+# Computer vision & numerical processing:
+opencv-python>=4.8.0
+numpy>=1.24.0
+
+# Low-level input & global hotkeys:
+pydirectinput>=1.0.4; platform_system == "Windows"
+keyboard>=0.13.5
