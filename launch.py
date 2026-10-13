@@ -52,6 +52,18 @@ if not ANSI_OK and not IS_WIN:
     ANSI_OK = sys.stdout.isatty()
 
 
+# ------------------------------------------------------------------ консоль
+# Никаких падений из-за кодировки: если вывод перенаправлен в файл/pipe с
+# однобайтовой кодовой страницей (cp866/cp1251), пиктограммы вроде ✓ или 🖥
+# иначе утонули бы в UnicodeEncodeError — то есть в «сыром» трейсбеке, что
+# противоречит обещанию «человеческих» сообщений лаунчера.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except Exception:
+        pass
+
+
 def paint(text, code):
     return f"\033[{code}m{text}\033[0m" if ANSI_OK else text
 

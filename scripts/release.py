@@ -48,7 +48,8 @@ MAIN = os.path.join(ROOT, "eternal_fishmod.py")
 RELEASE_NAME_RE = re.compile(r"^## \[(\d+)\.(\d+)\.(\d+)\]")
 
 INCLUDE_FILES = ["eternal_fishmod.py", "launch.py", "start.bat", "start_admin.bat", "start.vbs",
-                 "requirements.txt", "README.md", "CHANGELOG.md", "VERSION", ".gitignore"]
+                 "requirements.txt", "README.md", "CHANGELOG.md", "VERSION", ".gitignore",
+                 ".gitattributes"]     # .gitattributes — чтобы .bat/.vbs в архиве были CRLF
 INCLUDE_DIRS = [("templates", False), ("sounds", True), ("scripts", False),
                  (os.path.join(".github", "workflows"), False), ("lang", False)]
 EXCLUDE_EXT = {".pyc", ".log", ".tmp"}          # мусор; sounds/auto исключается отдельно

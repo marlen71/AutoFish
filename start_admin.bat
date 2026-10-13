@@ -1,28 +1,29 @@
 @echo off
 REM ==========================================================================
-REM  Eternal FishMod — запуск ОТ АДМИНИСТРАТОРА в один клик.
-REM  Нужен, если сама игра/лаунчер запущены с повышенными правами: без этого
-REM  SendInput-клики и DXGI-захват могут «не видеть» окно игры.
-REM  Как работает: скрипт смотрит, есть ли уже админ-право; если нет —
-REM  просит UAC разрешить запуск самого себя через PowerShell Start-Process -Verb RunAs.
+REM  Eternal FishMod - launch elevated (double-click this file).
+REM
+REM  KEEP THIS FILE PURE ASCII WITH CRLF LINE ENDINGS AND NO BOM (see the note
+REM  in start.bat: non-ASCII bytes or LF endings make cmd.exe execute garbage).
+REM
+REM  Needed when the game itself runs as administrator: without equal or higher
+REM  privileges SendInput clicks and the DXGI capture cannot "see" that window.
+REM  How it works: if we are already admin, run start.bat; otherwise ask UAC to
+REM  relaunch this very file with the "runas" verb (through PowerShell, so no
+REM  extra helper .exe is needed) and close this unelevated window right away.
 REM ==========================================================================
-setlocal
+setlocal enableextensions
 
 cd /d "%~dp0"
 
-REM --- есть ли админ-право: net session доступен только админу ---
+REM --- "net session" is allowed for administrators only - a cheap elevation test
 net session >nul 2>&1
-if %errorlevel%==0 goto :run
+if not errorlevel 1 goto :run
 
-REM --- нет: поднимаем UAC-запрос и выходим (новое окно уже будет с правами) ---
-powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
-exit /b 0
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+endlocal & exit /b 0
 
 :run
-chcp 65001 >nul
-set "PYCMD=py -3"
-where py >nul 2>nul
-if errorlevel 1 set "PYCMD=python"
-%PYCMD% launch.py --already-elevated --yes %*
-if errorlevel 1 pause
-endlocal
+REM --- already elevated: tell launch.py not to start a second UAC round
+call "%~dp0start.bat" --already-elevated --yes %*
+set "RC=%errorlevel%"
+endlocal & exit /b %RC%

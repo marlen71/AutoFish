@@ -1,0 +1,31 @@
+# Переводы строк зафиксированы, чтобы клон на любой ОС был пригоден к запуску.
+#
+# start.bat / start_admin.bat / start.vbs ОБЯЗАНЫ быть CRLF и чистым ASCII.
+# cmd.exe читает .bat посимвольно, запоминая байтовые смещения строк, а wscript.exe
+# читает .vbs как ANSI (на русской Windows — cp1251). На LF-переводах или при
+# не-ASCII байтах внутри файла смещения съезжают, и вместо команд начинают
+# выполняться обрезки соседних строк: «'el' is not recognized as an internal or
+# external command», «'--restart' is not recognized», код возврата 9009.
+# Инвариант сторожит tests/test_launcher_files.py.
+* text=auto eol=lf
+
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.vbs  text eol=crlf
+
+*.py   text eol=lf
+*.md   text eol=lf
+*.txt  text eol=lf
+*.json text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.webp binary
+*.ico  binary
+*.wav  binary
+*.mp3  binary
+*.zip  binary
