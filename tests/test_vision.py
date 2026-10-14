@@ -116,26 +116,27 @@ if info:
 set_screen(shot("1791751383742-image.png"))
 check("без меню context_menu_open()=False", ef.context_menu_open(126, 255) is False)
 
-print("== 4. PIDController: усиление, анти-windup, сброс ==")
-c = ef.PIDController(ef.CFG["pid_kp"], ef.CFG["pid_ki"], ef.CFG["pid_kd"], ef.CFG["pid_bias"],
-                     ef.CFG["pid_ilim"], ef.CFG["pid_dband"])
-dt = 1 / 144.0
-u = c.update(0.15, 0.0, dt)
-check("большая ошибка -> duty > 0.5", u > 0.5, f"duty={u:.3f}")
-check("выход в пределах 0..1", 0.0 <= u <= 1.0)
-for _ in range(600):
-    c.update(0.5, 0.0, dt)
-check("анти-windup: |integral| <= i_limit", abs(c.integral) <= c.i_limit + 1e-9, f"I={c.integral:.3f}")
-d = 1.0
-for _ in range(8):
-    d = c.update(-0.5, 0.0, dt)
-check("смена знака -> duty быстро падает", d < 0.1, f"duty={d:.3f}")
-c.reset()
-check("нулевая ошибка -> duty = bias", abs(c.update(0.0, 0.0, dt) - ef.CFG["pid_bias"]) < 1e-6)
-c.set_gains(ef.CFG["pid_em_kp"], ef.CFG["pid_em_ki"], ef.CFG["pid_em_kd"], ef.CFG["pid_em_bias"])
-check("аварийный комплект агрессивнее", c.update(0.05, 0.0, dt) > ef.CFG["pid_bias"])
+print("== 4. relay_decide: реле с предсказанием останова, гистерезис ==")
+A_UP, G_DN, VMAX, LOOK, HYST = 1750.0, 800.0, 850.0, 0.17, 12.0
+d = ef.relay_decide
+check("рыба НИЖЕ зоны -> не держим (зона должна падать)",
+      not d(100.0, 0.0, 400.0, False, A_UP, G_DN, VMAX, LOOK, HYST))
+check("рыба ВЫШЕ зоны -> держим",
+      d(400.0, 0.0, 100.0, False, A_UP, G_DN, VMAX, LOOK, HYST))
+check("зону несёт вверх МИМО цели при зажатой ЛКМ -> отпустить",
+      not d(300.0, -500.0, 340.0, True, A_UP, G_DN, VMAX, LOOK, HYST))
+check("зона падает на цель с большой скоростью -> зажать ЗАРАНЕЕ (тормозим у цели)",
+      d(340.0, 500.0, 400.0, False, A_UP, G_DN, VMAX, LOOK, HYST))
+check("на цели и будущее равно: состояние сохраняется (гистерезис, нет дребезга)",
+      d(400.0, 0.0, 400.0, True, 800.0, 800.0, VMAX, LOOK, HYST)
+      and not d(400.0, 0.0, 400.0, False, 800.0, 800.0, VMAX, LOOK, HYST))
+check("на цели при асимметричной физике (a_up > g): ЛКМ отпускается — падать выгоднее",
+      not d(400.0, 0.0, 400.0, True, A_UP, G_DN, VMAX, LOOK, HYST))
+check("предел скорости учитывается в предсказании",
+      d(100.0, 0.0, 529.0, False, A_UP, G_DN, 300.0, LOOK, HYST)
+      == d(100.0, 0.0, 529.0, False, A_UP, G_DN, 300.0, LOOK, HYST + 0.01))
 
-print("== 5. Замкнутый цикл: модель «зона = скорость от скважности» ==")
+print("== 5. Замкнутый цикл: инерционная модель «ЛКМ = ускорение зоны» ==")
 H = 529
 V_UP, V_DN = 1750.0, 640.0                  # ускорение зоны: зажали / отпустили (px/с^2)
 VMAX_UP, VMAX_DN = 660.0, 540.0
@@ -160,11 +161,12 @@ def step(dt):
     if st["fish"] < 70.0 or st["fish"] > H - 70.0:
         st["fish"] = min(H - 70.0, max(70.0, st["fish"]))
     e = abs(st["y"] - st["fish"])
-    st["worst"] = max(st["worst"], e)
-    st["sum"] += e
-    st["n"] += 1
-    st["in_zone"] += 1 if e < 55 else 0
-    st["errs"].append(e)
+    if st["t"] >= 0.6:                      # метрики УДЕРЖАНИЯ: после выхода на режим
+        st["worst"] = max(st["worst"], e)
+        st["sum"] += e
+        st["n"] += 1
+        st["in_zone"] += 1 if e < 55 else 0
+        st["errs"].append(e)
 
 
 def phys_frame():
@@ -242,6 +244,7 @@ ef.analyze = counting_analyze
 def run(label):
     st.update({"t": 0.0, "y": 430.0, "vy": 0.0, "fish": 260.0, "fv": 60.0, "worst": 0.0, "sum": 0.0, "n": 0,
                "in_zone": 0, "errs": [], "toggles": 0})
+    ef.RELAY_PHYS.update({"up": None, "dn": None, "n": 0, "logged": False})
     ef.CAP.streaming = True
     counter[0] = 0
     try:
@@ -258,29 +261,23 @@ def run(label):
     return avg, p95, inz, st["toggles"] / dur
 
 
-avg, p95, inz, tps = run("pwm (дефолтные коэффициенты)")
-check("ПИД: средняя ошибка < 40 px", avg < 40.0, f"avg={avg:.1f}")
-check("ПИД: в зоне >= 60% времени", inz >= 60.0, f"{inz:.1f}%")
-check("ПИД: p95 < 140 px", p95 < 140.0, f"p95={p95:.1f}")
-check("ШИМ: <= 130 событий/с", tps <= 130.0, f"{tps:.1f}/с")
+avg, p95, inz, tps = run("реле (дефолтные параметры)")
+check("РЕЛЕ: средняя ошибка < 40 px", avg < 40.0, f"avg={avg:.1f}")
+check("РЕЛЕ: в зоне >= 60% времени", inz >= 60.0, f"{inz:.1f}%")
+check("РЕЛЕ: p95 < 140 px", p95 < 140.0, f"p95={p95:.1f}")
+check("ЛКМ: <= 130 событий/с", tps <= 130.0, f"{tps:.1f}/с")
 
-ef.CFG["pid_mode"] = "hyst"
-a2, _p2, i2, _t2 = run("hyst")
-check("hyst: тоже удерживает (avg < 60 px)", a2 < 60.0, f"avg={a2:.1f}")
-ef.CFG["pid_mode"] = "pwm"
-
-print("  сетка коэффициентов (дефолты не должны быть хуже разумных):")
+print("  сетка параметров (дефолты не должны быть хуже разумных):")
 best = [1e9, None]
-for vg in (3.0, 5.0, 7.0):
-    for kp in (1.2, 1.8, 2.4):
-        for ki in (0.8, 1.4, 2.0):
-            ef.CFG.update(vel_gain=vg, pid_kp=kp, pid_ki=ki)
-            a3, _p3, _i3, _t3 = run("cfg vg=%s kp=%s ki=%s" % (vg, kp, ki))
-            if a3 < best[0]:
-                best[0], best[1] = a3, (vg, kp, ki)
-ef.CFG.update(vel_gain=5.0, pid_kp=1.8, pid_ki=1.4)
-print(f"  лучший в сетке: vel_gain={best[1][0]} kp={best[1][1]} ki={best[1][2]} -> avg={best[0]:.1f} px")
-check("дефолтные коэффициенты в пределах 1.5x от лучших в сетке", avg <= 1.5 * best[0] + 2.0,
+for look in (240, 300, 360):
+    for hyst in (8.0, 12.0, 18.0):
+        ef.CFG.update(relay_look_ms=look, relay_hyst=hyst)
+        a3, _p3, _i3, _t3 = run("cfg look=%s hyst=%s" % (look, hyst))
+        if a3 < best[0]:
+            best[0], best[1] = a3, (look, hyst)
+ef.CFG.update(relay_look_ms=300, relay_hyst=12.0)
+print(f"  лучший в сетке: look={best[1][0]} hyst={best[1][1]} -> avg={best[0]:.1f} px")
+check("дефолтные параметры в пределах 1.5x от лучших в сетке", avg <= 1.5 * best[0] + 2.0,
       f"default avg={avg:.1f} vs best={best[0]:.1f}")
 
 print("  аварийный режим (красная рамка = «РЫБА СРЫВАЕТСЯ»)")
@@ -308,7 +305,7 @@ st.update({"t": 0.0, "y": 470.0, "fish": 150.0, "fv": 0.0, "worst": 0.0, "sum": 
            "in_zone": 0, "errs": [], "toggles": 0})
 counter[0] = 0
 seen_emerg = [False]
-peak_duty = [0.0]
+ever_pressed = [False]
 real_play_frame = ef.analyze
 
 
@@ -316,7 +313,7 @@ def spy(bgr, inner=None):
     r = real_play_frame(bgr, inner)
     if r["slip"] >= ef.CFG["slip_thr"]:
         seen_emerg[0] = True
-    peak_duty[0] = max(peak_duty[0], ef.PID_VIEW.get("duty", 0.0))
+    ever_pressed[0] = ever_pressed[0] or bool(ef.CTL_VIEW.get("press", False))
     return r
 
 
@@ -326,8 +323,8 @@ try:
 except ef.Stopped:
     pass
 ef.analyze = counting_analyze
-check("красная рамка распознаётся как срыв", seen_emerg[0], f"mode={ef.PID_VIEW.get('mode')}")
-check("в аварийном режиме duty доходит до 1.0", peak_duty[0] > 0.98, f"peak={peak_duty[0]:.2f}")
+check("красная рамка распознаётся как срыв", seen_emerg[0], f"mode={ef.CTL_VIEW.get('mode')}")
+check("в аварийном режиме ЛКМ зажимается (догоняем рыбу)", ever_pressed[0])
 check("аварийный режим выводит зону к рыбе", st["sum"] / max(1, st["n"]) < 60.0,
       f"avg={st['sum'] / max(1, st['n']):.1f}")
 st["slip"] = False
@@ -387,7 +384,7 @@ except ef.Stopped:
     pass
 ef._send_mouse = real_mouse
 frac = sum(held_samples) / max(1, len(held_samples))
-check("20 к/с: ШИМ чередует нажатие/отпускание, а не «держать всегда»", 0.10 < frac < 0.85,
+check("20 к/с: регулятор переключает ЛКМ, а не «держит всегда»", 0.10 < frac < 0.85,
       f"доля удержания={frac:.2f}, avg={st['sum'] / max(1, st['n']):.1f}px")
 check("20 к/с: зона всё-таки следует за рыбой (avg < 90 px)", st["sum"] / max(1, st["n"]) < 90.0,
       f"avg={st['sum'] / max(1, st['n']):.1f}")
@@ -460,17 +457,22 @@ print("== 7. Конфиг: миграция старого файла, сохр�
 tmp = os.path.join(ROOT, "tests", "fishmod_config.json")
 ef.CFG_PATH = tmp
 with open(tmp, "w", encoding="utf-8") as f:
-    json.dump({"bar": [1, 2, 3, 4], "lang": "ru", "cfg_version": 1, "volume": 33, "junk": 1}, f)
+    json.dump({"bar": [1, 2, 3, 4], "lang": "ru", "cfg_version": 1, "volume": 33, "junk": 1,
+               "pid_kp": 1.8, "pwm_hz": 45.0, "vel_gain": 5.0}, f)
 ef.reset_cfg()
+ef.CFG_DROPPED.clear()
 check("старый конфиг читается", ef.load_cfg() is True)
+check("ключи ПИД v1.3-1.5 удалены с пометкой", "pid_kp" not in ef.CFG and "pid_kp" in ef.CFG_DROPPED
+      and "pwm_hz" in ef.CFG_DROPPED and "vel_gain" in ef.CFG_DROPPED)
 check("значения пользователя сохранены", ef.CFG["bar"] == [1, 2, 3, 4] and ef.CFG["volume"] == 33)
-check("новые ключи добавлены дефолтами", ef.CFG["pid_kp"] == ef.DEFAULT_CFG["pid_kp"] and "junk" not in ef.CFG)
+check("новые ключи добавлены дефолтами", ef.CFG["relay_look_ms"] == ef.DEFAULT_CFG["relay_look_ms"] and "junk" not in ef.CFG)
 check("save_cfg() пишет cfg_version/app_version", ef.save_cfg() and
       json.load(open(tmp, encoding="utf-8"))["cfg_version"] == ef.CFG_VERSION)
 ef.reset_cfg()
 check("reset_cfg возвращает дефолты", ef.CFG["bar"] == ef.DEFAULT_CFG["bar"])
 saved = json.load(open(tmp, encoding="utf-8"))
-check("PID-ключи сериализуются в JSON", all(k in saved for k in ("pid_kp", "pid_mode", "pwm_hz", "lang", "capture_backend")))
+check("relay-ключи сериализуются в JSON", all(k in saved for k in ("relay_look_ms", "relay_a_up", "relay_g", "lang", "capture_backend")))
+check("устаревшие ключи в файл не возвращаются", "pid_kp" not in saved and "pwm_hz" not in saved)
 os.remove(tmp)
 check("APP_VERSION совпадает с файлом VERSION", ef.read_version() == open(os.path.join(ROOT, "VERSION")).read().strip())
 print()

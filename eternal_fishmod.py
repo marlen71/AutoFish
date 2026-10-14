@@ -11,9 +11,11 @@ Eternal FishMod — полуавтомат рыбалки для Skyrim RP-се�
     Резерв без единой зависимости — собственный GDI-захват региона (ctypes, BitBlt).
     Сторонний резервный пакет вырезан полностью: он пересоздавал контекст на каждый
     кадр и конвертировал весь монитор -> ~12 мс за кадр, что ломало ШИМ мини-игры.
-  * Мини-игра: ПИД-регулятор (Kp/Ki/Kd + анти-насыщение) с ШИМ (duty cycle) на бинарном
-    входе (ЛКМ) вместо релаксационного «порог->зажать/отпустить», упреждение по
-    скорости и ускорению рыбы, отдельный аварийный режим на «РЫБА СРЫВАЕТСЯ».
+  * Мини-игра: РЕЛЕ с предсказанием останова — каждый кадр бот считает, где зелёная
+    зона остановится при «жать» и при «отпустить», и выбирает действие с точкой
+    останова ближе к ЦЕНТРУ рыбы. Ни ПИД, ни ШИМ, ни скважности: решение всегда
+    двоичное и привязано к кадрам, поэтому не насыщается и не «зажимает» зону над
+    рыбой даже на медленном захвате; разгоны зоны измеряются по кадрам (адаптация).
   * Распознавание рыбы не зависит от её цвета (контраст по горизонтали внутри шкалы),
     поэтому подходит для любых видов рыб.
   * Полная локализация интерфейса: RU / EN / UA, переключение на лету (страница «Настройки»).
@@ -152,42 +154,28 @@ DEFAULT_CFG = {
     "capture_backend": "auto",           # auto | dxcam | bettercam | gdi
     "capture_fps": 144,                  # target_fps потока мини-игры (видео-режим)
     "capture_monitor": 0,                # индекс монитора захвата (0 = основной)
-    # ---------------- ПИД-РЕГУЛЯТОР МИНИ-ИГРЫ ----------------
-    "pid_mode": "pwm",                   # pwm = ШИМ duty-cycle (рекомендуется) | hyst = порог с гистерезисом
-    "pid_kp": 1.80, "pid_ki": 1.40, "pid_kd": 0.10,  # нормальные коэффициенты (ошибка = скорость зоны /
-                                         # vel_max, НЕ доля высоты шкалы): Kp давит перегон, Ki находит
-                                         # равновесие «сколько держать, чтобы стоять», Kd гасит рывки
-    "pid_ilim": 0.45,                    # анти-windup: предел интеграла (в долях скорости)
-    "pid_dband": 0.015,                  # мёртвая зона по СКОРОСТНОЙ ошибке (доля vel_max)
-    "zone_margin": 18,                   # px от КРАЯ зелёной зоны: внутри этой полосы рыбу считать
-                                         # «пойманной» (иначе регулятор дёргается, не успевая опомниться)
-    "vel_gain": 5.0,                     # каскад: желаемая скорость зоны = vel_gain * ошибка, 1/с.
-                                         # В ЭТОЙ ИГРЕ ЛКМ управляет УСКОРЕНИЕМ зоны (зажал —
-                                         # разгоняется вверх, отпустил — вниз), поэтому прямым
-                                         # ПИД по положению зону не удержать: он проскакивает и
-                                         # качается. Внешний контур назначает СКОРОСТЬ, внутренний
-                                         # ПИД её отрабатывает, интегратор сам находит равновесие.
-    "vel_max": 720.0,                    # предел желаемой скорости зоны, px/с (эталон 1080p)
-    "stop_acc": 500.0,                   # px/с^2: запас на торможение. Скорость подхода к рыбе
-                                         # ограничивается v = sqrt(2*stop_acc*дистанция), иначе
-                                         # зона физически не успевает затормозить и ПРОСКАКИВАЕТ
-                                         # рыбу (тормозной путь при полном нажатии ~v^2/2200 px)
-    "hover_adapt": True,                 # автоматически подстроить pid_bias под точку равновесия
-                                         # зоны (в этой игре ЛКМ = усилие, «сколько держать, чтобы
-                                         # стоять» зависит от клиента: 0.27..0.6). Без этого бот
-                                         # СИСТЕМАТИЧЕСКИ держит зону выше или ниже рыбы.
-    "hover_ref": 1500.0,                 # px/с^2: масштаб ускорения зоны при «полностью
-                                         # отпущено»/«полностью зажато» (у игры ~1500..2500).
-                                         # Нужен, чтобы шаг подстройки не зависел от разрешения
-    "hover_k": 0.10,                     # скорость подстройки (доля замера)
-    "hover_span": 0.28,                  # на сколько hover имеет право уйти от pid_bias
-    "pid_bias": 0.50,                    # дежурная скважность = стартовая оценка равновесия
-                                         # («сколько держать, чтобы зона стояла»); интегратор
-                                         # каскада сам доуточняет её за ~1 с мини-игры
-    "pid_em_kp": 2.60, "pid_em_ki": 2.40, "pid_em_kd": 0.10, "pid_em_bias": 0.75,  # аварийный режим (срыв)
-    "pwm_hz": 45.0,                      # частота ШИМ-цикла, Гц (период ~22 мс; 2 события на цикл максимум)
-    "lead_time": 0.075,                  # упреждение по скорости/ускорению, с
-    "lead_max": 38.0,                    # предел упреждения, px (эталон 1920x1080)
+    # ---------------- РЕЛЕ-РЕГУЛЯТОР МИНИ-ИГРЫ (предсказание останова) ----------------
+    # В этой игре ЛКМ управляет УСКОРЕНИЕМ зелёной зоны: зажал — зона разгоняется вверх,
+    # отпустил — разгоняется вниз. Любой ПИД/ШИМ на таком объекте периодически «перекидывает»
+    # зону выше рыбы и зажимает её там: интегратор копит ошибку, выход упирается в 100%,
+    # а обратная связь запаздывает. Поэтому регулятор v1.6 — РЕЛЕ с предсказанием:
+    # каждый кадр бот считает, ГДЕ зона остановится, если продолжить текущее действие, и
+    # ГДЕ остановилась бы при противоположном; выбирает то действие, чья точка останова
+    # ближе к ЦЕНТРУ рыбы (с гистерезисом от дребезга). «Зажать зону выше рыбы» физически
+    # невозможно: как только предсказанная точка останова уходит от рыбы — ЛКМ отпускается.
+    # Скважность не назначается вообще (нечему насыщаться), решения принимаются по кадрам,
+    # поэтому медленный захват (20 к/с) не ломает закон управления.
+    "relay_look_ms": 300,                # горизонт предсказания, мс: дальше — спокойнее, но вязче
+    "relay_hyst": 12.0,                  # гистерезис решения, px: меньше — живее, больше — реже щёлкает
+    "relay_a_up": 1750.0,                # разгон зоны ВВЕРХ при зажатой ЛКМ, px/с^2 (стартовая оценка;
+                                         # при relay_adapt уточняется по кадрам каждой мини-игры)
+    "relay_g": 800.0,                   # разгон зоны ВНИЗ при отпущенной ЛКМ, px/с^2 (аналогично)
+    "relay_vmax": 850.0,                 # предел скорости зоны в предсказании, px/с (эталон 1080p)
+    "relay_tau_ms": 90,                  # упреждение цели по скорости рыбы, мс (рыба рыскает — цель
+                                         # ставится чуть впереди её движения)
+    "relay_lead_max": 0.12,              # предел упреждения, долей высоты шкалы
+    "relay_adapt": True,                 # измерять реальные разгоны зоны по кадрам и поправлять
+                                         # relay_a_up/relay_g на лету (кэш на сессию)
     "vel_alpha": 0.35,                   # фильтр скорости зоны/рыбы (меньше = гладче)
     "acc_alpha": 0.18,
     "fish_thr": 34,                      # порог «неоднородности строки» для поиска рыбы (0..255)
@@ -198,9 +186,15 @@ DEFAULT_CFG = {
     "forced_release": 0.12,              # на сколько отпускать после срабатывания max_hold
     "lost_ms": 140,                      # потеря зелёной зоны (мс) -> выход из мини-игры (было LOST_LIMIT=35 кадров)
     "fish_timeout": 0.8,                 # рыба не видна столько секунд -> не держим
-    "deadzone": 5.0,                    # мёртвая зона для режима hyst (px эталона)
-    "min_switch": 0.006,                 # мин. пауза между событиями ЛКМ в режиме pwm (с); для hyst = 0.030
+    "min_switch": 0.030,                 # мин. пауза между событиями ЛКМ, с (защита от дребезга)
 }
+# Ключи регуляторов v1.3-1.5 (ПИД/ШИМ/равновесие): вырезаны при переписывании мини-игры.
+# Найденные в конфиге пользователя значения удаляются с записью в журнал (CFG_DROPPED).
+REMOVED_CFG_KEYS = ("pid_mode", "pid_kp", "pid_ki", "pid_kd", "pid_ilim", "pid_dband",
+                    "pid_bias", "pid_em_kp", "pid_em_ki", "pid_em_kd", "pid_em_bias",
+                    "pwm_hz", "vel_gain", "vel_max", "stop_acc", "zone_margin", "deadzone",
+                    "lead_time", "lead_max", "hover_adapt", "hover_ref", "hover_k", "hover_span",
+                    "brake_ms")
 CFG = dict(DEFAULT_CFG)
 
 THR = {"rod": 0.90, "bait": 0.90, "inv_header": 0.80,
@@ -239,6 +233,11 @@ def load_cfg():
                 raise ValueError("config is not an object")
             known = {k: v for k, v in data.items() if k in DEFAULT_CFG}
             CFG.update(known)
+            # Ключи старых регуляторов (ПИД/ШИМ/равновесие v1.3-1.5) вырезаны: удаляем их
+            # из конфига пользователя и перечисляем в журнале, чтобы было видно, что менять.
+            for k in REMOVED_CFG_KEYS:
+                if k in data and k not in CFG_DROPPED:
+                    CFG_DROPPED.append(k)
             # устаревшие ЗНАЧЕНИЯ мигрируем явно (CFG_VERSION не меняем — ключ-то на месте).
             # mss из проекта вырезан, а конфиги версий 1.2-1.3 успели записать
             # "capture_backend": "mss" при тихом откате — иначе пользователь навсегда
@@ -257,6 +256,7 @@ def load_cfg():
 
 
 CFG_MIGRATED = []                         # что починили в load_cfg; печатается в журнал при старте
+CFG_DROPPED = []                          # устаревшие ключи конфига (регулятор v1.3-1.5), удалены
 
 
 def save_cfg():
@@ -298,27 +298,23 @@ STRINGS = {
     "s_fish_hour": "Рыб в час", "s_avg_mini": "Среднее время мини-игры", "s_bait_checks": "Проверок наживки",
     "s_all_catches": "Поймано за всё время", "s_sessions": "Сессий всего", "s_best": "Лучшая сессия",
     "s_last_stop": "Последняя остановка",
-    "v_bar": "ШКАЛА МИНИ-ИГРЫ", "v_tpl": "ШАБЛОНЫ", "v_capture": "ЗАХВАТ ЭКРАНА", "v_pid": "ПИД · МИНИ-ИГРА",
-    "unit_s": "с", "v_spark_lab": "ошибка ±20% (кр.) · duty 0-100% (зел.)", "v_pid_hint": "Настройка ПИД: начни с bias (зона стоит на месте), затем Kp, Kd, Ki.", "v_tpl_hint1": "Шаблон снимается через 4 с", "v_tpl_hint2": "открой инвентарь и наведи курсор на иконку",
-    "v_zone": "зона", "v_fish": "рыба", "v_slip": "срыв", "v_err": "ошибка", "v_duty": "скважность",
+    "v_bar": "ШКАЛА МИНИ-ИГРЫ", "v_tpl": "ШАБЛОНЫ", "v_capture": "ЗАХВАТ ЭКРАНА", "v_pid": "РЕГУЛЯТОР · МИНИ-ИГРА",
+    "unit_s": "с", "v_spark_lab": "ошибка, ±20% шкалы (кр.) · ЛКМ (зел.)", "v_ctl_hint": "Регулятор сам измеряет физику зоны (реле с предсказанием останова) — ручная настройка не нужна. Параметры: «Модули».", "v_tpl_hint1": "Шаблон снимается через 4 с", "v_tpl_hint2": "открой инвентарь и наведи курсор на иконку",
+    "v_zone": "зона", "v_fish": "рыба", "v_slip": "срыв", "v_err": "ошибка", "v_press": "ЛКМ",
+    "v_press_on": "ДЕРЖИТ", "v_press_off": "пусто", "v_zv": "зона", "v_fv": "рыба", "v_brk": "выбег",
     "v_mode": "режим", "v_mode_norm": "норма", "v_mode_emerg": "АВАРИЯ", "v_lost": "потеря", "v_ms": "кадр/мс",
     "v_none": "—", "v_no_file": "нет файла", "v_fps": "FPS", "v_latency": "задержка",
     "v_fallback": "⚠ Резервный захват GDI — чуть медленнее DXGI (DXGI не поднялся)",
     "v_primary": "основной захват DXGI", "v_stream_off": "поток выключен", "v_stream_on": "поток {fps} fps",
     "tpl_rod": "Удочка (инвентарь)", "tpl_bait": "Наживка (инвентарь)", "tpl_inv": "Окно инвентаря",
     "tpl_hud_fish": "Значок удочки (HUD)", "tpl_hud_bait": "Значок наживки (HUD)", "tpl_hud_shield": "HUD виден",
-    "m_card_fish": "РЫБАЛКА И ЗВУКИ", "m_card_pid": "ПИД И РАСПОЗНАВАНИЕ",
+    "m_card_fish": "РЫБАЛКА И ЗВУКИ", "m_card_pid": "РЕГУЛЯТОР И РАСПОЗНАВАНИЕ",
     "m_equip": "Брать удочку при старте", "m_autocast": "Авто-закидывание удочки",
     "m_castafter": "Закидывать после каждой рыбы", "m_baitevery": "Проверять наживку каждые N рыб",
     "m_biteto": "Ждать поклёвку, сек", "m_postdelay": "Пауза после рыбы, сек",
     "m_hide": "Прятать окно, пока бот ловит", "m_snd_start": "Звук: рыбалка началась",
     "m_snd_end": "Звук: рыбалка закончилась", "m_snd_catch": "Звук: каждая рыба",
-    "m_pid_mode": "Режим регулятора", "m_pid_pwm": "PWM", "m_pid_hyst": "гистерезис",
-    "m_kp": "Усиление Kp", "m_ki": "Интеграл Ki", "m_kd": "Демпфирование Kd", "m_bias": "Баланс (деж. скважность)",
-    "m_em_note": "— аварийный режим (срыв рыбы)",
-    "m_em_kp": "Kp аварийный", "m_em_ki": "Ki аварийный", "m_em_kd": "Kd аварийный", "m_em_bias": "Баланс аварийный",
-    "m_pwm": "Частота ШИМ, Гц", "m_ilim": "Лимит интеграла", "m_dband": "Мёртвая зона ПИД",
-    "m_lead": "Опережение, с", "m_leadmax": "Макс. упреждение, px", "m_maxhold": "Макс. удержание, с",
+    "m_maxhold": "Макс. удержание, с",
     "m_lostms": "Потеря зоны, мс", "m_fishthr": "Порог контраста рыбы", "m_fishdet": "Поиск рыбы",
     "m_barpad": "Отступ рамки, px", "m_slipthr": "Порог красной рамки",
     "s_sec_lang": "ЯЗЫК / LANGUAGE / МОВА", "s_sec_binds": "Горячие клавиши", "s_sec_coords": "Ручные координаты",
@@ -356,12 +352,13 @@ STRINGS = {
     "log_bait_icon": "🪱 Значок наживки пропал — проверяю инвентарь",
     "log_mode_mini_only": "🎣 Режим: только мини-игра (без автозакидывания)",
     "log_cast": "🪝 Заброс удочки…", "log_cast_done": "🪝 Заброс выполнен — жду клёва",
-    "log_slip": "⚠ Рыба срывается — аварийное удержание", "log_mini_done": "✔ Мини-игра: {dur:.1f} с, срывов {slip}, пик duty {duty:.2f}",
+    "log_slip": "⚠ Рыба срывается — аварийное удержание", "log_mini_done": "✔ Мини-игра: {dur:.1f} с, срывов {slip}, ЛКМ {sw:.1f} перекл/с",
     "log_debug": "📷 debug_screen.png, debug_bar.png сохранены. {parts} | zone={zone} fish={fish}",
     "log_debug_fail": "❌ debug: {e}", "log_tpl_none": "нет файла",
     "log_capture": "🖥 Захват: {backend} ({detail})", "log_capture_fallback": "⚠️ DXGI-захват недоступен ({err}) — работаю через GDI (резерв без зависимостей)",
     "log_capture_skipped": "🖥 {reason}",
     "log_cfg_migrate": "⚙ Конфиг: значение \"{key}\": \"mss\" устарело (mss вырезан) — включено {to}.",
+    "log_cfg_drop": "⚙ Конфиг: ключ \"{key}\" устарел — регулятор мини-игры переписан (v1.6), значение удалено.",
     "hint_capture": "Что сделать: python -m pip install -U dxcam bettercam (и перезапусти). Если экран игры защищён от захвата или это RDP/виртуалка — бот сам возьмёт GDI-резерв; чтобы работать строго по DXGI, поставь в fishmod_config.json \"capture_backend\": \"dxcam\"",
     "log_stream": "🖥 Поток мини-игры: {backend}, {fps} fps, регион {rect}",
     "log_stream_stop": "🖥 Поток мини-игры остановлен",
@@ -370,13 +367,13 @@ STRINGS = {
     "log_bar_fit": "📐 Шкала уехала: калибровка обновлена {old} -> {new} (совпадение {cov}), причина: {why}",
     "log_bar_fit_off": "📐 Шкала уехала, но bar_autofit выключен — проверь CFG[\"bar\"] вручную",
     "nt_bar_fit": "Пересчитана область шкалы — проверь страницу «Зрение»",
-    "m_zonemargin": "Запас внутри зоны, px",
-    "m_velgain": "Скорость слежения (1/с)", "m_velmax": "Предел скорости зоны, px/с",
-    "m_stopacc": "Торможение (запас), px/с²",
+    "m_hyst": "Гистерезис решения, px", "m_look": "Горизонт предсказания, мс",
+    "m_aup": "Разгон зоны вверх, px/с²", "m_g": "Падение зоны, px/с²",
+    "m_vmax": "Предел скорости зоны, px/с",
     "m_barfit": "Самокалибровка шкалы", "m_barref": "Измерять по реальной шкале",
     "v_scale_lab": "шкала", "v_bar_edge": "шкала обрезана краем кадра",
-    "log_hover": "⚖ Точка равновесия зоны: {v:.2f} (замеров {n}) — можно вписать в pid_bias",
-    "m_hover": "Автоподстройка равновесия", "m_hoverspan": "Разброс равновесия, %",
+    "log_adapt": "⚖ Физика зоны измерена: разгон вверх {up:.0f} px/с², падение {dn:.0f} px/с² (замеров {n})",
+    "m_adapt": "Измерять физику зоны",
     "log_ready": "{app}: готов. {toggle} — старт/стоп, {panic} — аварийный стоп",
     "fail_rod": "удочка не найдена в инвентаре", "fail_inv": "не удалось открыть инвентарь (TAB). Окно игры должно быть активным",
     "fail_inv2": "не удалось открыть инвентарь (TAB)",
@@ -403,27 +400,23 @@ STRINGS = {
     "s_fish_hour": "Fish per hour", "s_avg_mini": "Average minigame time", "s_bait_checks": "Bait checks",
     "s_all_catches": "Caught all time", "s_sessions": "Total sessions", "s_best": "Best session",
     "s_last_stop": "Last stop",
-    "v_bar": "MINIGAME BAR", "v_tpl": "TEMPLATES", "v_capture": "SCREEN CAPTURE", "v_pid": "PID · MINIGAME",
-    "unit_s": "s", "v_spark_lab": "error ±20% (red) · duty 0-100% (green)", "v_pid_hint": "PID tuning: start with bias (zone hover), then Kp, Kd, Ki.", "v_tpl_hint1": "Template is grabbed after 4 s.", "v_tpl_hint2": "Open the inventory and hover the icon",
-    "v_zone": "zone", "v_fish": "fish", "v_slip": "slip", "v_err": "error", "v_duty": "duty",
+    "v_bar": "MINIGAME BAR", "v_tpl": "TEMPLATES", "v_capture": "SCREEN CAPTURE", "v_pid": "CONTROLLER · MINIGAME",
+    "unit_s": "s", "v_spark_lab": "error, ±20% of bar (red) · LMB (green)", "v_ctl_hint": "The controller measures the zone physics itself (stop-point relay) — no manual tuning needed. Parameters: Modules page.", "v_tpl_hint1": "Template is grabbed after 4 s.", "v_tpl_hint2": "Open the inventory and hover the icon",
+    "v_zone": "zone", "v_fish": "fish", "v_slip": "slip", "v_err": "error", "v_press": "LMB",
+    "v_press_on": "HOLDING", "v_press_off": "idle", "v_zv": "zone", "v_fv": "fish", "v_brk": "glide",
     "v_mode": "mode", "v_mode_norm": "normal", "v_mode_emerg": "EMERGENCY", "v_lost": "lost", "v_ms": "frame/ms",
     "v_none": "—", "v_no_file": "no file", "v_fps": "FPS", "v_latency": "latency",
     "v_fallback": "⚠ GDI fallback capture — a bit slower than DXGI (DXGI did not start)",
     "v_primary": "primary DXGI capture", "v_stream_off": "stream off", "v_stream_on": "stream {fps} fps",
     "tpl_rod": "Rod (inventory)", "tpl_bait": "Bait (inventory)", "tpl_inv": "Inventory window",
     "tpl_hud_fish": "Rod icon (HUD)", "tpl_hud_bait": "Bait icon (HUD)", "tpl_hud_shield": "HUD visible",
-    "m_card_fish": "FISHING AND SOUNDS", "m_card_pid": "PID AND DETECTION",
+    "m_card_fish": "FISHING AND SOUNDS", "m_card_pid": "CONTROLLER AND DETECTION",
     "m_equip": "Take the rod on start", "m_autocast": "Auto-cast the rod",
     "m_castafter": "Cast after every fish", "m_baitevery": "Check bait every N fish",
     "m_biteto": "Wait for a bite, s", "m_postdelay": "Delay after a fish, s",
     "m_hide": "Hide window while fishing", "m_snd_start": "Sound: session started",
     "m_snd_end": "Sound: session finished", "m_snd_catch": "Sound: every fish",
-    "m_pid_mode": "Controller mode", "m_pid_pwm": "PWM", "m_pid_hyst": "hysteresis",
-    "m_kp": "Gain Kp", "m_ki": "Integral Ki", "m_kd": "Derivative Kd", "m_bias": "Bias (hover duty)",
-    "m_em_note": "— emergency mode (fish slipping)",
-    "m_em_kp": "Kp emergency", "m_em_ki": "Ki emergency", "m_em_kd": "Kd emergency", "m_em_bias": "Bias emergency",
-    "m_pwm": "PWM frequency, Hz", "m_ilim": "Integral limit", "m_dband": "PID deadband",
-    "m_lead": "Lookahead, s", "m_leadmax": "Max lead, px", "m_maxhold": "Max hold, s",
+    "m_maxhold": "Max hold, s",
     "m_lostms": "Zone lost, ms", "m_fishthr": "Fish contrast threshold", "m_fishdet": "Fish detection",
     "m_barpad": "Bar border pad, px", "m_slipthr": "Red frame threshold",
     "s_sec_lang": "ЯЗЫК / LANGUAGE / МОВА", "s_sec_binds": "Hotkeys", "s_sec_coords": "Manual coordinates",
@@ -461,12 +454,13 @@ STRINGS = {
     "log_bait_icon": "🪱 Bait icon disappeared — checking the inventory",
     "log_mode_mini_only": "🎣 Mode: minigame only (no auto-cast)",
     "log_cast": "🪝 Casting…", "log_cast_done": "🪝 Cast done — waiting for a bite",
-    "log_slip": "⚠ Fish is slipping — emergency hold", "log_mini_done": "✔ Minigame: {dur:.1f} s, slips {slip}, peak duty {duty:.2f}",
+    "log_slip": "⚠ Fish is slipping — emergency hold", "log_mini_done": "✔ Minigame: {dur:.1f} s, slips {slip}, LMB {sw:.1f} switches/s",
     "log_debug": "📷 debug_screen.png, debug_bar.png saved. {parts} | zone={zone} fish={fish}",
     "log_debug_fail": "❌ debug: {e}", "log_tpl_none": "no file",
     "log_capture": "🖥 Capture: {backend} ({detail})", "log_capture_fallback": "⚠️ DXGI capture unavailable ({err}) — using GDI (fallback, no extra deps)",
     "log_capture_skipped": "🖥 {reason}",
     "log_cfg_migrate": "⚙ Config: value \"{key}\": \"mss\" is obsolete (mss removed) — switched to {to}.",
+    "log_cfg_drop": "⚙ Config: key \"{key}\" is obsolete — the minigame controller was rewritten (v1.6), value removed.",
     "hint_capture": "What to do: python -m pip install -U dxcam bettercam (then restart). If the game window is capture-protected or you are on RDP/VM, the bot takes the GDI fallback on its own; to force DXGI only, set \"capture_backend\": \"dxcam\" in fishmod_config.json",
     "log_stream": "🖥 Minigame stream: {backend}, {fps} fps, region {rect}",
     "log_stream_stop": "🖥 Minigame stream stopped",
@@ -475,13 +469,13 @@ STRINGS = {
     "log_bar_fit": "📐 The scale moved: calibration updated {old} -> {new} (match {cov}), reason: {why}",
     "log_bar_fit_off": "📐 The scale moved but bar_autofit is off — fix CFG[\"bar\"] manually",
     "nt_bar_fit": "Scale area recalculated — check the Vision page",
-    "m_zonemargin": "Zone margin, px",
-    "m_velgain": "Tracking rate (1/s)", "m_velmax": "Zone speed limit, px/s",
-    "m_stopacc": "Braking reserve, px/s²",
+    "m_hyst": "Decision hysteresis, px", "m_look": "Prediction horizon, ms",
+    "m_aup": "Zone lift accel, px/s²", "m_g": "Zone fall accel, px/s²",
+    "m_vmax": "Zone speed limit, px/s",
     "m_barfit": "Scale auto-calibration", "m_barref": "Measure the real scale",
     "v_scale_lab": "scale", "v_bar_edge": "scale is cut by the frame edge",
-    "log_hover": "⚖ Zone equilibrium point: {v:.2f} ({n} samples) — you can put it into pid_bias",
-    "m_hover": "Auto-trim equilibrium", "m_hoverspan": "Equilibrium span, %",
+    "log_adapt": "⚖ Zone physics measured: lift {up:.0f} px/s², fall {dn:.0f} px/s² ({n} samples)",
+    "m_adapt": "Measure zone physics",
     "log_ready": "{app}: ready. {toggle} — start/stop, {panic} — panic stop",
     "fail_rod": "rod not found in the inventory", "fail_inv": "cannot open the inventory (TAB). The game window must be active",
     "fail_inv2": "cannot open the inventory (TAB)",
@@ -508,9 +502,10 @@ STRINGS = {
     "s_fish_hour": "Риб на годину", "s_avg_mini": "Середній час міні-гри", "s_bait_checks": "Перевірок наживки",
     "s_all_catches": "Спіймано за весь час", "s_sessions": "Сесій усього", "s_best": "Найкраща сесія",
     "s_last_stop": "Остання зупинка",
-    "v_bar": "ШКАЛА МІНІ-ГРИ", "v_tpl": "ШАБЛОНИ", "v_capture": "ЗАХВАТ ЕКРАНА", "v_pid": "ПІД · МІНІ-ГРА",
-    "unit_s": "с", "v_spark_lab": "помилка ±20% (черв.) · duty 0-100% (зел.)", "v_pid_hint": "Налаштування ПІД: почніть з bias (зона стоїть), потім Kp, Kd, Ki.", "v_tpl_hint1": "Шаблон знімається через 4 с", "v_tpl_hint2": "відкрий інвентар і наведи курсор на іконку",
-    "v_zone": "зона", "v_fish": "риба", "v_slip": "зрив", "v_err": "помилка", "v_duty": "заповнення",
+    "v_bar": "ШКАЛА МІНІ-ГРИ", "v_tpl": "ШАБЛОНИ", "v_capture": "ЗАХВАТ ЕКРАНА", "v_pid": "РЕГУЛЯТОР · МІНІ-ГРА",
+    "unit_s": "с", "v_spark_lab": "помилка, ±20% шкали (черв.) · ЛКМ (зел.)", "v_ctl_hint": "Регулятор сам міряє фізику зони (реле з передбаченням зупинки) — ручне налаштування не потрібне. Параметри: «Модулі».", "v_tpl_hint1": "Шаблон знімається через 4 с", "v_tpl_hint2": "відкрий інвентар і наведи курсор на іконку",
+    "v_zone": "зона", "v_fish": "риба", "v_slip": "зрив", "v_err": "помилка", "v_press": "ЛКМ",
+    "v_press_on": "ТРИМАЄ", "v_press_off": "пусто", "v_zv": "зона", "v_fv": "риба", "v_brk": "вибіг",
     "v_mode": "режим", "v_mode_norm": "норма", "v_mode_emerg": "АВАРІЯ", "v_lost": "втрата", "v_ms": "кадр/мс",
     "v_none": "—", "v_no_file": "немає файла", "v_fps": "FPS", "v_latency": "затримка",
     "v_fallback": "⚠ Резервне захоплення GDI — трішки повільніше за DXGI (DXGI не стартував)",
@@ -523,12 +518,7 @@ STRINGS = {
     "m_biteto": "Чекати клювання, с", "m_postdelay": "Пауза після риби, с",
     "m_hide": "Ховати вікно, поки бот ловить", "m_snd_start": "Звук: сесію почато",
     "m_snd_end": "Звук: сесію завершено", "m_snd_catch": "Звук: кожна риба",
-    "m_pid_mode": "Режим регулятора", "m_pid_pwm": "PWM", "m_pid_hyst": "гістерезис",
-    "m_kp": "Підсилення Kp", "m_ki": "Інтеграл Ki", "m_kd": "Демпфування Kd", "m_bias": "Баланс (черговий duty)",
-    "m_em_note": "— аварійний режим (зрив риби)",
-    "m_em_kp": "Kp аварійний", "m_em_ki": "Ki аварійний", "m_em_kd": "Kd аварійний", "m_em_bias": "Баланс аварійний",
-    "m_pwm": "Частота ШІМ, Гц", "m_ilim": "Ліміт інтеграла", "m_dband": "Мертва зона ПІД",
-    "m_lead": "Випередження, с", "m_leadmax": "Макс. упередження, px", "m_maxhold": "Макс. утримання, с",
+    "m_maxhold": "Макс. утримання, с",
     "m_lostms": "Втрата зони, мс", "m_fishthr": "Поріг контрасту риби", "m_fishdet": "Пошук риби",
     "m_barpad": "Відступ рамки, px", "m_slipthr": "Поріг червоної рамки",
     "s_sec_lang": "ЯЗЫК / LANGUAGE / МОВА", "s_sec_binds": "Гарячі клавіші", "s_sec_coords": "Ручні координати",
@@ -566,12 +556,13 @@ STRINGS = {
     "log_bait_icon": "🪱 Значок наживки зник — перевіряю інвентар",
     "log_mode_mini_only": "🎣 Режим: лише міні-гра (без авто-закидання)",
     "log_cast": "🪝 Закидання вудки…", "log_cast_done": "🪝 Закидання виконано — чекаю клювання",
-    "log_slip": "⚠ Риба зривається — аварійне утримання", "log_mini_done": "✔ Міні-гра: {dur:.1f} с, зривів {slip}, пік заповнення {duty:.2f}",
+    "log_slip": "⚠ Риба зривається — аварійне утримання", "log_mini_done": "✔ Міні-гра: {dur:.1f} с, зривів {slip}, ЛКМ {sw:.1f} перемик/с",
     "log_debug": "📷 debug_screen.png, debug_bar.png збережено. {parts} | zone={zone} fish={fish}",
     "log_debug_fail": "❌ debug: {e}", "log_tpl_none": "немає файла",
     "log_capture": "🖥 Захват: {backend} ({detail})", "log_capture_fallback": "⚠️ DXGI-захват недоступний ({err}) — працюю через GDI (резерв без залежностей)",
     "log_capture_skipped": "🖥 {reason}",
     "log_cfg_migrate": "⚙ Конфіг: значення \"{key}\": \"mss\" застаріле (mss вирізано) — увімкнено {to}.",
+    "log_cfg_drop": "⚙ Конфіг: ключ \"{key}\" застарілий — регулятор міні-гри переписано (v1.6), значення видалено.",
     "hint_capture": "Що робити: python -m pip install -U dxcam bettercam (і перезапусти). Якщо DXGI недоступний (RDP, віртуалка, вікно захищене від захоплення) — бот сам візьме GDI-резерв; щоб працювати суто за DXGI, поставь у fishmod_config.json \"capture_backend\": \"dxcam\"",
     "log_stream": "🖥 Потік міні-гри: {backend}, {fps} fps, регіон {rect}",
     "log_stream_stop": "🖥 Потік міні-гри зупинено",
@@ -580,13 +571,13 @@ STRINGS = {
     "log_bar_fit": "📐 Шкала з'їхала: калібрування оновлено {old} -> {new} (збіг {cov}), причина: {why}",
     "log_bar_fit_off": "📐 Шкала з'їхала, але bar_autofit вимкнено — поправ CFG[\"bar\"] вручну",
     "nt_bar_fit": "Перераховано область шкали — глянь сторінку «Зір»",
-    "m_zonemargin": "Запас у зоні, px",
-    "m_velgain": "Швидкість стеження (1/с)", "m_velmax": "Границя швидкості зони, px/с",
-    "m_stopacc": "Гальмування (запас), px/с²",
+    "m_hyst": "Гістерезис рішення, px", "m_look": "Горизонт передбачення, мс",
+    "m_aup": "Розгін зони вгору, px/с²", "m_g": "Падіння зони, px/с²",
+    "m_vmax": "Границя швидкості зони, px/с",
     "m_barfit": "Самокалібрування шкали", "m_barref": "Міряти справжню шкалу",
     "v_scale_lab": "шкала", "v_bar_edge": "шкалу обрізано краєм кадру",
-    "log_hover": "⚖ Точка рівноваги зони: {v:.2f} (вимірів {n}) — можна вписати в pid_bias",
-    "m_hover": "Автопідстройка рівноваги", "m_hoverspan": "Розкид рівноваги, %",
+    "log_adapt": "⚖ Фізику зони виміряно: розгін вгору {up:.0f} px/с², падіння {dn:.0f} px/с² (вимірів {n})",
+    "m_adapt": "Міряти фізику зони",
     "log_ready": "{app}: готово. {toggle} — старт/стоп, {panic} — аварійний стоп",
     "fail_rod": "вудку не знайдено в інвентарі", "fail_inv": "не вдалося відкрити інвентар (TAB). Вікно гри має бути активним",
     "fail_inv2": "не вдалося відкрити інвентар (TAB)",
@@ -640,17 +631,16 @@ STATE = {"running": False, "title_key": "st_stopped", "detail_key": "st_idle_d",
          "detail_args": {}, "kind": "idle", "reason": ""}
 STATS = {"catches": 0, "t0": None, "t_end": None, "mg": [], "checks": 0}
 TOTAL = {"catches": 0, "sessions": 0, "best": 0, "last_reason_key": "", "last_reason_detail": ""}
-# Живая телеметрия ПИД/захвата для страницы «Зрение» (пишет воркер, читает GUI)
-PID_VIEW = {"err": 0.0, "duty": 0.0, "mode": "norm", "lost": 0, "slip": 0, "p": 0.0, "i": 0.0, "d": 0.0,
+# Живая телеметрия регулятора/захвата для страницы «Зрение» (пишет воркер, читает GUI)
+CTL_VIEW = {"press": False, "err": 0.0, "mode": "norm", "lost": 0, "slip": 0,
             "zone": None, "fish": None, "fps": 0.0, "frame_ms": 0.0, "hist": [],
-            "zone_v": 0.0, "half": 0.0, "clamp": "", "cov": 0.0, "detected": False, "hover": 0.5}
+            "zone_v": 0.0, "fish_v": 0.0, "a_up": 0.0, "g_dn": 0.0, "brake": 0.0,
+            "clamp": "", "cov": 0.0, "detected": False, "adapt_n": 0}
 worker = None
 GAME_TITLE = ""
-# Точка равновесия зоны, измеренная ботом (сколько надо держать ЛКМ, чтобы зона стояла).
-# Физика мини-игры в разных клиентах разная, а между забросами она НЕ меняется — поэтому
-# значение живёт всю сессию и подсказывается в журнале, чтобы его можно было вписать в
-# pid_bias и не ждать подстройки каждый запуск.
-HOVER = {"v": 0.0, "n": 0}
+# Физика зоны, измеренная ботом (разгон вверх при зажатой ЛКМ / вниз при отпущенной).
+# Зависит от клиента, а между забросами не меняется — поэтому живёт всю сессию.
+RELAY_PHYS = {"up": None, "dn": None, "n": 0, "logged": False}
 held_keys = set()
 mouse_down = False
 last_switch = last_up_sent = hold_since = 0.0
@@ -1496,6 +1486,8 @@ def init_capture():
         return CAP
     for k in CFG_MIGRATED:
         log(t("log_cfg_migrate", key=k, to=DEFAULT_CFG["capture_backend"]))
+    for k in CFG_DROPPED:
+        log(t("log_cfg_drop", key=k))
     CAP = ScreenCapture(CFG.get("capture_backend", "auto"), int(CFG.get("capture_monitor", 0) or 0))
     detail = getattr(CAP, "cam_note", "") or t("v_primary" if not CAP.is_fallback else "v_fallback")
     log(t("log_capture", backend=CAP.backend, detail=detail))
@@ -1911,68 +1903,46 @@ def set_mouse(down, force=False):
 #   2) analyze() находит зелёную зону (HSV) и рыбку НЕ по цвету, а по «неоднородности»
 #      строки шкалы: фон шкалы внутри одной строки почти постоянен по горизонтали, а спрайт
 #      рыбы — нет. Поэтому работает для любых видов рыб (разные текстуры/цвета).
-#   3) Ошибка нормируется высотой шкалы и подаётся в PIDController; его выход — НЕ «нажать
-#      или отпустить», а скважность (duty cycle) ШИМ-окна длиной 1/pwm_hz секунд.
-#      Внутри ШИМ-окна ЛКМ удерживается первые duty*T секунд и отпускается остальные
-#      (1-duty)*T — усреднённое «усилие» меняется плавно, без рывков bang-bang.
-#      Альтернатива (CFG["pid_mode"]="hyst") — тот же выход ПИД сравнивается с порогом 0.5
-#      с гистерезисом (вкл/выкл). Реализованы обе, по умолчанию ШИМ.
-#   4) Упреждение: позиция рыбы экстраполируется по отфильтрованным скорости и ускорению
-#      (высокий FPS захвата как раз и даёт прирочную оценку d/dt).
-#   5) «РЫБА СРЫВАЕТСЯ!» — красная рамка вокруг шкалы: включает аварийный набор
-#      коэффициентов и запрещает отпускать ЛКМ, пока рыба не вернётся в зону.
+#   3) Регулятор — РЕЛЕ С ПРЕДСКАЗАНИЕМ ОСТАНОВА (relay_decide): каждый кадр бот
+#      предсказывает, где зона остановится при «жать» и при «отпустить», и выбирает
+#      действие с точкой останова ближе к центру рыбы. Скважности/ШИМ нет — решение
+#      всегда двоичное, привязано к кадрам и не насыщается (это и ломало ПИД).
+#   4) Упреждение: цель = центр рыбы, сдвинутый вперёд по её измеренной скорости.
+#   5) «РЫБА СРЫВАЕТСЯ!» — красная рамка вокруг шкалы: телеметрия «АВАРИЯ»; закон
+#      управления тот же (он сам даёт длинное устойчивое движение к рыбе).
 
-class PIDController:
-    """
-    Дискретный ПИД-регулятор с анти-windup.
+def relay_decide(zc, zv, tgt, pressed, a_up, g_dn, vmax, look, hyst):
+    """РЕЛЕ С ПРЕДСКАЗАНИЕМ ОСТАНОВА: True = держать ЛКМ.
 
-    err   — нормированная ошибка (доля высоты шкалы). err > 0 = зона НИЖЕ рыбы
-            (в экранных координатах y растёт вниз) => зону надо поднимать => держать ЛКМ.
-    d_err — производная ошибки по времени (по отфильтрованной скорости), считается
-            снаружи, чтобы не дифференцировать шум измерений.
-    out   — скважность (duty) 0..1: 0 = не держим, 1 = держим всё ШИМ-окно.
+    zc, zv — центр зоны (px) и её скорость (px/с, вниз +); tgt — цель (центр рыбы
+    с упреждением); pressed — текущее состояние ЛКМ; a_up / g_dn — разгон зоны вверх
+    при зажатой ЛКМ / вниз при отпущенной (px/с^2); vmax — предел скорости для
+    предсказания; look — горизонт предсказания, с; hyst — гистерезис решения, px.
 
-    Выход = clamp(bias + Kp*err + Ki*∫err dt + Kd*d(err)/dt, 0, 1).
-    bias — «дежурная» скважность удержания (баланс силы тяжести), подбирается под игру.
-    Анти-windup: интеграл ограничен ±i_limit и НЕ накапливается, когда выход уже
-    упирается в ограничение в ту же сторону (иначе после долгого простоя вне зоны
-    следует перелёт — на «срыве рыбы» это было бы фатально).
+    Каждый кадр считаем, где зона будет через look секунд при каждом из двух действий:
+    продолжать текущее или немедленно сменить. Скорость при смене действия не
+    обнуляется (инерция), поэтому предсказание учитывает и выбег после отпускания —
+    бот отпускает ЛКМ ЗАРАНЕЕ, пока зону ещё несёт к рыбе. Выбираем действие с
+    точкой, ближе к цели; смена только если другое действие лучше на hyst px
+    (иначе дребезг кликов). Закон самосбалансирован: около цели он продолжает
+    короткие циклы «прижал-отпустил», которые держат центр зоны на рыбе, а вдали от
+    цели даёт длинное устойчивое движение — без насыщения и без интегратора.
     """
 
-    __slots__ = ("kp", "ki", "kd", "bias", "i_limit", "dband", "out_lo", "out_hi",
-                 "integral", "out", "p", "i", "d", "prev_err")
+    def future(a):
+        # позиция через look при ускорении a (со срезом по предельной скорости)
+        v = zv + a * look
+        if v > vmax:
+            a = (vmax - zv) / look
+        elif v < -vmax:
+            a = (-vmax - zv) / look
+        return zc + zv * look + 0.5 * a * look * look
 
-    def __init__(self, kp, ki, kd, bias, i_limit, dband, out_lo=0.0, out_hi=1.0):
-        self.kp, self.ki, self.kd = kp, ki, kd
-        self.bias = bias
-        self.i_limit, self.dband = i_limit, dband
-        self.out_lo, self.out_hi = out_lo, out_hi
-        self.reset()
-
-    def reset(self):
-        self.integral = 0.0
-        self.out = self.bias
-        self.p = self.i = self.d = 0.0
-        self.prev_err = 0.0
-
-    def set_gains(self, kp, ki, kd, bias):
-        """Смена коэффициентов (норма <-> авария) без скачка: интеграл приглушается."""
-        self.kp, self.ki, self.kd, self.bias = kp, ki, kd, bias
-        self.integral *= 0.4            # иначе после входа в аварию будет перелёт
-
-    def update(self, err, d_err, dt):
-        e = 0.0 if abs(err) < self.dband else err
-        self.p = self.kp * e
-        sat_hi = self.out >= self.out_hi - 1e-6
-        sat_lo = self.out <= self.out_lo + 1e-6
-        if not ((e > 0 and sat_hi) or (e < 0 and sat_lo)):     # условная интеграция
-            self.integral = max(-self.i_limit, min(self.i_limit, self.integral + e * dt))
-        self.i = self.ki * self.integral
-        self.d = self.kd * d_err
-        out = self.bias + self.p + self.i + self.d
-        self.out = max(self.out_lo, min(self.out_hi, out))
-        self.prev_err = err
-        return self.out
+    e_on = abs(future(-a_up) - tgt)          # где будем, если ЖАТЬ
+    e_off = abs(future(g_dn) - tgt)          # где будем, если ОТПУСТИТЬ
+    if pressed:
+        return e_on <= e_off + hyst          # жмём, пока это не хуже отпущенных
+    return e_on + hyst < e_off               # для нажатия требуется явный выигрыш
 
 
 def bar_rects():
@@ -2331,29 +2301,27 @@ def wait_for_minigame(timeout):
 
 def play_minigame():
     """
-    Мини-игра рыбалки: поток DXGI + ПИД + ШИМ-управление ЛКМ.
-    Каждая итерация: 1 кадр -> измерение -> ПИД -> решение по фазе ШИМ-окна -> (опционально)
-    событие DOWN/UP. Никакого «залипания»: событие отправляется явно, при выходе ЛКМ
-    гарантированно отпущен, есть MAX_HOLD и принудительный отпуск.
+    Мини-игра рыбалки: поток захвата + РЕЛЕ С ПРЕДСКАЗАНИЕМ ОСТАНОВА (relay_decide).
+    Каждая итерация: 1 кадр -> измерение зоны/рыбы/скоростей -> предсказание точек
+    останова для «жать»/«отпустить» -> явное событие ЛКМ DOWN/UP. Скважности и ШИМ
+    больше нет: решение всегда двоичное и привязано к кадрам, поэтому медленный
+    захват (20 к/с GDI) не ломает закон управления. При любом выходе ЛКМ
+    гарантированно отпущен (max_hold + принудительный отпуск).
     """
     rect, inner = bar_rects()
     t_start = time.perf_counter()
     ensure_bar_stream(rect)
-    mode = str(CFG.get("pid_mode", "pwm"))
-    ctrl = PIDController(CFG["pid_kp"], CFG["pid_ki"], CFG["pid_kd"], CFG["pid_bias"],
-                         CFG["pid_ilim"], CFG["pid_dband"])
-    # В аварии bias = «равновесие + надбавка», а не абсолютное число: иначе переход
-    # в аварийный режим сам по себе уводит зону вверх (это и был «зажим ЛКМ на полке»).
-    em_gains = (CFG["pid_em_kp"], CFG["pid_em_ki"], CFG["pid_em_kd"],
-                CFG["pid_bias"] + max(0.0, CFG["pid_em_bias"] - CFG["pid_bias"]))
-    norm_gains = (CFG["pid_kp"], CFG["pid_ki"], CFG["pid_kd"], CFG["pid_bias"])
-    lead = max(0.0, float(CFG["lead_time"]))
-    lead_max = float(CFG["lead_max"]) * scale()[0]
     lost_limit = max(0.03, float(CFG["lost_ms"]) / 1000.0)
-    min_switch = max(0.001, float(CFG["min_switch"]) if mode == "pwm" else MIN_SWITCH)
-    cycle_min = 1.0 / max(10.0, float(CFG["pwm_hz"]))
-    cycle = cycle_min                     # фактический период ШИМ (ниже — см. dt_ema)
-    dt_ema = cycle_min
+    min_switch = max(0.015, float(CFG["min_switch"]))
+    tau = max(0.0, float(CFG["relay_tau_ms"])) / 1000.0
+    hyst0 = max(2.0, float(CFG["relay_hyst"]))
+    vmax = max(150.0, float(CFG["relay_vmax"]))
+    adapt = bool(CFG.get("relay_adapt", True))
+    # измеренная в прошлых забросах физика зоны точнее стартовых оценок из конфига
+    a_up = float(RELAY_PHYS["up"] or CFG["relay_a_up"]) if adapt else float(CFG["relay_a_up"])
+    g_dn = float(RELAY_PHYS["dn"] or CFG["relay_g"]) if adapt else float(CFG["relay_g"])
+    n_up = n_dn = 0
+    ema_up = ema_dn = 0.0
 
     log(t("log_mini"))
     for _ in range(5):                       # гарантированно отпускаем ЛКМ перед стартом
@@ -2364,55 +2332,40 @@ def play_minigame():
 
     pressed = False
     last_evt = forced_until = hold_since = 0.0
+    press_frames = 0                         # итераций в текущем состоянии ЛКМ (для адаптива)
     last_zone_t = time.perf_counter()
     prev_fish = prev_fish_t = None
     fish_v = fish_a = prev_raw_v = 0.0
     prev_zone = None
     prev_zone_t = 0.0
     zone_v = 0.0
-    err_f = 0.0
-    duty = CFG["pid_bias"]
-    hover = (HOVER["v"] if (CFG.get("hover_adapt", True) and HOVER["n"] > 4)
-             else float(CFG["pid_bias"]))      # равновесие с прошлого заброса (физика та же)
-    em_off = max(0.0, float(CFG["pid_em_bias"]) - float(CFG["pid_bias"]))
-    # --- измеритель ТОЧКИ РАВНОВЕСИЯ зоны ---
-    # ЛКМ здесь — усилие: d(v)/dt = G*(1-duty) + A_UP*duty. Равновесный duty тот, где
-    # ускорение нулевое; у каждого клиента он свой (зависит от G/A клиента). Мерим так:
-    # каждые EQ_SPAN секунд имеем пару (средний duty за окно, среднее ускорение), а по
-    # ДВУМ таким парам с разными duty прямая a(duty) пересекает ноль — это и есть
-    # равновесие. Два окна по полсекунды — и bias стоит точно, вместо секундного дрейфа
-    # интеграла (именно дрейф и выглядел как «зона сама уползает вверх и стоит там»).
-    EQ_SPAN = 0.5
-    eq_t0 = time.perf_counter()
-    eq_v0 = None
-    eq_ddt = 0.0                             # интеграл duty по времени за окно
-    eq_ok = True                             # окно без упора в края/аварии/клэмпов
-    eq_last = None                           # предыдущий замер (duty_avg, acc)
-    hover_n = 0
-    cycle_start = time.perf_counter()
+    zone_v_prev = 0.0                        # фильтрованная скорость кадром ранее (для ускорения)
+    dt_ema = 1.0 / 60.0
     slip = False
-    prev_now, prev_err_f = None, 0.0
+    prev_now = None
     slip_cnt = 0
     slip_ok_cnt = 0
     slip_events = 0
-    peak_duty = 0.0
+    switches = [0]                           # события ЛКМ (телеметрия «переключений/с»)
     lost = 0
-    hist = PID_VIEW["hist"]
+    hist = CTL_VIEW["hist"]
     hist.clear()
     next_fit = 0.0                           # «найти шкалу заново» не чаще раза в 2.5 с
 
     def press(state, now):
         """Явная смена состояния ЛКМ с защитой от дребезга и принудительным отпуском."""
         global mouse_down
-        nonlocal pressed, last_evt, hold_since
+        nonlocal pressed, last_evt, hold_since, press_frames
         if state == pressed or now - last_evt < min_switch:
             return
         if state and now < forced_until:
             return
         _send_mouse(MOUSEEVENTF_LEFTDOWN if state else MOUSEEVENTF_LEFTUP)
         pressed = state
+        press_frames = 0
         mouse_down = state
         last_evt = now
+        switches[0] += 1
         if state:
             hold_since = now
 
@@ -2453,15 +2406,12 @@ def play_minigame():
             if not slip and slip_cnt >= int(CFG["slip_frames"]):
                 slip = True
                 slip_events += 1
-                ctrl.set_gains(*em_gains)
                 set_state("st_slip", "st_slip_d", "run")
                 log(t("log_slip"))
             elif slip and slip_ok_cnt >= max(2, int(CFG["slip_frames"])):
                 # выход из аварии с задержкой: на 20 к/с красный контур моргает на
-                # 1 кадр, и регулятор начало бросать между нормой и аварийными
-                # коэффициентами (каждый вход гасит интеграл в 0.4 раза)
+                # 1 кадр, и без задержки режим «мигает» в телеметрии
                 slip = False
-                ctrl.set_gains(*norm_gains)
                 set_state("st_mini", "st_mini_hold_d", "run")
 
             # ---------- зелёная зона ----------
@@ -2489,139 +2439,83 @@ def play_minigame():
             fish_lost = prev_fish is None or (now - (prev_fish_t or 0.0)) > float(CFG["fish_timeout"])
             fish_now = None if fish_lost else (fish_y if fish_y is not None else prev_fish)
 
-            # ---------- ошибка: рыба ВНУТРИ зоны, а не «центр в центр» ----------
-            # Прежний закон целился центром зелёной зоны точно в рыбу. Зона в этой игре —
-            # ~110 px из 529, и «рыба на 40 px выше центра» при Kp=3 уже давала duty~1:
-            # зона взлетала ВЫШЕ рыбы и падать обратно не хотела (её прижимало к верху
-            # шкалы, где удержание вообще ни на что не влияет). Теперь есть «свободная»
-            # полоса: пока рыба внутри зоны с запасом zone_margin — регулятор молчит,
-            # ошибка считается от КРАЯ этой полосы.
-            half_free = max(2.0, (zone[1] - zone[0]) * 0.5 - float(CFG["zone_margin"]))
-            if fish_now is None:
-                target, err_px = zone_c, 0.0
-            else:
-                pred = fish_now + fish_v * lead + 0.5 * fish_a * lead * lead
-                pred += max(-lead_max, min(lead_max, pred - fish_now))
-                target = min(max(pred, 0.0), ih - 1.0)      # предсказание не уходит за край шкалы
-                err_px = zone_c - target                        # >0 => зона НИЖЕ рыбы => поднимать
-            e_abs = abs(err_px) - half_free
-            err = (0.0 if e_abs <= 0.0 else (e_abs if err_px > 0 else -e_abs)) / ih
+            # ---------- скорость СОБСТВЕННО зоны + шаг времени ----------
             dt = 1.0 / max(30.0, (CAP.fps if CAP else 120.0)) if prev_now is None \
                 else max(1e-4, now - prev_now)                  # dt по реальным кадрам потока
-            # Период ШИМ никогда не должен быть короче шага цикла: при 20 к/с окно в 22 мс
-            # «помещается» в одну итерацию, решение всегда принимается в начале окна ->
-            # want=True при ЛЮБОМ duty>0 -> «бессрочный зажим ЛКМ». Окно растягиваем
-            # минимум на ~2.5 кадра, но не больше 150 мс (иначе регулятор станет вязким).
+            prev_now = now
             dt_ema = dt_ema * 0.7 + dt * 0.3
-            cycle = min(0.150, max(cycle_min, 2.5 * dt_ema))
-
-            # ---------- скорость СОБСТВЕННО зоны ----------
+            # Горизонт предсказания не короче двух кадров: на медленном захвате короткий
+            # горизонт выродился бы в дребезг — решение не успевает подействовать до
+            # следующего кадра.
+            look = min(0.40, max(float(CFG["relay_look_ms"]) / 1000.0, 2.0 * dt_ema))
             if prev_zone is not None and now > prev_zone_t:
                 zv = (zone_c - prev_zone) / max(1e-4, now - prev_zone_t)
+                zone_v_prev = zone_v
                 zone_v = zone_v * (1 - float(CFG["vel_alpha"])) + zv * float(CFG["vel_alpha"])
             prev_zone, prev_zone_t = zone_c, now
 
-            # ---------- КАСКАД: положение -> желаемая скорость -> ПИД -> ШИМ ----------
-            # ЛКМ в этой мини-игре — это УСКОРЕНИЕ зоны: зажал — зона разгоняется вверх,
-            # отпустил — разгоняется вниз (гравитация). Прямой ПИД по ПОЛОЖЕНИЮ на таком
-            # объекте фундаментально не держит: в контуре нет демпфирования, регулятор
-            # проскакивает рыбу в обе стороны, «висит» на насыщении и уезжает к краю —
-            # ровно то, что было на скриншотах. Развязываем контуры: внешний назначает
-            # ЖЕЛАЕМУЮ СКОРОСТЬ зоны (0 — стоять на рыбе; пропорционально ошибке —
-            # догонять), внутренний ПИД отрабатывает её по ИЗМЕРЕННОЙ скорости зоны.
-            # Интегратор сам находит равновесие «сколько держать, чтобы зона не падала»,
-            # а D впервые реально гасит разгон (раньше D дифференцировал шум положения).
-            v_lim = max(120.0, float(CFG["vel_max"]))
+            # ---------- цель: ЦЕНТР рыбы с упреждением по её скорости ----------
+            # Зона должна висеть так, чтобы рыба была ПО СЕРЕДИНЕ зелёного прямоугольника.
+            # Рыба рыскает, а кадры запаздывают, поэтому цель ставится ВПЕРЕДИ рыбы по её
+            # измеренной скорости. Упреждение масштабируется горизонтом предсказания:
+            # обе кандидатуры «жать/отпустить» смотрят на look секунд вперёд, и цель
+            # должна показывать, ГДЕ рыба будет к тому моменту, иначе регулятор
+            # устойчиво отстаёт от быстро плывущей рыбы (перманентный лаг ~v*цикл).
+            # Предел упреждения — relay_lead_max * высота шкалы.
+            lead_cap = max(0.0, float(CFG["relay_lead_max"])) * ih
             if fish_now is None:
-                v_des = 0.0
+                tgt = zone_c
             else:
-                # профиль подхода: далеко — до vel_max, рядом — скорость по тормозному
-                # пути sqrt(2*a*s), чтобы зона ВЬЕХАЛА в рыбу, а не проскочила её
-                dist = max(0.0, abs(err_px) - half_free * 0.6)
-                v_cap = min(v_lim, math.sqrt(2.0 * max(120.0, float(CFG["stop_acc"])) * dist))
-                v_des = max(-v_cap, min(v_cap, -float(CFG["vel_gain"]) * err_px))
-            err2 = (zone_v - v_des) / v_lim                 # >0: зона едет вниз быстрее цели => жать
-            if abs(err_px) < half_free and abs(zone_v) < 0.16 * v_lim:
-                err2 *= 0.2                                  # уже на рыбе и почти стоим — не дёргаться
-            err_f = err_f * 0.6 + err2 * 0.4                 # сглаживание для производной
-            d_err = (err_f - prev_err_f) / dt if prev_now else 0.0
-            prev_err_f, prev_now = err_f, now
-            ctrl.bias = hover + (em_off if slip else 0.0)
-            out = ctrl.update(err_f, d_err, dt)
-            force = None
+                tgt = fish_now + max(-lead_cap, min(lead_cap, fish_v * (tau + 0.75 * look)))
+                tgt = min(max(tgt, 0.0), ih - 1.0)
+            err_px = zone_c - tgt                               # >0 => зона НИЖЕ рыбы => поднимать
 
-            # ---------- упёрлась в край шкалы: держим/бросаем по смыслу, а не по ошибке ----------
-            # На «полке» (зона прижата к ВЕРХУ шкалы) удержание физически бессмысленно,
-            # если рыба под зоной: единственный способ вернуться к ней — отпустить. Из-за
-            # bias=0.5 выход не падал в 0, зона и стояла наверху всю мини-игру.
+            # ---------- адаптивная физика: измеряем разгоны зоны ----------
+            # Пока ЛКМ не переключалась ≥ press_frames кадров и зона не упёрлась в край,
+            # ускорение зоны равно -a_up (жмём) или +g (отпустили) — независимо от
+            # направления движения (после отпускания зону вверх ещё тормозит та же g).
+            # Первые кадры после переключения пропускаем: фильтр скорости ещё не
+            # устоялся и завышает ускорение. Замеры сглаживаются EMA с отсечкой
+            # выбросов; оценка живёт с 8-го замера и уточняется до конца мини-игры.
+            press_frames += 1
             at_top = zone[0] <= max(1.0, 0.02 * ih)
             at_bottom = zone[1] >= ih - max(2.0, 0.02 * ih)
-            clamp = None
-            if at_top and (fish_now is None or fish_now >= zone[1] - half_free):
-                out, force, clamp = 0.0, 0.0, "top"
-            elif at_bottom and (fish_now is None or fish_now <= zone[0] + half_free):
-                out, force, clamp = 1.0, 1.0, "bottom"
+            if adapt and press_frames >= 5 and not (at_top or at_bottom) \
+                    and abs(zone_v) < 0.92 * vmax:
+                a_meas = (zone_v - zone_v_prev) / dt
+                cand = -a_meas if pressed else a_meas
+                if 150.0 < cand < 8000.0:
+                    if pressed:
+                        if n_up == 0:
+                            ema_up = cand
+                        elif cand < 3.0 * ema_up:
+                            ema_up += (cand - ema_up) * 0.20
+                        n_up += 1
+                        if n_up >= 8:
+                            a_up = ema_up
+                    else:
+                        if n_dn == 0:
+                            ema_dn = cand
+                        elif cand < 3.0 * ema_dn:
+                            ema_dn += (cand - ema_dn) * 0.20
+                        n_dn += 1
+                        if n_dn >= 8:
+                            g_dn = ema_dn
 
-            # ---------- срыв: догоняем рыбу, а НЕ «держим вечно» ----------
-            # Красная рамка «РЫБА СРЫВАЕТСЯ!» раньше означала «duty=1», даже когда рыба
-            # была НИЖЕ зоны: ЛКМ зажат, зона наверху, рыба уходит за нижний край.
-            if slip and fish_now is not None and clamp is None:
-                if fish_now < zone[0]:
-                    # рыба выше: жмём, НО если зона уже летит вверх с большой скоростью —
-                    # не разгоняем её дальше (догонит по инерции, иначе проскочим снова)
-                    out = max(out, 0.9)
-                    force = 0.0 if zone_v < -0.45 * v_lim else 1.0
-                elif fish_now > zone[1]:
-                    out = min(out, 0.1)
-                    force = 1.0 if zone_v > 0.45 * v_lim else 0.0
-            if force is not None:
-                out = force
-            peak_duty = max(peak_duty, out)
-
-            # ---------- равновесие: (средний duty, среднее ускорение) за окно ----------
-            eq_ddt += duty * dt
-            eq_ok = eq_ok and clamp is None and not slip and zone[0] > 3.0 and zone[1] < ih - 3.0
-            if now - eq_t0 >= EQ_SPAN:
-                span = max(1e-3, now - eq_t0)
-                duty_avg = min(1.0, max(0.0, eq_ddt / span))
-                acc = (zone_v - (eq_v0 if eq_v0 is not None else zone_v)) / span
-                if eq_ok and eq_v0 is not None and eq_last is not None \
-                        and abs(acc - eq_last[1]) > 80.0:
-                    d1, a1 = eq_last
-                    d2, a2 = duty_avg, acc
-                    est = d1 - a1 * (d2 - d1) / (a2 - a1)      # duty, при котором a = 0
-                    if -0.2 < est < 1.2:
-                        span_lim = max(0.05, float(CFG["hover_span"]))
-                        lo = float(CFG["pid_bias"]) - span_lim
-                        hi = min(0.95, float(CFG["pid_bias"]) + span_lim)
-                        hk = min(0.9, max(0.05, float(CFG["hover_k"])) * 3.0)
-                        hover = min(hi, max(lo, hover * (1 - hk) + est * hk))
-                        hover_n += 1
-                        HOVER["v"], HOVER["n"] = hover, HOVER["n"] + 1
-                if eq_ok and eq_v0 is not None:
-                    eq_last = (duty_avg, acc)
-                eq_t0, eq_v0, eq_ddt, eq_ok = now, zone_v, 0.0, True
-            elif eq_v0 is None:
-                eq_v0 = zone_v
-
-            # ---------- ШИМ: кто сколько держит внутри короткого окна ----------
-            if mode == "pwm":
-                if abs(out - duty) >= 0.5 or now - cycle_start >= cycle:
-                    duty, cycle_start = out, now        # крупная смена команды действует сразу
-                want = duty > 0.0 and (now - cycle_start) < duty * cycle
-            else:
-                # альтернатива: гистерезис по выходу ПИД (вкл выше 0.55, выкл ниже 0.45)
-                dz = float(CFG["deadzone"]) / ih        # та же «мёртвая зона» в долях шкалы
-                on_thr, off_thr = (0.38, 0.30) if slip else (0.5 + dz, 0.5 - dz)
-                want = out > (off_thr if pressed else on_thr)
-                duty = out
+            # ---------- РЕЛЕ: предсказать останов, выбрать «жать»/«отпустить» ----------
+            # Гистерезис на медленном кадре шире: решения обновляются реже, и узкий
+            # гистерезис дал бы лишние переключения.
+            hyst = hyst0 * max(1.0, dt_ema / 0.034)
+            clamp = ""
             if fish_now is None:
-                want = False
-                duty = 0.0
-            if clamp == "top":
-                want = False
-            elif clamp == "bottom":
-                want = True
+                want = False                                    # рыбы не видим — не держим
+            else:
+                want = relay_decide(zone_c, zone_v, tgt, pressed, a_up, g_dn, vmax, look, hyst)
+                if at_top:
+                    want, clamp = False, "top"                  # выше кромки некуда — жать бессмысленно
+                elif at_bottom and fish_now > zone[1] - 2.0:
+                    want, clamp = True, "bottom"                # зона у дна, рыба ниже — держим позицию
+
             # ---------- защита от залипания ----------
             if want and not pressed and now < forced_until:
                 want = False
@@ -2631,12 +2525,17 @@ def play_minigame():
             press(want, now)
 
             # ---------- телеметрия для страницы «Зрение» ----------
-            PID_VIEW.update(err=err, duty=duty, mode="emerg" if slip else "norm", lost=lost,
-                            hover=hover,
-                            slip=slip_cnt, p=ctrl.p, i=ctrl.i, d=ctrl.d, zone=zone_c, fish=fish_y,
+            brake = 0.0
+            if zone_v < -20.0:                                  # выбег вверх: сколько зона ещё пройдёт
+                brake = min(0.5 * zone_v * zone_v / max(200.0, g_dn), 4.0 * ih)
+            CTL_VIEW.update(press=pressed, err=err_px / ih, mode="emerg" if slip else "norm",
+                            lost=lost, slip=slip_cnt, zone=zone_c, fish=fish_y,
                             fps=CAP.fps if CAP else 0.0, frame_ms=CAP.avg_ms if CAP else 0.0,
-                            zone_v=zone_v, half=half_free, clamp=clamp or "")
-            hist.append((err, duty))
+                            zone_v=zone_v, fish_v=(fish_v if fish_now is not None else 0.0),
+                            a_up=a_up, g_dn=g_dn, brake=brake, clamp=clamp,
+                            cov=float(r.get("cov", 0.0) or 0.0), detected=bool(r.get("detected", False)),
+                            adapt_n=n_up + n_dn)
+            hist.append((err_px / ih, 1.0 if pressed else 0.0))
             if len(hist) > 160:
                 del hist[0]
     finally:
@@ -2646,11 +2545,15 @@ def play_minigame():
         mouse_down = False
         if CAP is not None:
             CAP.stop_stream()
-        PID_VIEW.update(mode="norm", duty=0.0, err=0.0, lost=0, slip=0)
+        CTL_VIEW.update(mode="norm", press=False, err=0.0, lost=0, slip=0)
     dur = time.perf_counter() - t_start
-    log(t("log_mini_done", dur=dur, slip=slip_events, duty=peak_duty))
-    if CFG.get("hover_adapt", True) and HOVER["n"] > 25:
-        log(t("log_hover", v=HOVER["v"], n=HOVER["n"]))
+    log(t("log_mini_done", dur=dur, slip=slip_events, sw=switches[0] / max(0.1, dur)))
+    if adapt and n_up >= 8 and n_dn >= 8:
+        RELAY_PHYS["up"], RELAY_PHYS["dn"] = a_up, g_dn
+        RELAY_PHYS["n"] = int(RELAY_PHYS["n"]) + min(n_up, n_dn)
+        if not RELAY_PHYS["logged"]:
+            RELAY_PHYS["logged"] = True
+            log(t("log_adapt", up=a_up, dn=g_dn, n=RELAY_PHYS["n"]))
     return dur
 
 
@@ -3445,9 +3348,8 @@ class App:
 
     # ------------------------------------------------------------ выбор из списка / элемент списка CFG
     def choice(self, x, y, key, options, size=11, w=142, h=30):
-        """Кнопка-переключатель значения из списка (pid_mode: pwm|hyst, fish_detect: auto|both|hsv)."""
-        lbl = {"pwm": t("m_pid_pwm"), "hyst": t("m_pid_hyst"),
-               "auto": t("m_det_auto"), "both": t("m_det_both"), "hsv": t("m_det_hsv")}
+        """Кнопка-переключатель значения из списка (fish_detect: auto|both|hsv)."""
+        lbl = {"auto": t("m_det_auto"), "both": t("m_det_both"), "hsv": t("m_det_hsv")}
 
         def cycle(_e=None):
             try:
@@ -3648,25 +3550,14 @@ class App:
                 ("m_snd_end", "t", "sound_end"), ("m_snd_catch", "t", "sound_catch"),
                 ("m_maxhold", "s", ("max_hold", 0.5, 8, 0.25, "{:.2f}")),
                 ("m_lostms", "s", ("lost_ms", 40, 900, 20, "{:g}")),
-                ("m_fishthr", "s", ("fish_thr", 6, 90, 2, "{:g}")),
-                ("m_zonemargin", "s", ("zone_margin", 0, 60, 2, "{:g}")),
-                ("m_velgain", "s", ("vel_gain", 1.0, 12.0, 0.5, "{:g}")),
-                ("m_velmax", "s", ("vel_max", 150.0, 900.0, 20.0, "{:g}")),
-                ("m_stopacc", "s", ("stop_acc", 200.0, 2500.0, 50.0, "{:g}")),
-                ("m_barref", "t", "bar_refine"), ("m_barfit", "t", "bar_autofit"),
-                ("m_hover", "t", "hover_adapt")]
-        right = [("m_pid_mode", "c", ("pid_mode", ("pwm", "hyst"), 110, 26)),
-                 ("m_kp", "s", ("pid_kp", 0.0, 12.0, 0.1, "{:.2f}")),
-                 ("m_ki", "s", ("pid_ki", 0.0, 6.0, 0.05, "{:.2f}")),
-                 ("m_kd", "s", ("pid_kd", 0.0, 3.0, 0.01, "{:.3f}")),
-                 ("m_bias", "s", ("pid_bias", 0.0, 1.0, 0.02, "{:.2f}")),
-                 ("m_pwm", "s", ("pwm_hz", 15.0, 200.0, 5.0, "{:g}")),
-                 ("m_ilim", "s", ("pid_ilim", 0.0, 2.0, 0.05, "{:.2f}")),
-                 ("m_dband", "s", ("pid_dband", 0.0, 0.1, 0.002, "{:.3f}")),
-                 ("m_lead", "s", ("lead_time", 0.0, 0.3, 0.005, "{:.3f}")),
-                 ("m_em_kp", "s", ("pid_em_kp", 0.0, 15.0, 0.2, "{:.2f}")),
-                 ("m_em_ki", "s", ("pid_em_ki", 0.0, 6.0, 0.05, "{:.2f}")),
-                 ("m_em_kd", "s", ("pid_em_kd", 0.0, 3.0, 0.02, "{:.3f}")),
+                ("m_barref", "t", "bar_refine"), ("m_barfit", "t", "bar_autofit")]
+        right = [("m_hyst", "s", ("relay_hyst", 2.0, 60.0, 1.0, "{:g}")),
+                 ("m_look", "s", ("relay_look_ms", 60, 300, 10, "{:g}")),
+                 ("m_aup", "s", ("relay_a_up", 400.0, 4000.0, 100.0, "{:g}")),
+                 ("m_g", "s", ("relay_g", 400.0, 4000.0, 100.0, "{:g}")),
+                 ("m_vmax", "s", ("relay_vmax", 300.0, 1500.0, 50.0, "{:g}")),
+                 ("m_adapt", "t", "relay_adapt"),
+                 ("m_fishthr", "s", ("fish_thr", 6, 90, 2, "{:g}")),
                  ("m_slipthr", "s", ("slip_thr", 0.02, 0.6, 0.02, "{:.2f}"))]
         for col, rows in ((44, left), (400, right)):
             for k, (lab, kind, arg) in enumerate(rows):
@@ -3880,8 +3771,8 @@ class App:
         return base + ("  ·  " + t("v_fallback") if CAP.is_fallback else "")
 
     def _spark(self, d, box):
-        """Мини-график: ошибка ПИД (красный) и скважность (зелёный) за последние ~160 кадров."""
-        hist = list(PID_VIEW.get("hist") or ())
+        """Мини-график: ошибка регулятора (красный) и состояние ЛКМ (зелёный), ~160 кадров."""
+        hist = list(CTL_VIEW.get("hist") or ())
         x0, y0, x1, y1 = box
         if len(hist) < 2:
             self.cv.itemconfig(d["spark_err"], points=[x0, (y0 + y1) // 2, x1, (y0 + y1) // 2])
@@ -3947,15 +3838,16 @@ class App:
                     f"{t('v_zone')}: {'—' if not z else int(z[2])}\n"
                     f"{t('v_fish')}: {'—' if f_ is None else int(f_)}\n"
                     f"{t('v_slip')}: {r['slip'] * 100:.0f}%"))
-                v = PID_VIEW
+                v = CTL_VIEW
                 md = t("v_mode_emerg") if v.get("mode") == "emerg" else t("v_mode_norm")
+                lkm = t("v_press_on") if v.get("press") else t("v_press_off")
                 self.cv.itemconfig(d["pid1"], text=(
-                    f"{t('v_err')}: {v['err'] * 100:+6.1f}%  {t('v_duty')}: {v['duty'] * 100:5.1f}%"))
+                    f"{t('v_err')}: {v['err'] * 100:+6.1f}%  {t('v_press')}: {lkm}"))
                 self.cv.itemconfig(d["pid2"], text=(
-                    f"P {v['p']:+.3f} I {v['i']:+.3f} D {v['d']:+.3f}"))
+                    f"{t('v_zv')}: {v['zone_v']:+5.0f} px/s  {t('v_fv')}: {v.get('fish_v', 0.0):+5.0f} px/s"))
                 self.cv.itemconfig(d["pid3"], text=(
-                    f"{t('v_mode')}: {md}  {t('v_lost')}: {v['lost']}  {CAP.fps:.0f} fps" if CAP else
-                    f"{t('v_mode')}: {md}  {t('v_lost')}: {v['lost']}"))
+                    f"{t('v_brk')}: {v.get('brake', 0.0):3.0f} px  {t('v_mode')}: {md}  {t('v_lost')}: {v['lost']}"
+                    + (f"  {CAP.fps:.0f} fps" if CAP else "")))
                 self.cv.itemconfig(d["sparklab"], text=t("v_spark_lab"))
                 self._spark(d, (self.u(PANEL_X + 56), self.u(PANEL_Y + 484), self.u(PANEL_X + 260), self.u(PANEL_Y + 542)))
             except Exception:
@@ -3981,16 +3873,16 @@ class App:
                 if r.get("clipped"):
                     det += " | " + t("v_bar_edge")
             self.cv.itemconfig(d["cap4"], text=(
-                f"bar {CFG['bar']} pad {CFG['bar_pad']} | {t('v_mode')}: {CFG['pid_mode']}"
+                f"bar {CFG['bar']} pad {CFG['bar_pad']} | relay {CFG['relay_look_ms']:.0f} ms"
                 + (("\n" + det) if det else "")))
-            self.cv.itemconfig(d["cap5"], text=t("v_pid_hint") if not run else "")
+            self.cv.itemconfig(d["cap5"], text=t("v_ctl_hint") if not run else "")
         elif p == 4 and "game" in d:
             self.cv.itemconfig(d["game"], text=t("s_game", title=GAME_TITLE) if GAME_TITLE else t("s_game_none"))
             self.cv.itemconfig(d["cap"], text=self.capture_line(0, 0))
             self.cv.itemconfig(d["ver_big"], text=f"{APP_NAME} v{APP_VERSION}")
 
     def tick(self):
-        fast = self.page == 2 and (STATE["running"] or PID_VIEW.get("hist"))
+        fast = self.page == 2 and (STATE["running"] or CTL_VIEW.get("hist"))
         try:
             self.refresh()
             self.update_pill()
