@@ -281,8 +281,8 @@ ef.nap = lambda sec: None
 ok3d = ef.vision_equip()
 ef.nap, ef.inventory_open = _real_nap3d, _real_inv3
 ef._cef_render_hwnd, ef._cef_click_at = _real_hwnd3, _real_uiclk3
-check("меню не открылось -> False, ровно 2 фазы ПКМ",
-      ok3d is False and len(clicks3d) == 2 and all(k[3] == "r" for k in clicks3d), str(clicks3d))
+check("меню не открылось -> False, 4 фазы ПКМ (2 попытки x down/up, v1.24 повтор)",
+      ok3d is False and len(clicks3d) == 4 and all(k[3] == "r" for k in clicks3d), str(clicks3d))
 
 print("== 3e. Окно интерфейса не найдено: клики курсором (запасной путь) ==")
 sent.clear()
@@ -557,11 +557,11 @@ def _servo_grab(rect=None):
 _real_grab14, _real_nap14 = ef.grab, ef.nap
 ef.grab = _servo_grab
 ef.nap = lambda sec: None
-ok14, cur14 = ef._drive_game_cursor(7777, 300, 220, "r")
+ok14, cur14, dist14 = ef._drive_game_cursor(7777, 300, 220, "r")
 ef.grab, ef.nap = _real_grab14, _real_nap14
 ef.ctypes.windll = _old_windll
-check("контур сошёлся: ИГРОВОЙ курсор на цели, возврат — компенсированная точка (250, 220)",
-      ok14 is True and cur14 == (250, 220), "%s %s" % (ok14, cur14))
+check("контур сошёлся: ИГРОВОЙ курсор на цели (dist=0), возврат — компенсированная точка (250, 220)",
+      ok14 is True and cur14 == (250, 220) and dist14 == 0, "%s %s %s" % (ok14, cur14, dist14))
 check("2 шага: 2-й SetCursorPos скомпенсировал промах +50 (игра смещает курсор)",
       len(u32_14.moves) == 2 and u32_14.moves[-1] == (250, 220), str(u32_14.moves))
 

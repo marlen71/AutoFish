@@ -386,6 +386,32 @@ check("изменения тут же пишутся в fishmod_config.json", os
 ef.CFG.clear()
 ef.CFG.update(ef.DEFAULT_CFG)
 ef.vision_equip = lambda: False                # клик «▷ Экипировать» не должен трогать захват
+print("== 5b. Страница AI-ЗРЕНИЕ (v1.24): отрисовка, клики, живой статус ==")
+app.show_page(5)
+ai_texts = [it.get("text") for it in app.cv.items.values()
+            if isinstance(it.get("text"), str) and "Конвейер" in it["text"]]
+check("страница AI отрисовалась со статусом конвейера (off, без модели)",
+      bool(ai_texts) and "выключен" in ai_texts[0], str(ai_texts[:1]))
+mark = len(app.cv.binds)
+app.show_page(5)
+ai_clicks = [cb for tag, seq, cb in app.cv.binds[mark:] if seq == "<Button-1>"]
+before5 = dict(ef.CFG)
+ok5, err5 = True, ""
+for cb in ai_clicks:
+    try:
+        cb(None)
+    except Exception as e:
+        ok5, err5 = False, f"{type(e).__name__}: {e}"
+        break
+check(f"клики по {len(ai_clicks)} элементам страницы AI безопасны", ok5, err5)
+check("переключатель режима меняет ai_mode",
+      ef.CFG.get("ai_mode") in ("legacy", "ai", "hybrid") and ef.CFG.get("ai_mode") != before5.get("ai_mode"),
+      str((before5.get("ai_mode"), ef.CFG.get("ai_mode"))))
+check("кнопка «Журнал AI» не падает при выключенном конвейере", True)
+app.refresh()
+check("refresh() на странице AI не падает (ai_status без конвейера)", True)
+ef.CFG.clear()
+ef.CFG.update(ef.DEFAULT_CFG)
 app.show_page(4)
 lang_texts = sorted(it.get("text") for it in app.cv.items.values() if it.get("text") in ("RU", "EN", "UA"))
 check("на «Настройки» есть три плитки языка", lang_texts == ["EN", "RU", "UA"], str(lang_texts))

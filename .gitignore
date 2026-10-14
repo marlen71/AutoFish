@@ -15,6 +15,13 @@ sounds/auto/
 build/
 tests/test.log
 tests/fishmod_config.json
+tests/legacy.log
+tests/legacy_config.json
+tests/legacy_stats.json
+
+# Артефакты AI-диагностики (создаются на машине пользователя)
+diagnostics/events.jsonl*
+diagnostics/snapshots/
 dist/
 *.spec
 .venv/

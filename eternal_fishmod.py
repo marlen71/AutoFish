@@ -230,6 +230,12 @@ LOOP_DELAY = 0.004                        # только для резервно
 RESYNC = 0.20
 MIN_SWITCH, FORCED_RELEASE = 0.030, 0.12  # легаси-константы; рабочие значения берутся из CFG
 
+# AI-зрение (v1.24): ключи ai_* живут в том же конфиге; дефолты — в ai/config.py.
+# Аддитивно: старые конфиги получают недостающие ключи, значения пользователя
+# не перетираются, без ai-моделей всё работает как раньше.
+from ai.config import AI_DEFAULTS as _AI_DEFAULTS          # noqa: E402
+DEFAULT_CFG.update(_AI_DEFAULTS)
+
 
 def load_cfg():
     """True — загружено из файла. Старые конфиги мигрируются: новые ключи получают дефолты."""
@@ -398,6 +404,34 @@ STRINGS = {
     "log_adapt": "⚖ Физика зоны измерена: разгон вверх {up:.0f} px/с², падение {dn:.0f} px/с² (замеров {n})",
     "m_adapt": "Измерять физику зоны",
     "log_ready": "{app}: готов. {toggle} — старт/стоп, {panic} — аварийный стоп",
+    "pg5_t": "AI-ЗРЕНИЕ", "pg5_s": "Локальный анализ кадра: наблюдение и события, офлайн",
+    "ai_sec_status": "Состояние конвейера", "ai_sec_mode": "Режим поиска удочки (экипировка)",
+    "ai_state": "Конвейер", "ai_state_screen": "Экран", "ai_model": "Модель", "ai_lat": "инференс",
+    "ai_frames": "Кадров", "ai_dropped": "Пропущено", "ai_events": "Событий", "ai_errs": "Ошибок",
+    "ai_diag_ev": "Событий в диагностике", "ai_diag_sn": "Снимков",
+    "ai_warn_nomodel": "⚠ Модель не установлена — работаю легаси-зрением (это нормально)",
+    "b_ai_report": "Журнал AI", "b_ai_restart": "Перезапустить AI",
+    "ai_hint_local": "Всё локально: CPU, офлайн; модели никогда не скачиваются сами",
+    "ai_hint_noclick": "AI только наблюдает и пишет события — клики делает прежняя логика",
+    "ai_hint_models": "Модели: ai/models/manifest.json — как обучить/подключить: docs/AI_VISION.md",
+    "ai_lbl_mode": "Стратегия", "ai_lbl_enabled": "AI-наблюдение",
+    "ai_lbl_change": "Детектор изменений", "ai_lbl_ocr": "OCR интерфейса",
+    "ai_lbl_snap": "Снимки неизвестного", "ai_lbl_fps": "Полный анализ, к/с",
+    "ai_lbl_ocrfps": "OCR, к/с", "ai_lbl_conf": "Порог уверенности",
+    "ai_lbl_confirm": "Подтверждений состояния", "ai_lbl_threads": "Потоки ONNX (0=авто)",
+    "ai_mode_legacy": "Легаси (шаблоны)", "ai_mode_ai": "AI (ONNX)", "ai_mode_hybrid": "Гибрид",
+    "ai_st_off": "выключен", "ai_st_startup": "стартует", "ai_st_running": "работает",
+    "ai_st_degraded": "деградировал (без модели)", "ai_st_stopped": "остановлен",
+    "log_ai_on": "🤖 AI-наблюдение включено (режим удочки: {mode})",
+    "log_ai_off": "🤖 AI-наблюдение выключено",
+    "log_ai_ev": "🤖 AI: {typ} (уверенность {conf:.2f})",
+    "log_ai_fail": "🤖 AI-конвейер не запустился: {e} — рыбалка продолжается без AI",
+    "log_ai_nomodel": "🤖 AI-модель недоступна ({st}) — ищу удочку шаблонами",
+    "log_ai_rod": "🤖 AI: удочка ({x}, {y}), уверенность {s:.2f}",
+    "log_ai_report": "🤖 Журнал AI (последние события):",
+    "log_ai_diag": "🤖 Диагностика: событий {ev}, снимков {sn}, отключено: {dis}",
+    "log_ai_off_short": "🤖 Конвейер выключен (включите на странице «AI-ЗРЕНИЕ»)",
+    "log_equip_retry": "Меню не открылось — повторяю экипировку ({n}/2)",
     "fail_capture": "ни один бэкенд захвата не запустился", "fail_templates": "нет шаблонов в папке templates: {files}", "fail_window": "не удалось определить окно игры: переключись в игру и нажми F8",
     "nt_started": "Рыбалка началась", "nt_finished": "Рыбалка закончилась: {text}", "nt_pause": "Пауза: вернись в игру",
     "nt_snapshot": "Снимок сохранён (debug_screen.png)", "nt_tpl_saved": "Шаблон «{name}» сохранён",
@@ -512,6 +546,34 @@ STRINGS = {
     "log_adapt": "⚖ Zone physics measured: lift {up:.0f} px/s², fall {dn:.0f} px/s² ({n} samples)",
     "m_adapt": "Measure zone physics",
     "log_ready": "{app}: ready. {toggle} — start/stop, {panic} — panic stop",
+    "pg5_t": "AI VISION", "pg5_s": "Local frame analysis: observation and events, offline",
+    "ai_sec_status": "Pipeline status", "ai_sec_mode": "Rod search mode (equipping)",
+    "ai_state": "Pipeline", "ai_state_screen": "Screen", "ai_model": "Model", "ai_lat": "inference",
+    "ai_frames": "Frames", "ai_dropped": "Dropped", "ai_events": "Events", "ai_errs": "Errors",
+    "ai_diag_ev": "Diagnostic events", "ai_diag_sn": "Snapshots",
+    "ai_warn_nomodel": "⚠ No model installed — using legacy vision (this is fine)",
+    "b_ai_report": "AI log", "b_ai_restart": "Restart AI",
+    "ai_hint_local": "Fully local: CPU, offline; models are never downloaded by themselves",
+    "ai_hint_noclick": "AI only observes and reports events — clicks are made by the legacy logic",
+    "ai_hint_models": "Models: ai/models/manifest.json — see docs/AI_VISION.md",
+    "ai_lbl_mode": "Strategy", "ai_lbl_enabled": "AI observation",
+    "ai_lbl_change": "Change detector", "ai_lbl_ocr": "Interface OCR",
+    "ai_lbl_snap": "Unknown snapshots", "ai_lbl_fps": "Full analysis, fps",
+    "ai_lbl_ocrfps": "OCR, fps", "ai_lbl_conf": "Confidence threshold",
+    "ai_lbl_confirm": "State confirmations", "ai_lbl_threads": "ONNX threads (0=auto)",
+    "ai_mode_legacy": "Legacy (templates)", "ai_mode_ai": "AI (ONNX)", "ai_mode_hybrid": "Hybrid",
+    "ai_st_off": "off", "ai_st_startup": "starting", "ai_st_running": "running",
+    "ai_st_degraded": "degraded (no model)", "ai_st_stopped": "stopped",
+    "log_ai_on": "🤖 AI observation on (rod mode: {mode})",
+    "log_ai_off": "🤖 AI observation off",
+    "log_ai_ev": "🤖 AI: {typ} (confidence {conf:.2f})",
+    "log_ai_fail": "🤖 AI pipeline failed to start: {e} — fishing continues without AI",
+    "log_ai_nomodel": "🤖 AI model unavailable ({st}) — searching for the rod with templates",
+    "log_ai_rod": "🤖 AI: rod at ({x}, {y}), confidence {s:.2f}",
+    "log_ai_report": "🤖 AI log (recent events):",
+    "log_ai_diag": "🤖 Diagnostics: events {ev}, snapshots {sn}, disabled: {dis}",
+    "log_ai_off_short": "🤖 Pipeline is off (enable it on the AI VISION page)",
+    "log_equip_retry": "Menu did not open — retrying equip ({n}/2)",
     "fail_capture": "no capture backend could be started", "fail_templates": "no templates in the templates folder: {files}", "fail_window": "cannot detect the game window: focus the game and press F8",
     "nt_started": "Fishing started", "nt_finished": "Fishing finished: {text}", "nt_pause": "Paused: go back to the game",
     "nt_snapshot": "Snapshot saved (debug_screen.png)", "nt_tpl_saved": "Template “{name}” saved",
@@ -626,6 +688,34 @@ STRINGS = {
     "log_adapt": "⚖ Фізику зони виміряно: розгін вгору {up:.0f} px/с², падіння {dn:.0f} px/с² (вимірів {n})",
     "m_adapt": "Міряти фізику зони",
     "log_ready": "{app}: готово. {toggle} — старт/стоп, {panic} — аварійний стоп",
+    "pg5_t": "AI-ЗІР", "pg5_s": "Локальний аналіз кадру: спостереження і події, офлайн",
+    "ai_sec_status": "Стан конвеєра", "ai_sec_mode": "Режим пошуку вудочки (екіпірування)",
+    "ai_state": "Конвеєр", "ai_state_screen": "Екран", "ai_model": "Модель", "ai_lat": "інференс",
+    "ai_frames": "Кадрів", "ai_dropped": "Пропущено", "ai_events": "Подій", "ai_errs": "Помилок",
+    "ai_diag_ev": "Подій у діагностиці", "ai_diag_sn": "Знімків",
+    "ai_warn_nomodel": "⚠ Модель не встановлена — працюю легасі-зором (це нормально)",
+    "b_ai_report": "Журнал AI", "b_ai_restart": "Перезапустити AI",
+    "ai_hint_local": "Усе локально: CPU, офлайн; моделі ніколи не завантажуються самі",
+    "ai_hint_noclick": "AI лише спостерігає і пише події — кліки робить колишня логіка",
+    "ai_hint_models": "Моделі: ai/models/manifest.json — див. docs/AI_VISION.md",
+    "ai_lbl_mode": "Стратегія", "ai_lbl_enabled": "AI-спостереження",
+    "ai_lbl_change": "Детектор змін", "ai_lbl_ocr": "OCR інтерфейсу",
+    "ai_lbl_snap": "Знімки невідомого", "ai_lbl_fps": "Повний аналіз, к/с",
+    "ai_lbl_ocrfps": "OCR, к/с", "ai_lbl_conf": "Поріг впевненості",
+    "ai_lbl_confirm": "Підтверджень стану", "ai_lbl_threads": "Потоки ONNX (0=авто)",
+    "ai_mode_legacy": "Легасі (шаблони)", "ai_mode_ai": "AI (ONNX)", "ai_mode_hybrid": "Гібрид",
+    "ai_st_off": "вимкнено", "ai_st_startup": "стартує", "ai_st_running": "працює",
+    "ai_st_degraded": "деградував (без моделі)", "ai_st_stopped": "зупинено",
+    "log_ai_on": "🤖 AI-спостереження увімкнено (режим вудочки: {mode})",
+    "log_ai_off": "🤖 AI-спостереження вимкнено",
+    "log_ai_ev": "🤖 AI: {typ} (впевненість {conf:.2f})",
+    "log_ai_fail": "🤖 AI-конвеєр не запустився: {e} — рибалка триває без AI",
+    "log_ai_nomodel": "🤖 AI-модель недоступна ({st}) — шукаю вудочку шаблонами",
+    "log_ai_rod": "🤖 AI: вудочка ({x}, {y}), впевненість {s:.2f}",
+    "log_ai_report": "🤖 Журнал AI (останні події):",
+    "log_ai_diag": "🤖 Діагностика: подій {ev}, знімків {sn}, вимкнено: {dis}",
+    "log_ai_off_short": "🤖 Конвеєр вимкнено (увімкніть на сторінці «AI-ЗІР»)",
+    "log_equip_retry": "Меню не відкрилося — повторюю екіпірування ({n}/2)",
     "fail_capture": "жоден бекенд захвату не запустився", "fail_templates": "немає шаблонів у папці templates: {files}", "fail_window": "не вдалося визначити вікно гри: перемкнись у гру та натисни F8",
     "nt_started": "Риболовля почалась", "nt_finished": "Риболовля завершилась: {text}", "nt_pause": "Пауза: повернись у гру",
     "nt_snapshot": "Знімок збережено (debug_screen.png)", "nt_tpl_saved": "Шаблон «{name}» збережено",
@@ -2760,16 +2850,19 @@ def _cef_click_at(hwnd, fx, fy, btn, down):
         return False
 
 
-def _ui_click(fx, fy, btn, down):
+def _ui_click(fx, fy, btn, down, pre_move=True):
     """Одна фаза клика по интерфейсу: ПРЯМО В ОКНО DOM (ui_click_window, курсор
-    стоит на месте) либо, если окно не найдено, курсором (запасной путь)."""
+    стоит на месте) либо, если окно не найдено, курсором (запасной путь).
+    pre_move=False — курсор УЖЕ стоит в нужной точке (сервопривод 1.24), не
+    передёргиваем его: лишний абсолютный move уводит игровой курсор до нажатия."""
     hwnd = _cef_render_hwnd() if CFG.get("ui_click_window", True) else None
     if hwnd is not None and _cef_click_at(hwnd, int(fx), int(fy), btn, down):
         return "win"
-    try:
-        mouse_move_abs(int(fx), int(fy))
-    except Exception:
-        pass
+    if pre_move:
+        try:
+            mouse_move_abs(int(fx), int(fy))
+        except Exception:
+            pass
     if btn == "r":
         _send_mouse(MOUSEEVENTF_RIGHTDOWN if down else MOUSEEVENTF_RIGHTUP)
     else:
@@ -2806,25 +2899,26 @@ def _game_cursor(frame):
         return None
 
 
-def _drive_game_cursor(hwnd, tx, ty, btn="r", timeout=1.6):
+def _drive_game_cursor(hwnd, tx, ty, btn="r", timeout=2.6):
     """ЗАМКНУТЫЙ КОНТУР (v1.23): ведём ИГРОВОЙ курсор в цель (tx, ty) — как человек.
     Каждый шаг: ставим КУРСОР WINDOWS в цель (raw-input игры двигает её игровой
     курсор), берём кадр, находим игровой курсор детектором, считаем остаточный
     промах и КОМПЕНСИРУЕМ его следующим шагом. Когда курсор игры стоит на цели
-    (или шаги кончились) — клик. Возвращает (True, (wx, wy)) при попадании, где
-    (wx, wy) — последняя точка КУРСОРА WINDOWS (компенсированная): клик курсором
-    надо ставить именно в неё, иначе фолбэк передёрнет курсор на сырую цель и
-    компенсация собьётся."""
+    (или шаги кончились) — клик. Возвращает (okc, (wx, wy), dist), где (wx, wy) —
+    последняя точка КУРСОРА WINDOWS (компенсированная), dist — последнее
+    расстояние от ИГРОВОГО курсора до цели (None, если курсор так и не увидели):
+    если dist мал, клик делаем БЕЗ передёргивания курсора — он уже там, где надо,
+    и любой абсолютный move успевает увести игровой курсор до нажатия."""
     w = getattr(ctypes, "windll", None)
     if w is None:                         # не-Windows среда (тест-раннер) — сервопривод недоступен
-        return (False, None)
+        return (False, None, None)
     u32 = w.user32
     m = monitor()
     ox, oy = int(m["left"]), int(m["top"])
     t_end = time.perf_counter() + timeout
     cx = cy = None                            # где ИГРОВОЙ курсор сейчас (по кадру)
     off_x = off_y = 0.0                       # ошибка: курсор Windows vs курсор игры
-    for _step in range(8):
+    for _step in range(10):
         if cx is not None and abs(tx - cx) <= 6 and abs(ty - cy) <= 6:
             break                             # курсор игры на цели
         # хотим игровой курсор в (tx, ty): курсор Windows = цель + накопл. ошибка
@@ -2846,24 +2940,27 @@ def _drive_game_cursor(hwnd, tx, ty, btn="r", timeout=1.6):
         if time.perf_counter() >= t_end:
             break
     okc = cx is not None and abs(tx - cx) <= 14 and abs(ty - cy) <= 14
-    return okc, (wx, wy)
+    dist = None if cx is None else int(max(abs(tx - cx), abs(ty - cy)))
+    return okc, (wx, wy), dist
 
 
 def _aim_click(hwnd, tx, ty):
-    """Сервопривод (v1.23) + выбор точки для клика. Возвращает (x, y) для _ui_click:
-    окно интерфейса найдено — кликаем в саму цель (сообщение в окно, курсор игры
-    уже доведён туда сервоприводом); окна нет — клик курсором ПО КОМПЕНСИРОВАННОЙ
-    точке Windows-курсора (сырая цель сдвинула бы игровой курсор обратно мимо)."""
+    """Сервопривод (v1.23/1.24) + выбор точки клика. Возвращает (x, y, in_place):
+    in_place=True — Windows-курсор УЖЕ припаркован в компенсированной точке и
+    игровой курсор почти на цели (<=34 px): клик делаем БЕЗ абсолютного move,
+    иначе игра успевает увести свой курсор до нажатия (урок поля 1.23)."""
     if hwnd:
-        okc, _w = _drive_game_cursor(hwnd, tx, ty)
+        okc, _w, _d = _drive_game_cursor(hwnd, tx, ty)
         if not okc:
             log(t("log_drive_fail"))
-        return (int(tx), int(ty))
-    okc, w = _drive_game_cursor(None, tx, ty)
+        return (int(tx), int(ty), False)
+    okc, w, d = _drive_game_cursor(None, tx, ty)
     if okc and w is not None:
-        return (int(w[0]), int(w[1]))
+        return (int(w[0]), int(w[1]), True)
+    if d is not None and d <= 34 and w is not None:
+        return (int(w[0]), int(w[1]), True)      # курсор игры близко: не трогаем
     log(t("log_drive_fail"))
-    return (int(tx), int(ty))
+    return (int(tx), int(ty), False)
 
 
 def _red_menu_row(frame):
@@ -2947,6 +3044,22 @@ def vision_equip():
     if frame is None or frame.size == 0:
         log(t("log_equip_rod_nofind"))
         return False
+    # AI-режим (v1.24): детектор ONNX ищет удочку сам; нет модели/не нашёл —
+    # автоматический спуск в шаблонный каскад (поле не ломается).
+    ai_hit = ai_rod_find(frame)
+    if str(CFG.get("ai_mode", "legacy")) == "ai" and ai_hit is not None:
+        rx, ry = int(ai_hit[0]), int(ai_hit[1])
+        log(t("log_ai_rod", x=rx, y=ry, s=ai_hit[2]))
+        hwnd = _cef_render_hwnd()
+        ax, ay, inplace = _aim_click(hwnd, rx, ry)
+        how = _ui_click(ax, ay, "r", True, pre_move=not inplace)
+        _ui_click(ax, ay, "r", False, pre_move=not inplace)
+        log(t("log_equip_win") if how == "win" else t("log_equip_cur"))
+        row, fr_menu = _wait_menu(1.5)
+        if row is None:
+            log(t("log_use_nofind"))
+            return False
+        return _finish_equip(row, fr_menu, hwnd)
     thr = float(CFG.get("rod_thr", 0.80))
     g = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     best = (0.0, None)                       # (скор, точка) из каскада ниже
@@ -2971,25 +3084,43 @@ def vision_equip():
     rx, ry = int(best[1][0]), int(best[1][1])
     log(t("log_equip_rod", x=rx, y=ry, s=best[0]))
     hwnd = _cef_render_hwnd()
-    ax, ay = _aim_click(hwnd, rx, ry)
-    how = _ui_click(ax, ay, "r", True)
-    _ui_click(ax, ay, "r", False)
-    log(t("log_equip_win") if how == "win" else t("log_equip_cur"))
-    row, t_end = None, time.perf_counter() + 1.5
-    while time.perf_counter() < t_end:       # ждём меню предмета (до 1.5 с)
+    row, fr_menu = None, frame
+    for attempt in (1, 2):                   # поле 1.23: меню могло не открыться —
+        ax, ay, inplace = _aim_click(hwnd, rx, ry)   # повторяем ПКМ вторым заходом
+        how = _ui_click(ax, ay, "r", True, pre_move=not inplace)
+        _ui_click(ax, ay, "r", False, pre_move=not inplace)
+        log(t("log_equip_win") if how == "win" else t("log_equip_cur"))
+        row, fr_menu = _wait_menu(1.5)
+        if row is not None:
+            break
+        if attempt < 2:
+            log(t("log_equip_retry", n=attempt))
+            nap(0.25)
+    if row is None:
+        log(t("log_use_nofind"))
+        return False
+    return _finish_equip(row, fr_menu, hwnd)
+
+
+def _wait_menu(sec=1.5):
+    """Ждать красную строку меню предмета. -> (row, frame) или (None, None)."""
+    t_end = time.perf_counter() + sec
+    while time.perf_counter() < t_end:
         fr = grab()
         if fr is not None and fr.size:
             row = _red_menu_row(fr)
             if row is not None:
-                break
+                return row, fr
         nap(0.05)
-    if row is None:
-        log(t("log_use_nofind"))
-        return False
+    return None, None
+
+
+def _finish_equip(row, fr, hwnd):
+    """Клик «Использовать» (белая строка НАД красной) — финал vision_equip."""
     ux, uy = int(row[0]), max(0, int(row[1]) - max(18, int(fr.shape[0] * 0.030)))
-    ax, ay = _aim_click(hwnd, ux, uy)
-    _ui_click(ax, ay, "l", True)
-    _ui_click(ax, ay, "l", False)
+    ax, ay, inplace = _aim_click(hwnd, ux, uy)
+    _ui_click(ax, ay, "l", True, pre_move=not inplace)
+    _ui_click(ax, ay, "l", False, pre_move=not inplace)
     log(t("log_use_found", ux=ux, uy=uy))
     nap(float(CFG.get("after_equip_delay", 1.2)))
     return True
@@ -3123,6 +3254,7 @@ def bot_thread():
     try:
         STATE["running"] = True
         EVENTS.put(("run", True))
+        ai_start()                                    # AI-наблюдение не мешает fishing_run
         set_state("st_starting", "st_starting_d", "busy")
         GAME_TITLE = ""
         learn_game_window()
@@ -3140,6 +3272,7 @@ def bot_thread():
         log(traceback.format_exc())
     finally:
         release_all()
+        ai_stop()                                     # конвейер наблюдения гасим вместе с сессией
         if CAP is not None:
             try:
                 CAP.stop_stream()
@@ -3231,6 +3364,190 @@ def capture_template(name):
     _tpl_cache.pop(name, None)
     _tpl_trim_cache.pop(name, None)
     notify("nt_tpl_saved", "ok", name=name)
+
+
+# ==========================================================================
+# 8B. AI-ЗРЕНИЕ (v1.24): ЛОКАЛЬНЫЙ КОНВЕЙЕР НАБЛЮДЕНИЯ (ONNX CPU, офлайн)
+# ==========================================================================
+# Архитектурное правило: конвейер ниже только СМОТРИТ на кадры и публикует
+# события (ai/event_bus.py). Он НЕ двигает мышь и НЕ жмёт клавиши — все решения
+# и ввод остаются легаси-контроллеру. onnxruntime/rapidocr НЕобязательны:
+# без них (и без моделей) работает всё прежнее зрение, а AI-страница честно
+# пишет «модель не установлена». Модели никогда не скачиваются сами.
+from ai.frame_router import Frame                          # noqa: E402
+from ai import pipeline as _ai_pipeline                    # noqa: E402
+from ai import config as _aicfg                            # noqa: E402
+from ai.detector import make_detector as _ai_make_detector  # noqa: E402
+from ai.model_manager import ModelManager as _ai_mm        # noqa: E402
+
+_AI = {"pipe": None, "fid": 0, "det": None, "det_status": "", "det_tried": False,
+       "status": {}, "last_log": {}, "last_inv": 0.0}
+# события, дублируемые в журнал (переходы и неизвестное — не каждый чих)
+_AI_LOG_TYPES = ("ui.inventory_opened", "ui.inventory_closed", "fishing.minigame_started",
+                 "game.screen_transition", "game.unknown_visual_change")
+
+
+def _ai_frame_source():
+    """Кадр + метаданные из ЕДИНОГО легаси-захвата (второй процесс захвата
+    не запускается). None — кадра нет (CAP не поднят)."""
+    if CAP is None:
+        return None
+    img = grab()
+    if img is None or img.size == 0:
+        return None
+    _AI["fid"] += 1
+    m = monitor()
+    sx, sy = scale()
+    return Frame(_AI["fid"], time.time(), img, m, sx, sy,
+                 backend=getattr(CAP, "backend", ""), fps=float(getattr(CAP, "fps", 0.0)))
+
+
+def _ai_hints():
+    """Дешёвые легаси-подсказки для классификатора состояний: ключ STATE +
+    инвентарь по шаблону (не чаще 1 р/с — это самое дорогое в подсказках)."""
+    h = {"running": bool(STATE.get("running")), "focus": None, "inventory": False,
+         "minigame": False, "waiting": False, "catch_result": False}
+    key = str(STATE.get("title_key", ""))
+    h["minigame"] = key in ("st_mini", "st_slip")
+    h["waiting"] = key in ("st_await", "st_bite", "st_cast", "st_prepare")
+    h["catch_result"] = key in ("st_caught",)
+    try:
+        h["focus"] = bool(game_focused())
+    except Exception:
+        h["focus"] = None
+    if time.time() - _AI["last_inv"] > 1.0:
+        _AI["last_inv"] = time.time()
+        try:
+            h["inventory"] = (best_score("inv_header") or 0.0) >= THR["inv_header"]
+        except Exception:
+            pass
+    return h
+
+
+def _ai_on_event(ev):
+    """Подписчик шины: несколько проверенных типов — строкой в журнал (с кулдауном)."""
+    if ev.type not in _AI_LOG_TYPES:
+        return
+    last = _AI["last_log"].get(ev.type, 0.0)
+    if time.time() - last < 2.0:
+        return
+    _AI["last_log"][ev.type] = time.time()
+    log(t("log_ai_ev", typ=ev.type, conf=ev.confidence))
+
+
+def ai_start():
+    """Запуск конвейера наблюдения (если ai_enabled). Никогда не падает."""
+    if not CFG.get("ai_enabled", False):
+        return
+    pipe = _AI["pipe"]
+    if pipe is not None and getattr(pipe, "_thr", None) and pipe._thr and pipe._thr.is_alive():
+        return
+    try:
+        pipe = _ai_pipeline.VisionPipeline(
+            _ai_frame_source, _ai_hints, BASE_DIR,
+            cfg_getter=lambda: _aicfg.ai_cfg(CFG),
+            log_cb=lambda s: log(s))
+        pipe.bus.subscribe(_ai_on_event)
+        pipe.start()
+        _AI["pipe"] = pipe
+        log(t("log_ai_on", mode=CFG.get("ai_mode", "legacy")))
+    except Exception as e:
+        _AI["pipe"] = None
+        log(t("log_ai_fail", e="%s: %s" % (type(e).__name__, e)))
+
+
+def ai_stop():
+    pipe = _AI["pipe"]
+    if pipe is None:
+        return
+    _AI["pipe"] = None
+    try:
+        pipe.stop()
+        log(t("log_ai_off"))
+    except Exception:
+        pass
+
+
+def ai_status():
+    """Снимок статуса для GUI (Tk-поток). Без конвейера — честный 'off'."""
+    pipe = _AI["pipe"]
+    if pipe is None:
+        return {"state": "off", "detector": "", "model": "—",
+                "det_rt": "off" if not CFG.get("ai_enabled", False) else "not_started",
+                "det_ms": 0, "ocr_ms": 0, "change_ms": 0, "frames": 0, "dropped": 0,
+                "dup": 0, "events": 0, "unknown": 0, "errors": 0, "transitions": 0,
+                "bus": {}, "diag": {}, "state_screen": "—", "state_conf": 0.0}
+    try:
+        return pipe.get_status()
+    except Exception:
+        return {"state": "off"}
+
+
+def ai_restart():
+    """Перезапуск конвейера (кнопка GUI/тумблер). Не бросает исключений: клик
+    интерфейса не должен упасть из-за stop_event/Stopped фоновых потоков."""
+    try:
+        ai_stop()
+        ai_start()
+    except Exception:
+        pass
+
+
+def ai_detector():
+    """Ленивый детектор для ЭКИПИРОВКИ (режимы ai/hybrid). Отдельный от конвейера:
+    VisionPipeline может быть выключен, а поиск удочки по AI — нужен."""
+    if _AI["det_tried"]:
+        return _AI["det"]
+    _AI["det_tried"] = True
+    try:
+        det, status = _ai_make_detector(_ai_mm(_aicfg.ai_models_dir(CFG.get("ai_model_dir") or None)),
+                                        conf=float(CFG.get("ai_conf", 0.45)),
+                                        threads=int(CFG.get("ai_threads", 0)))
+    except Exception:
+        det, status = None, "load_error"
+    _AI["det"], _AI["det_status"] = det, status
+    return det
+
+
+def ai_rod_find(frame):
+    """AI-поиск удочки (режимы ai/hybrid). (x, y, уверенность) или None.
+    Нет модели/не распозналось -> None: вызывающий код обязан уйти в шаблоны."""
+    if str(CFG.get("ai_mode", "legacy")) not in ("ai", "hybrid"):
+        return None
+    det = ai_detector()
+    if det is None or det.status != "ok" or not det.ensure_loaded():
+        _AI["det_warn"] = _AI.get("det_warn", 0) + 1
+        if _AI["det_warn"] == 1:                       # один раз, не спамим журнал
+            log(t("log_ai_nomodel", st=_AI["det_status"]))
+        return None
+    try:
+        dets = det.detect(frame, _AI["fid"])
+    except Exception:
+        return None
+    best = None
+    for d in dets:
+        if d.class_name == "fishing_rod" and d.confidence >= max(0.60, float(CFG.get("ai_conf", 0.45))) \
+                and (best is None or d.confidence > best.confidence):
+            best = d
+    if best is None:
+        return None
+    x, y, w, h = best.bbox
+    return (int(x + w / 2), int(y + h / 2), float(best.confidence))
+
+
+def ai_report():
+    """Кнопка «Журнал AI»: последние события + диагностика — строками в журнал."""
+    pipe = _AI["pipe"]
+    diag = pipe.diag.report() if pipe else {}
+    log(t("log_ai_report"))
+    for ev in reversed(pipe.bus.history(12)) if pipe else []:
+        log("  %s  %s  conf=%.2f f=%s" % (time.strftime("%H:%M:%S", time.localtime(ev.timestamp)),
+                                          ev.type, ev.confidence, ev.frame_id))
+    if diag:
+        log(t("log_ai_diag", ev=diag.get("events", 0), sn=diag.get("snapshots", 0),
+              dis=diag.get("disabled", "") or "—"))
+    if not pipe:
+        log(t("log_ai_off_short"))
 
 
 # ==========================================================================
@@ -3350,6 +3667,20 @@ def _icon_mask(name, size):
             a = math.radians(ang)
             cv2.line(m, p(32, 32), p(32 + 19 * math.cos(a), 32 + 19 * math.sin(a)), 255, c(4.2), cv2.LINE_AA)
         cv2.circle(m, p(32, 32), c(4.5), 255, -1, cv2.LINE_AA)
+    elif name == "ai":
+        # «чип + взгляд»: квадрат чипа с ножками и три узла-нейрона внутри
+        cv2.rectangle(m, p(15, 15), p(49, 49), 255, c(4), cv2.LINE_AA)
+        for i in (24, 32, 40):
+            cv2.line(m, p(i, 8), p(i, 15), 255, c(3.4), cv2.LINE_AA)
+            cv2.line(m, p(i, 49), p(i, 56), 255, c(3.4), cv2.LINE_AA)
+        for j in (8, 32, 56):
+            cv2.line(m, p(8, j), p(15, j), 255, c(3.4), cv2.LINE_AA)
+            cv2.line(m, p(49, j), p(56, j), 255, c(3.4), cv2.LINE_AA)
+        nodes = [(24, 24), (40, 24), (32, 40)]
+        for a, b in ((0, 1), (0, 2), (1, 2)):
+            cv2.line(m, p(*nodes[a]), p(*nodes[b]), 255, c(3), cv2.LINE_AA)
+        for nx, ny in nodes:
+            cv2.circle(m, p(nx, ny), c(4.6), 255, -1, cv2.LINE_AA)
     return m
 
 
@@ -3417,9 +3748,9 @@ def gray_to_bgra(g):
 SIDE_X, TILE_W, TILE_H, GAP, TOP = 17, 131, 100, 18, 40
 PANEL_X, PANEL_Y, PANEL_W, PANEL_H = 160, 40, 800, 572
 WIN_W, WIN_H = 980, 652
-ICONS = ["target", "person", "eye", "grid", "gear"]
+ICONS = ["target", "person", "eye", "grid", "gear", "ai"]
 PAGE_KEYS = [("pg0_t", "pg0_s"), ("pg1_t", "pg1_s"), ("pg2_t", "pg2_s"),
-             ("pg3_t", "pg3_s"), ("pg4_t", "pg4_s")]
+             ("pg3_t", "pg3_s"), ("pg4_t", "pg4_s"), ("pg5_t", "pg5_s")]
 EMOJI = re.compile("[\U00010000-\U0010FFFF\u2600-\u27BF\u2B00-\u2BFF\uFE0F\u25A0-\u25FF]")
 C_TEXT, C_DIM, C_RED, C_GREEN, C_WARN = "#ececec", "#9a9a9a", "#d63a3a", "#5fd38a", "#e0a23a"
 
@@ -3494,7 +3825,7 @@ class App:
         self.cv.tag_bind(tag, "<Leave>", lambda e: self.cv.itemconfig(it, image=n_img))
         return it, tx
 
-    def toggle(self, x, y, key):
+    def toggle(self, x, y, key, on_change=None):
         on_i = self.img(("sw", 1), lambda: switch_img(self.u(52), self.u(28), True))
         off_i = self.img(("sw", 0), lambda: switch_img(self.u(52), self.u(28), False))
         tag = f"t{next(self.ids)}"
@@ -3504,6 +3835,8 @@ class App:
             CFG[key] = not CFG[key]
             self.safe_itemconfig(it, image=on_i if CFG[key] else off_i)
             save_cfg()
+            if on_change:
+                on_change()
         self.cv.tag_bind(tag, "<Button-1>", flip)
         return it
 
@@ -3545,9 +3878,9 @@ class App:
         threading.Thread(target=vision_equip, daemon=True).start()
 
     # ------------------------------------------------------------ выбор из списка / элемент списка CFG
-    def choice(self, x, y, key, options, size=11, w=142, h=30):
+    def choice(self, x, y, key, options, size=11, w=142, h=30, labels=None):
         """Кнопка-переключатель значения из списка (fish_detect: auto|both|hsv)."""
-        lbl = {"auto": t("m_det_auto"), "both": t("m_det_both"), "hsv": t("m_det_hsv")}
+        lbl = labels or {"auto": t("m_det_auto"), "both": t("m_det_both"), "hsv": t("m_det_hsv")}
 
         def cycle(_e=None):
             try:
@@ -3784,6 +4117,55 @@ class App:
         self.button(532, 496, 100, 30, t("b_load"), self.do_load, "gray", 10)
         self.button(640, 496, 100, 30, t("b_reset"), self.do_reset, "dark", 10)
 
+    def page5(self):
+        """AI-ЗРЕНИЕ (v1.24): статус локального конвейера + настройки наблюдения.
+        По умолчанию всё ВЫКЛЮЧЕНО: приложение полностью работает без AI."""
+        self.card(30, 100, 740, 452)
+        # --- левая колонка: живой статус (обновляет refresh) ---
+        self.txt(PANEL_X + 44, PANEL_Y + 112, t("ai_sec_status"), 10, C_DIM, True)
+        self.dyn["ai1"] = self.txt(PANEL_X + 44, PANEL_Y + 132, "", 11, C_TEXT, True, "nw", ("page",), True)
+        self.dyn["ai2"] = self.txt(PANEL_X + 44, PANEL_Y + 152, "", 10, C_DIM, False, "nw", ("page",), True)
+        self.dyn["ai3"] = self.txt(PANEL_X + 44, PANEL_Y + 172, "", 10, C_RED, True, "nw", ("page",), True)
+        self.dyn["ai4"] = self.txt(PANEL_X + 44, PANEL_Y + 192, "", 10, C_DIM, False, "nw", ("page",), True)
+        self.dyn["ai5"] = self.txt(PANEL_X + 44, PANEL_Y + 212, "", 10, C_DIM, False, "nw", ("page",), True)
+        self.button(44, 238, 160, 32, t("b_ai_report"), self.do_ai_report, "gray", 10)
+        self.button(212, 238, 160, 32, t("b_ai_restart"), self.do_ai_restart, "gray", 10)
+        self.txt(PANEL_X + 44, PANEL_Y + 292, t("ai_hint_local"), 10, C_DIM)
+        self.txt(PANEL_X + 44, PANEL_Y + 312, t("ai_hint_noclick"), 10, C_DIM)
+        # --- режим распознавания (экипировка: легаси-шаблоны / AI / гибрид) ---
+        self.txt(PANEL_X + 44, PANEL_Y + 356, t("ai_sec_mode"), 10, C_DIM, True)
+        self.txt(PANEL_X + 44, PANEL_Y + 376, t("ai_lbl_mode"), 11, C_TEXT)
+        self.choice(44, 392, "ai_mode", ["legacy", "ai", "hybrid"],
+                    labels={"legacy": t("ai_mode_legacy"), "ai": t("ai_mode_ai"),
+                            "hybrid": t("ai_mode_hybrid")})
+        self.txt(PANEL_X + 230, PANEL_Y + 384, t("ai_lbl_enabled"), 11, C_TEXT)
+        self.toggle(442, 384, "ai_enabled", on_change=lambda: ai_restart())
+        # --- правая колонка: настройки конвейера ---
+        rows = [("ai_lbl_change", "t", "ai_change_detect"),
+                ("ai_lbl_ocr", "t", "ai_ocr_enabled"),
+                ("ai_lbl_snap", "t", "ai_snapshots"),
+                ("ai_lbl_fps", "s", ("ai_detect_fps", 0.5, 5.0, 0.5, "{:.1f}")),
+                ("ai_lbl_ocrfps", "s", ("ai_ocr_fps", 0.2, 3.0, 0.1, "{:.1f}")),
+                ("ai_lbl_conf", "s", ("ai_conf", 0.10, 0.90, 0.05, "{:.2f}")),
+                ("ai_lbl_confirm", "s", ("ai_state_confirm", 1, 6, 1, "{:g}")),
+                ("ai_lbl_threads", "s", ("ai_threads", 0, 8, 1, "{:g}"))]
+        for k, (lab, kind, arg) in enumerate(rows):
+            y = 126 + k * 32
+            self.txt(PANEL_X + 400, PANEL_Y + y + 6, t(lab), 10, C_TEXT)
+            cx = 400 + 152
+            if kind == "t":
+                self.toggle(cx + 60, y + 1, arg)
+            else:
+                self.stepper(cx + 10, y, *arg)
+        self.txt(PANEL_X + 400, PANEL_Y + 396, t("ai_hint_models"), 10, C_DIM)
+
+    def do_ai_report(self):
+        ai_report()
+
+    def do_ai_restart(self):
+        ai_restart()
+        self.show_page(self.page)
+
 
     # ------------------------------------------------------------ действия
     def toggle_click(self):
@@ -3994,6 +4376,29 @@ class App:
                     reason_text(TOTAL["last_reason_key"], TOTAL["last_reason_detail"])[:46]]
             for k, v in enumerate(vals):
                 self.cv.itemconfig(d[f"r{k}"], text=v)
+        elif p == 5 and "ai1" in d:
+            st_map = {"off": t("ai_st_off"), "startup": t("ai_st_startup"),
+                      "running": t("ai_st_running"), "degraded": t("ai_st_degraded"),
+                      "stopped": t("ai_st_stopped")}
+            a = ai_status()
+            self.cv.itemconfig(d["ai1"], text=f"{t('ai_state')}: "
+                               f"{st_map.get(a.get('state'), a.get('state', ''))} · "
+                               f"{t('ai_state_screen')}: {a.get('state_screen', '—')} "
+                               f"({a.get('state_conf', 0):.2f})")
+            self.cv.itemconfig(d["ai2"], text=f"{t('ai_model')}: {a.get('model', '—')}"
+                               f" [{a.get('det_rt', '')}] · {t('ai_lat')}: {a.get('det_ms', 0)} мс"
+                               f" · OCR: {a.get('ocr', '—')}")
+            warn = a.get("det_rt") in ("no_model", "missing_file", "bad_checksum",
+                                       "no_onnxruntime", "load_error", "off", "not_started")
+            self.cv.itemconfig(d["ai3"], text=t("ai_warn_nomodel") if warn else "")
+            self.cv.itemconfig(d["ai4"], text=f"{t('ai_frames')}: {a.get('frames', 0)} · "
+                               f"{t('ai_dropped')}: {a.get('dropped', 0)} · "
+                               f"{t('ai_events')}: {a.get('events', 0)} · "
+                               f"{t('ai_errs')}: {a.get('errors', 0)}")
+            dg = a.get("diag") or {}
+            self.cv.itemconfig(d["ai5"], text=f"{t('ai_diag_ev')}: {dg.get('events', 0)} · "
+                               f"{t('ai_diag_sn')}: {dg.get('snapshots', 0)}"
+                               + (f" · {dg.get('disabled')}" if dg.get("disabled") else ""))
         elif p == 2 and "bar" in d:
             try:
                 rect, inner = bar_rects()

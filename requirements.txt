@@ -19,3 +19,9 @@ numpy>=1.24.0
 # Low-level input & global hotkeys:
 pydirectinput>=1.0.4; platform_system == "Windows"
 keyboard>=0.13.5
+
+# OPTIONAL AI vision (v1.24) — install only if you need the local AI detector/OCR.
+# The bot is fully functional WITHOUT these; models are never downloaded.
+#   pip install onnxruntime==1.20.*          # local ONNX detector (CPU)
+#   pip install rapidocr-onnxruntime         # local OCR for interface text
+# See docs/AI_VISION.md and datasets/README.md (training your own model).
