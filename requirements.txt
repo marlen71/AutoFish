@@ -1,9 +1,12 @@
 # Eternal FishMod dependencies
-# Primary high-speed DXGI Desktop Duplication screen capture (120-144+ FPS):
+# Screen capture = DXGI Desktop Duplication. BOTH libraries are installed on purpose:
+# they are alternative wrappers over the same API, so if one fails to import or to create
+# a duplication on your GPU/driver, the bot automatically uses the other one.
 dxcam>=0.0.5; platform_system == "Windows"
-# Note: bettercam (pip install bettercam) is also supported automatically if installed instead of dxcam.
+bettercam>=0.4.0; platform_system == "Windows"
 
-# Emergency fallback screen capture (used ONLY if DXGI / dxcam fails to initialize):
+# Emergency capture: NOT used automatically anymore. Enable it explicitly with
+# "capture_backend": "mss" in fishmod_config.json (RDP / VM without Desktop Duplication).
 mss>=9.0.1
 
 # Computer vision & numerical processing:

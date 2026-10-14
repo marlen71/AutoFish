@@ -124,7 +124,7 @@ LS = {
   "pip_note": "Примечание: ставим в текущий интерпретатор {exe}",
   "tk_hint": "tkinter не найден — переустанови Python с галочкой «tcl/tk and IDLE».",
   "capture_ok": "Захват DXGI доступен: {b}",
-  "capture_no": "Ни dxcam, ни bettercam не работают — бот сам переключится на mss (резервный захват).",
+  "capture_no": "Ни dxcam, ни bettercam не импортируются — без DXGI-захвата бот работать не сможет; ставлю обе библиотеки сейчас.",
  },
  "en": {
   "step_py": "Checking Python…",
@@ -160,7 +160,7 @@ LS = {
   "pip_note": "Note: installing into the current interpreter {exe}",
   "tk_hint": "tkinter is missing — reinstall Python with the “tcl/tk and IDLE” component.",
   "capture_ok": "DXGI capture available: {b}",
-  "capture_no": "Neither dxcam nor bettercam works — the bot will fall back to mss automatically.",
+  "capture_no": "Neither dxcam nor bettercam imports — without DXGI capture the bot cannot run; installing both libraries now.",
  },
  "ua": {
   "step_py": "Перевіряємо Python…",
@@ -196,7 +196,7 @@ LS = {
   "pip_note": "Зауваж: ставимо у поточний інтерпретатор {exe}",
   "tk_hint": "tkinter не знайдено — перевстанови Python з компонентом «tcl/tk and IDLE».",
   "capture_ok": "Захват DXGI доступний: {b}",
-  "capture_no": "Ні dxcam, ні bettercam не працюють — бот сам перейде на mss (резервний захват).",
+  "capture_no": "Ні dxcam, ні bettercam не імпортується — без DXGI-захвата бот не працюватиме; ставлю обидві бібліотеки зараз.",
  },
 }
 
@@ -315,8 +315,12 @@ def check_libs(auto_install, yes):
             opt_missing.append(mod)
     if cap is None:
         say(c_warn("⚠ ") + L("capture_no"))
-        if IS_WIN and "dxcam" not in missing:
-            missing.append("dxcam")          # основной захват ставим обязательно (Windows)
+        if IS_WIN:
+            # Ставим ОБЕ DXGI-библиотеки: они дублируют друг друга, и если одна не
+            # заведётся (драйвер, гибридная GPU, свежая версия Python), бот возьмёт вторую.
+            for mod in OPTIONAL_CAPTURE:
+                if mod not in missing:
+                    missing.append(mod)
     if not missing:
         if not opt_missing or cap:
             say(c_ok("✓ ") + L("lib_ok"))
@@ -334,7 +338,7 @@ def check_libs(auto_install, yes):
             say(c_warn("→ ") + L("no_install"))
             return False
     args = [sys.executable, "-m", "pip", "install", "-r", REQS] if os.path.exists(REQS) else \
-           [sys.executable, "-m", "pip", "install"] + missing + ["dxcam"]
+           [sys.executable, "-m", "pip", "install"] + missing
     say(c_dim(L("pip_note", exe=sys.executable)))
     say(c_hi(L("installing", args=" ".join(args[3:]))))
     hr("·")

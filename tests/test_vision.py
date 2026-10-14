@@ -335,6 +335,79 @@ def wf_norm(timeout=0.25):
 
 ef.CAP.wait_frame = wf_norm
 
+# ---------------------------------------------------------------- 5B. низкий FPS и «полка»
+print("== 5B. Низкий FPS захвата (20 к/с) и зона, упершаяся в верх шкалы ==")
+# Это ровно та комбинация, из-за которой бот «тупо зажимал ЛКМ»: при ШИМ-окне 22 мс
+# и шаге цикла 50 мс решение всегда принималось в начале окна, и любое duty>0
+# превращалось в бессрочное удержание. Плюс зона, прижатая к верху, продолжала
+# «держаться», хотя опускать её былоединственный способ вернуться к рыбе.
+held_samples = []
+ceiling_log = []
+iter_limit = [0]
+real_mouse = ef._send_mouse
+
+
+def spy_hold(bgr, inner=None):
+    iter_limit[0] += 1
+    if iter_limit[0] > 120:
+        raise ef.Stopped()
+    return real_analyze(bgr, inner)
+
+
+def mouse_rec(flags, dx=0, dy=0):
+    """Логируем САМО РЕШЕНИЕ, пока зона прижата к верху: это и есть различие «отпустить»
+    против «бессрочно держать» (на старом коде зона с полки не уходила вообще)."""
+    st["held"] = (flags == ef.MOUSEEVENTF_LEFTDOWN)
+    st["toggles"] += 1
+    if st["y"] <= 56.0:
+        ceiling_log.append(1.0 if flags == ef.MOUSEEVENTF_LEFTDOWN else 0.0)
+    else:
+        held_samples.append(1.0 if st["held"] else 0.0)
+
+
+FRAME_DT = 1.0 / 20.0                       # «резервный» захват / тяжёлая машина
+ef.CAP.fps = 20.0
+ef.analyze = spy_hold
+st.update({"t": 0.0, "y": 300.0, "fish": 300.0, "fv": 0.0, "worst": 0.0, "sum": 0.0, "n": 0,
+           "in_zone": 0, "errs": [], "toggles": 0})
+counter[0] = 0
+held_samples.clear()
+iter_limit[0] = 0
+ef._send_mouse = mouse_rec
+try:
+    ef.play_minigame()
+except ef.Stopped:
+    pass
+ef._send_mouse = real_mouse
+frac = sum(held_samples) / max(1, len(held_samples))
+check("20 к/с: ШИМ чередует нажатие/отпускание, а не «держать всегда»", 0.10 < frac < 0.85,
+      f"доля удержания={frac:.2f}, avg={st['sum'] / max(1, st['n']):.1f}px")
+check("20 к/с: зона всё-таки следует за рыбой (avg < 90 px)", st["sum"] / max(1, st["n"]) < 90.0,
+      f"avg={st['sum'] / max(1, st['n']):.1f}")
+
+# зона упёрта в верх, рыба чуть ниже -> удерживать бессмысленно, надо отпускать
+st["slip"] = True
+st.update({"t": 0.0, "y": 55.0, "fish": 95.0, "fv": 0.0, "worst": 0.0, "sum": 0.0, "n": 0,
+           "in_zone": 0, "errs": [], "toggles": 0})
+counter[0] = 0
+held_samples.clear()
+ceiling_log.clear()
+iter_limit[0] = 0
+ef._send_mouse = mouse_rec
+try:
+    ef.play_minigame()
+except ef.Stopped:
+    pass
+ef._send_mouse = real_mouse
+frac2 = sum(ceiling_log) / max(1, len(ceiling_log))
+check("полка сверху + рыба ниже: на полке ЛКМ НЕ держим", len(ceiling_log) >= 2 and frac2 < 0.2,
+      f"решений на полке={len(ceiling_log)}, доля удержания={frac2:.2f}")
+check("полка сверху: зона опускается к рыбе", st["y"] > 70.0, f"y={st['y']:.0f}")
+st["slip"] = False
+FRAME_DT = 1.0 / 144.0
+ef.CAP.fps = 144.0
+ef.analyze = counting_analyze
+
 print("== 6. Локализация: полнота набора и форматирование ==")
 for lang in ef.STRINGS:
     ef.CFG["lang"] = lang

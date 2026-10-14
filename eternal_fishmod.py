@@ -36,6 +36,7 @@ import base64
 import ctypes
 import datetime
 import threading
+import warnings
 import itertools
 import traceback
 import collections
@@ -65,18 +66,25 @@ try:
 except ImportError:
     winsound = None
 
-# --- захват через дублирование DXGI (основной путь). mss остаётся только резервом. ---
-# Выбран dxcam: он стабильнее всего держит region+video_mode на Windows 10/11 и умеет
-# target_fps с блокирующим get_latest_frame(). bettercam (активно поддерживаемый форк)
-# поддерживается автоматически, если dxcam не установлен/не запустился.
-try:
-    import dxcam
-except Exception:
-    dxcam = None
-try:
-    import bettercam
-except Exception:
-    bettercam = None
+# --- захват через дублирование DXGI: dxcam (основной) и bettercam (второй DXGI) ---
+# mss больше НЕ подставляется молча: «тихий» перевод на mss означает ~20 к/с вместо 120+,
+# из-за чего ПИД начинает «зажимать» ЛКМ. mss остаётся ЯВНЫМ аварийным режимом
+# (capture_backend="mss" в конфиге) — для RDP/VM без Desktop Duplication.
+# Причина отказа импорта сохраняется: без неё пользователь видит «dxcam не установлен»,
+# хотя на самом деле пакет стоит и падает, например, из-за comtypes или защищённого окна.
+_CAP_IMPORT_ERR = {}
+
+
+def _import_capture(modname):
+    try:
+        return __import__(modname)
+    except Exception as e:
+        _CAP_IMPORT_ERR[modname] = "%s: %s" % (type(e).__name__, str(e).strip()[:200])
+        return None
+
+
+dxcam = _import_capture("dxcam")
+bettercam = _import_capture("bettercam")
 
 APP_NAME = "Eternal FishMod"
 APP_VERSION = "1.3.1"            # синхронизируется скриптом scripts/release.py с файлом VERSION
@@ -311,6 +319,8 @@ STRINGS = {
     "log_debug": "📷 debug_screen.png, debug_bar.png сохранены. {parts} | zone={zone} fish={fish}",
     "log_debug_fail": "❌ debug: {e}", "log_tpl_none": "нет файла",
     "log_capture": "🖥 Захват: {backend} ({detail})", "log_capture_fallback": "⚠️ DXGI-захват недоступен ({err}) — работаю через mss (резерв)",
+    "log_capture_skipped": "🖥 {reason}",
+    "hint_capture": "Что сделать: python -m pip install -U dxcam bettercam (и перезапусти). Если экран игры защищён от захвата или это RDP/виртуалка — включи аварийный режим: в fishmod_config.json поставь \"capture_backend\": \"mss\"",
     "log_stream": "🖥 Поток мини-игры: {backend}, {fps} fps, регион {rect}",
     "log_stream_stop": "🖥 Поток мини-игры остановлен",
     "log_stream_fail": "❌ Поток не запустился: {err}", "log_capture_error": "⚠ Захват: ошибка {err}",
@@ -403,6 +413,8 @@ STRINGS = {
     "log_debug": "📷 debug_screen.png, debug_bar.png saved. {parts} | zone={zone} fish={fish}",
     "log_debug_fail": "❌ debug: {e}", "log_tpl_none": "no file",
     "log_capture": "🖥 Capture: {backend} ({detail})", "log_capture_fallback": "⚠️ DXGI capture unavailable ({err}) — using mss (fallback)",
+    "log_capture_skipped": "🖥 {reason}",
+    "hint_capture": "What to do: python -m pip install -U dxcam bettercam (then restart). If the game window is capture-protected or you are on RDP/VM, turn on the emergency mode: set \"capture_backend\": \"mss\" in fishmod_config.json",
     "log_stream": "🖥 Minigame stream: {backend}, {fps} fps, region {rect}",
     "log_stream_stop": "🖥 Minigame stream stopped",
     "log_stream_fail": "❌ Stream failed to start: {err}", "log_capture_error": "⚠ Capture error: {err}",
@@ -495,6 +507,8 @@ STRINGS = {
     "log_debug": "📷 debug_screen.png, debug_bar.png збережено. {parts} | zone={zone} fish={fish}",
     "log_debug_fail": "❌ debug: {e}", "log_tpl_none": "немає файла",
     "log_capture": "🖥 Захват: {backend} ({detail})", "log_capture_fallback": "⚠️ DXGI-захват недоступний ({err}) — працюю через mss (резерв)",
+    "log_capture_skipped": "🖥 {reason}",
+    "hint_capture": "Що робити: python -m pip install -U dxcam bettercam (і перезапусти). Якщо вікно гри захищене від захоплення або це RDP/віртуалка — увімкни аварійний режим: у fishmod_config.json постав \"capture_backend\": \"mss\"",
     "log_stream": "🖥 Потік міні-гри: {backend}, {fps} fps, регіон {rect}",
     "log_stream_stop": "🖥 Потік міні-гри зупинено",
     "log_stream_fail": "❌ Потік не запустився: {err}", "log_capture_error": "⚠ Захват: помилка {err}",
@@ -682,8 +696,19 @@ def play(name):
 # а разовые захват-вызовы во время потока обслуживаются последним кадром потока
 # (или CAP.paused() — короткая остановка потока, захват, восстановление).
 
+def _mss_new():
+    """mss.mss() устарел и печатает DeprecationWarning прямо в консоль запуска;
+    в mss 9+/10+ есть mss.MSS(). Берём новый API, при отсутствии — старый без шума."""
+    cls = getattr(mss, "MSS", None)
+    if cls is not None:
+        return cls()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        return mss.mss()
+
+
 class _MssBackend:
-    """Резервный захват (mss). Активируется ТОЛЬКО если DXGI недоступен."""
+    """Аварийный захват (mss). НЕ включается сам: только явно, capture_backend="mss"."""
     name = "mss"
 
     def __init__(self):
@@ -691,7 +716,7 @@ class _MssBackend:
             raise RuntimeError("mss is not installed")
         self._tls = threading.local()
         self.mon = None
-        m = mss.mss()
+        m = _mss_new()
         try:
             self.mon = dict(m.monitors[1 if len(m.monitors) > 1 else 0])
         finally:
@@ -706,7 +731,7 @@ class _MssBackend:
     def sct(self):
         s = getattr(self._tls, "sct", None)
         if s is None:
-            s = mss.mss()
+            s = _mss_new()
             self._tls.sct = s
         return s
 
@@ -760,207 +785,302 @@ class _MssBackend:
             self._tls.sct = None
 
 
-class _DxcamBackend:
-    """Основной захват: dxcam (IDXGIOutputDuplication), region + video_mode."""
-    name = "dxcam"
+# ------------------------------------------------------------------ DXGI-поток (dxcam / bettercam)
+class _DxgiStream:
+    """Общая часть dxcam/bettercam: ОДИН camera-объект, region-захват и видеопоток.
 
-    def __init__(self, monitor_idx=0, region=None):
-        if dxcam is None:
-            raise RuntimeError("dxcam is not installed")
+    Обе библиотеки — обёртки над IDXGIOutputDuplication с почти одинаковым API, но НАБОР
+    ПАРАМЕТРОВ зависит от версии: у dxcam 0.0.x регион ставится отдельным set_region(),
+    у dxcam 0.3.x его принимает сам start(region=...), а get_latest_frame() там вообще без
+    timeout; у bettercam 1.0.0 нет callback-а, только get_latest_frame(). Поэтому вместо
+    «угадывания версии» тут короткий список кандидатов create()/start() и обязательная
+    ПРОВЕРКА, что кадр действительно приходит: молчаливый откат на mss стоил пользователю
+    рабочего режима (20 к/с вместо 120+, ПИД «зажимает» ЛКМ).
+    """
+
+    name = "dxgi"
+    module = None                                 # dxcam | bettercam — задаётся потомком
+
+    # Потомок отвечает только за то, КАКИМИ аргументами звать create():
+    def _create_candidates(self, monitor_idx):
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------ создание
+    @staticmethod
+    def _frame_ok(frame):
+        """Кадр пригоден: это ndarray разумного размера и он не полностью чёрный."""
         try:
-            idxs = list(dxcam.output_idxs())
-        except Exception:
-            idxs = [0]
-        out = int(monitor_idx) if int(monitor_idx) in idxs else (idxs[0] if idxs else 0)
-        self.cam = None
-        for kwargs in ({"output_idx": out, "region": region, "output_color": "BGR"},
-                       {"output_idx": out, "region": region},
-                       {"output_idx": out},
-                       {}):                      # разные версии dxcam: от полных аргументов к дефолтным
-            try:
-                self.cam = dxcam.create(**kwargs)
-                if self.cam is not None:
-                    break
-            except TypeError:
-                continue
-            except Exception:
-                raise
-        if self.cam is None:
-            raise RuntimeError("dxcam.create() returned None")
-        self.mon = {"left": int(getattr(self.cam, "left", 0) or 0), "top": int(getattr(self.cam, "top", 0) or 0),
-                    "width": int(getattr(self.cam, "width", 0) or 0), "height": int(getattr(self.cam, "height", 0) or 0)}
-        if self.mon["width"] <= 0 or self.mon["height"] <= 0:
-            try:
-                w, h = dxcam.output_dims(out)
-                self.mon.update(width=int(w), height=int(h))
-            except Exception:
-                self.mon.update(width=REF_W, height=REF_H)
-        self.streaming = False
+            if frame is None or not hasattr(frame, "shape") or frame.ndim < 2:
+                return False, "кадр не пришёл"
+            h, w = frame.shape[:2]
+            if w < 64 or h < 64:
+                return False, "кадр %dx%d — подозрительно маленький" % (w, h)
+            if int(np.max(frame)) <= 6:
+                return False, "кадр полностью чёрный (экран защищён от захвата?)"
+            return True, "%dx%d" % (w, h)
+        except Exception as e:
+            return False, "%s: %s" % (type(e).__name__, e)
 
-    def grab(self, left, top, width, height):
+    def _grab_probe(self):
+        """Первый кадр: новыми вариантами API, с короткими повторами (буфер мог быть пуст)."""
+        cam = self.cam
+        why = "кадр не пришёл"
+        for attempt in range(4):
+            for kw in ({"new_frame_only": False}, {"region": None}, {}):
+                try:
+                    f = cam.grab(**kw)
+                except Exception:
+                    continue
+                ok, _note = self._frame_ok(f)
+                if ok:
+                    return f, None
+                why = _note                       # например «кадр полностью чёрный»
+            if attempt == 0:
+                try:                            # иногда дупликация «просыпается» со 2-3-го кадра
+                    cam.start(target_fps=60, video_mode=True)
+                    time.sleep(0.12)
+                    f = cam.get_latest_frame()
+                    cam.stop()
+                    if isinstance(f, tuple):
+                        f = f[0]
+                    ok, _note = self._frame_ok(f)
+                    if ok:
+                        return f, None
+                    why = _note
+                except Exception:
+                    try:
+                        cam.stop()
+                    except Exception:
+                        pass
+            time.sleep(0.05)
+        return None, why
+
+    def __init__(self, monitor_idx=0):
+        self.why = []
+        self.cam = None
+        self.note = ""
+        self.mon = {"left": 0, "top": 0, "width": REF_W, "height": REF_H}
+        self.streaming = False
+        self._lkf_kw = "probe"
+        mod = self.module
+        if mod is None:
+            raise RuntimeError("пакет «%s» не импортирован (%s)"
+                              % (self.name, _CAP_IMPORT_ERR.get(self.name,
+                                       "установи: python -m pip install -U dxcam bettercam")))
+        if not hasattr(mod, "create"):
+            raise RuntimeError("у %s нет create() — неподдерживаемая версия" % self.name)
+        for kwargs in self._create_candidates(int(monitor_idx)):
+            tag = ", ".join("%s=%r" % (k, v) for k, v in sorted(kwargs.items())) or "без параметров"
+            try:
+                cam = mod.create(**kwargs)
+            except Exception as e:
+                self.why.append("create(%s): %s: %s" % (tag, type(e).__name__, str(e).strip()[:150]))
+                continue
+            if cam is None:
+                self.why.append("create(%s): вернул None" % tag)
+                continue
+            self.cam = cam
+            frame, err = self._grab_probe()
+            if frame is None:
+                self.why.append("create(%s): %s" % (tag, err))
+                self._release(cam)
+                self.cam = None
+                continue
+            w = int(getattr(cam, "width", 0) or 0)
+            h = int(getattr(cam, "height", 0) or 0)
+            if w > 0 and h > 0:                   # dxcam/bettercam отсчитывают регион от левого
+                self.mon = {"left": int(getattr(cam, "left", 0) or 0),   # верха ВЫХОДА, не всего
+                            "top": int(getattr(cam, "top", 0) or 0),      # десктопа
+                            "width": w, "height": h}
+            self.note = "кадр %dx%d" % (w or frame.shape[1], h or frame.shape[0])
+            break
+        if self.cam is None:
+            raise RuntimeError("; ".join(self.why[-2:]) or "камера не создана")
+
+    @staticmethod
+    def _release(cam):
+        for m in ("stop", "release"):
+            try:
+                getattr(cam, m)()
+            except Exception:
+                pass
+
+    # ------------------------------------------------------------------ захват
+    def _local(self, left, top, width, height):
         l = int(left) - self.mon["left"]
         t = int(top) - self.mon["top"]
-        r = int(left + width) - self.mon["left"]
-        b = int(top + height) - self.mon["top"]
-        frame = self.cam.grab(region=(l, t, r, b))
+        return l, t, l + max(1, int(width)), t + max(1, int(height))
+
+    def grab(self, left, top, width, height):
+        l, t, r, b = self._local(left, top, width, height)
+        frame = None
+        for kw in ({"region": (l, t, r, b), "new_frame_only": False},
+                   {"region": (l, t, r, b)}, {}):
+            try:
+                frame = self.cam.grab(**kw)
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if frame is not None:
+                break
         if frame is None:
-            frame = self.cam.grab()
-            if frame is None:
-                raise RuntimeError("dxcam: no frame")
-            h, w = frame.shape[:2]
-            x0, y0 = max(0, min(l, w - 1)), max(0, min(t, h - 1))
-            x1, y1 = max(x0 + 1, min(r, w)), max(y0 + 1, min(b, h))
+            raise RuntimeError("%s: кадр не получен" % self.name)
+        if isinstance(frame, tuple):
+            frame = frame[0]
+        fh, fw = frame.shape[:2]
+        if (r - l, b - t) != (min(r, fw) - max(0, l), min(b, fh) - max(0, t)) and (fw, fh) != (r - l, b - t):
+            x0, y0 = max(0, min(l, fw - 1)), max(0, min(t, fh - 1))
+            x1, y1 = max(x0 + 1, min(r, fw)), max(y0 + 1, min(b, fh))
             frame = frame[y0:y1, x0:x1]
         return np.ascontiguousarray(frame[:, :, :3])
 
     def can_stream(self):
         return True
 
+    # ------------------------------------------------------------------ видеопоток
+    def _start_variants(self, region, fps):
+        cam = self.cam
+
+        def _set_region():
+            f = getattr(cam, "set_region", None)
+            if f is None:
+                raise AttributeError("set_region нет")
+            f(region)
+
+        return [
+            lambda: cam.start(region=region, target_fps=fps, video_mode=True),   # dxcam 0.3.x, bettercam 1.0
+            lambda: (_set_region(), cam.start(target_fps=fps, video_mode=True)),  # dxcam 0.0.x
+            lambda: cam.start(target_fps=fps, video_mode=True),
+            lambda: cam.start(target_fps=fps),
+        ]
+
     def start(self, left, top, width, height, fps, on_frame):
-        l = int(left) - self.mon["left"]
-        t = int(top) - self.mon["top"]
-        r = int(left + width) - self.mon["left"]
-        b = int(top + height) - self.mon["top"]
-        try:
-            self.cam.set_region((l, t, r, b))
-        except Exception:
-            pass
-        try:
-            self.cam.start(target_fps=int(fps), video_mode=True)
-        except TypeError:
-            self.cam.start(target_fps=int(fps))
+        if self.streaming:
+            self.stop()
+        l, t, r, b = self._local(left, top, width, height)
+        errs = []
+        for attempt in self._start_variants((l, t, r, b), int(fps)):
+            try:
+                attempt()
+                break
+            except Exception as e:
+                errs.append("%s: %s" % (type(e).__name__, str(e).strip()[:120]))
+        else:
+            raise RuntimeError("start() не запустился (%s)" % "; ".join(errs[-2:]))
+        self._on_frame_cb = on_frame
         self.streaming = True
-        self._on_frame = on_frame
         self._th = threading.Thread(target=self._pump, daemon=True)
         self._th.start()
+
+    def _latest(self):
+        try:
+            f = self.cam.get_latest_frame(**(self._lkf_kw if isinstance(self._lkf_kw, dict) else {}))
+        except TypeError:
+            f = self.cam.get_latest_frame()
+        except Exception:
+            return None
+        if isinstance(f, tuple):
+            f = f[0]
+        return f
 
     def _pump(self):
         while self.streaming:
             try:
-                frame = self.cam.get_latest_frame(timeout=1.0)
-            except TypeError:
-                frame = self.cam.get_latest_frame()
+                if self._lkf_kw == "probe":                     # timeout= есть не во всех версиях
+                    try:
+                        frame = self.cam.get_latest_frame(timeout=1.0)
+                        self._lkf_kw = {"timeout": 1.0}
+                    except TypeError:
+                        frame = self.cam.get_latest_frame()
+                        self._lkf_kw = {}
+                else:
+                    frame = self.cam.get_latest_frame(**self._lkf_kw)
             except Exception:
                 if not self.streaming:
                     break
-                time.sleep(0.002)
+                time.sleep(0.003)
                 continue
             if frame is None:
                 continue
-            self._on_frame(np.ascontiguousarray(frame[:, :, :3]), time.perf_counter())
+            if isinstance(frame, tuple):
+                frame = frame[0]
+            try:
+                self._on_frame_cb(np.ascontiguousarray(frame[:, :, :3]), time.perf_counter())
+            except Exception:
+                pass
 
     def stop(self):
         self.streaming = False
         th = getattr(self, "_th", None)
         if th is not None:
-            th.join(timeout=1.0)
-        self._th = None
-        try:
-            self.cam.stop()
-        except Exception:
-            pass
-        try:
-            self.cam.clear_queue()
-        except Exception:
-            pass
+            try:
+                th.join(timeout=1.0)
+            except Exception:
+                pass
+            self._th = None
+        if self.cam is not None:
+            for m in ("stop", "clear_queue"):
+                try:
+                    getattr(self.cam, m)()
+                except Exception:
+                    pass
 
     def close(self):
-        self.stop()
-        try:
-            del self.cam
+        cam, self.cam = self.cam, None
+        self.streaming = False
+        th = getattr(self, "_th", None)
+        if th is not None:
+            try:
+                th.join(timeout=1.0)
+            except Exception:
+                pass
+            self._th = None
+        if cam is not None:
+            self._release(cam)
+
+
+class _DxcamBackend(_DxgiStream):
+    """Основной захват: dxcam (IDXGIOutputDuplication)."""
+    name = "dxcam"
+    module = dxcam
+
+    def _create_candidates(self, monitor_idx):
+        out = monitor_idx
+        try:                                            # output_idxs() есть только в старых 0.0.x
+            idxs = list(self.module.output_idxs())
+            if idxs and out not in idxs:
+                out = idxs[0]
         except Exception:
             pass
-        self.cam = None
+        bgr = {"output_color": "BGR"}                   # BGR, а не RGB: cv2 у нас везде в BGR
+        return [{"output_idx": out, **bgr},
+                {"output_idx": out},
+                {"device_idx": 0, "output_idx": out, **bgr},
+                dict(bgr),
+                {}]
 
 
-class _BettercamBackend:
-    """Запасной DXGI-бэкенд: bettercam (активно поддерживаемый форк dxcam)."""
+class _BettercamBackend(_DxgiStream):
+    """Запасной DXGI-бэкенд: bettercam (актуальный форк dxcam, ставится вместе с ним)."""
     name = "bettercam"
+    module = bettercam
 
-    def __init__(self, monitor_idx=0, region=None):
-        if bettercam is None:
-            raise RuntimeError("bettercam is not installed")
-        create = getattr(bettercam, "create", None)
-        if create is None:
-            raise RuntimeError("bettercam.create not found")
-        idx = int(monitor_idx) + 1
-        try:
-            self.bc = create(monitor_index=idx)
-        except TypeError:
-            try:
-                self.bc = create(monitor_idx=idx)
-            except TypeError:
-                self.bc = create()
-        mons = None
-        for attr in ("monitors", "monitor_infos", "display_monitors"):
-            mons = getattr(self.bc, attr, None)
-            if mons:
-                break
-        info = None
-        try:
-            if mons:
-                info = mons[min(idx, len(mons) - 1)]
-        except Exception:
-            info = None
-        if info is not None:
-            get = (lambda k: int(info.get(k, 0)) if isinstance(info, dict) else int(getattr(info, k, 0)))
-            left, top = get("left"), get("top")
-            w = get("right") - left or get("width")
-            h = get("bottom") - top or get("height")
-            self.mon = {"left": left, "top": top, "width": w, "height": h}
-        else:
-            self.mon = {"left": 0, "top": 0, "width": REF_W, "height": REF_H}
-        self.streaming = False
-
-    def grab(self, left, top, width, height):
-        l, t = int(left) - self.mon["left"], int(top) - self.mon["top"]
-        frame = self.bc.grab(region=(l, t, int(l + width), int(t + height)))
-        if frame is None:
-            raise RuntimeError("bettercam: no frame")
-        return np.ascontiguousarray(frame[:, :, :3])
-
-    def can_stream(self):
-        return True
-
-    def start(self, left, top, width, height, fps, on_frame):
-        l, t = int(left) - self.mon["left"], int(top) - self.mon["top"]
-        region = (l, t, int(l + width), int(t + height))
-
-        def cb(frame, ts):
-            if frame is not None:
-                on_frame(np.ascontiguousarray(frame[:, :, :3]), float(ts) if ts else time.perf_counter())
-
-        try:
-            self.bc.start(region=region, target_fps=int(fps), callback=cb)
-        except TypeError:
-            try:
-                self.bc.start(region=region, callback=cb)
-            except TypeError:
-                self.bc.start(cb, region=region)
-        self.streaming = True
-
-    def stop(self):
-        try:
-            self.bc.stop()
-        except Exception:
-            pass
-        self.streaming = False
-
-    def close(self):
-        self.stop()
-        self.bc = None
-
-
+    def _create_candidates(self, monitor_idx):
+        bgr = {"output_color": "BGR"}
+        return [{"output_idx": monitor_idx, **bgr},     # bettercam 1.0.0
+                {"monitor_index": monitor_idx + 1},     # bettercam 0.x
+                dict(bgr),
+                {}]
 class ScreenCapture:
     """
     Единая обёртка над захватом экрана.
 
-    * backend "dxcam" / "bettercam" — DXGI Desktop Duplication, основной режим работы:
-      region-capture (не полный экран с последующим кропом) и video_mode c target_fps
-      для мини-игры (минимальная задержка, ~120-144 к/с).
-    * backend "mss" — аварийный резерв: включается сам, если DXGI не инициализировался
-      (RDP, без DX, редкий драйвер). В этом режиме поток реализован фоновым тредом.
-    * is_fallback / fallback_reason — чтобы GUI мог крупно показать, что апгрейд НЕ активен.
+    * "dxcam" -> "bettercam" — DXGI Desktop Duplication, ЕДИНСТВЕННЫЙ основной режим:
+      region-capture (не весь экран с кропом) + video_mode c target_fps для мини-игры
+      (минимальная задержка, ~120-144 к/с).
+    * "mss" — ТОЛЬКО по явному запросу (capture_backend="mss"): RDP/VM без Desktop
+      Duplication. Сам он не подключается: молчаливый перевод на ~20 к/с ломает ПИД.
+    * fallback_reason — список причин, по которым каждый из DXGI-бэкендов не подошёл
+      (его печатает журнал и страница «Зрение»); is_fallback — режим не-DXGI.
     """
 
     def __init__(self, want="auto", monitor_idx=0):
@@ -978,8 +1098,14 @@ class ScreenCapture:
         self._lock = threading.RLock()
         self._new = threading.Event()
         self.fallback_reason = ""
-        order = {"auto": ("dxcam", "bettercam", "mss"), "dxcam": ("dxcam", "mss"),
-                 "bettercam": ("bettercam", "mss"), "mss": ("mss",)}[str(want or "auto").lower()]
+        self._bg = None                       # иначе «ни один бэкенд не подошёл» падало
+        self.backend = ""                      # AttributeError вместо внятного Fail-сообщения
+        self.cam_note = ""
+        order = {"auto": ("dxcam", "bettercam"), "dxcam": ("dxcam",),
+                 "bettercam": ("bettercam",), "mss": ("mss",)}.get(str(want or "auto").lower())
+        if order is None:
+            order = ("dxcam", "bettercam")
+        reasons = []
         for name in order:
             try:
                 if name == "dxcam":
@@ -991,12 +1117,15 @@ class ScreenCapture:
                 else:
                     continue
                 self.backend, self._bg = name, bg
+                self.cam_note = getattr(bg, "note", "") or ""
                 break
             except Exception as e:
                 self.errors += 1
-                self.fallback_reason = f"{name}: {type(e).__name__}: {e}"
+                reasons.append("%s: %s" % (name, str(e) or type(e).__name__))
+        self.fallback_reason = " | ".join(reasons)
         if self._bg is None:
-            raise Fail(t("fail_capture") + f" ({self.fallback_reason})")
+            raise Fail(t("fail_capture") + " — " + (self.fallback_reason or "—")
+                       + "\n" + t("hint_capture"))
         self.is_fallback = self.backend == "mss"
         m = getattr(self._bg, "mon", None) or {"left": 0, "top": 0, "width": REF_W, "height": REF_H}
         self.mon = {"left": int(m.get("left", 0)), "top": int(m.get("top", 0)),
@@ -1086,7 +1215,13 @@ class ScreenCapture:
                 self.errors += 1
                 log(t("log_capture_error", err=f"{type(e).__name__}: {e}"))
                 if not self.is_fallback:
-                    self._degrade_to_mss()
+                    try:
+                        self._degrade_to_mss()          # mss может быть не установлен (он больше
+                    except Exception as ed:             # не обязательный) — ронять мини-игру нельзя
+                        self.errors += 1
+                        log(t("log_stream_fail", err=f"mss: {type(ed).__name__}: {ed}"))
+                        self.stream_rect = None
+                        return False
                     try:
                         self._bg.start(*self.stream_rect, int(fps or CFG["capture_fps"]), self._on_frame)
                     except Exception as e2:
@@ -1181,7 +1316,11 @@ def init_capture():
     if CAP is not None:
         return CAP
     CAP = ScreenCapture(CFG.get("capture_backend", "auto"), int(CFG.get("capture_monitor", 0) or 0))
-    log(t("log_capture", backend=CAP.backend, detail=t("v_primary" if not CAP.is_fallback else "v_fallback")))
+    detail = getattr(CAP, "cam_note", "") or t("v_primary" if not CAP.is_fallback else "v_fallback")
+    log(t("log_capture", backend=CAP.backend, detail=detail))
+    if CAP.fallback_reason:                       # DXGI-кандидаты, которые не подошли, — видны
+        for part in CAP.fallback_reason.split(" | "):
+            log(t("log_capture_skipped", reason=part))
     if CAP.is_fallback:
         log(t("log_capture_fallback", err=CAP.fallback_reason or "—"))
         notify("v_fallback", "warn")
@@ -1826,7 +1965,9 @@ def play_minigame():
     lead_max = float(CFG["lead_max"]) * scale()[0]
     lost_limit = max(0.03, float(CFG["lost_ms"]) / 1000.0)
     min_switch = max(0.001, float(CFG["min_switch"]) if mode == "pwm" else MIN_SWITCH)
-    cycle = 1.0 / max(10.0, float(CFG["pwm_hz"]))
+    cycle_min = 1.0 / max(10.0, float(CFG["pwm_hz"]))
+    cycle = cycle_min                     # фактический период ШИМ (ниже — см. dt_ema)
+    dt_ema = cycle_min
 
     log(t("log_mini"))
     for _ in range(5):                       # гарантированно отпускаем ЛКМ перед стартом
@@ -1846,6 +1987,7 @@ def play_minigame():
     slip = False
     prev_now, prev_err_f = None, 0.0
     slip_cnt = 0
+    slip_ok_cnt = 0
     slip_events = 0
     peak_duty = 0.0
     lost = 0
@@ -1886,13 +2028,17 @@ def play_minigame():
                 slip_cnt += 1
             else:
                 slip_cnt = 0
+            slip_ok_cnt = 0 if r["slip"] >= float(CFG["slip_thr"]) else slip_ok_cnt + 1
             if not slip and slip_cnt >= int(CFG["slip_frames"]):
                 slip = True
                 slip_events += 1
                 ctrl.set_gains(*em_gains)
                 set_state("st_slip", "st_slip_d", "run")
                 log(t("log_slip"))
-            elif slip and slip_cnt == 0:
+            elif slip and slip_ok_cnt >= max(2, int(CFG["slip_frames"])):
+                # выход из аварии с задержкой: на 20 к/с красный контур моргает на
+                # 1 кадр, и регулятор начало бросать между нормой и аварийными
+                # коэффициентами (каждый вход гасит интеграл в 0.4 раза)
                 slip = False
                 ctrl.set_gains(*norm_gains)
                 set_state("st_mini", "st_mini_hold_d", "run")
@@ -1932,17 +2078,37 @@ def play_minigame():
             err = err_px / ih
             dt = 1.0 / max(30.0, (CAP.fps if CAP else 120.0)) if prev_now is None \
                 else max(1e-4, now - prev_now)      # dt по реальным кадрам потока
+            # Период ШИМ никогда не должен быть короче шага цикла: при 20 к/с (просадка
+            # захвата) окно в 22 мс «помещается» в одну итерацию, решение всегда
+            # принимается в начале окна -> want=True при ЛЮБОМ duty>0 -> «бессрочный
+            # зажим ЛКМ». Поэтому окно растягиваем минимум на ~2.5 кадра, но не больше
+            # 150 мс (иначе регулятор станет вязким).
+            dt_ema = dt_ema * 0.7 + dt * 0.3
+            cycle = min(0.150, max(cycle_min, 2.5 * dt_ema))
             err_f = err_f * 0.6 + err * 0.4                 # сглаживание для производной
             d_err = (err_f - prev_err_f) / dt if prev_now else 0.0
             prev_err_f, prev_now = err_f, now
             out = ctrl.update(err_f, d_err, dt)
+
+            # ---------- упёрлась в край шкалы: не пихать зону дальше ----------
+            # Зона прижата к ВЕРХУ, а рыба под ней => удержание физически бессмысленно
+            # (выше некуда), и именно оно и держало зону «улетевшей» наверху: с bias=0.5
+            # выход оставался ~0.3..0.5, зона не падала на рыбу, а красная рамка
+            # «РЫБА СРЫВАЕТСЯ!» только добавляла удержания. Тут — принудительный 0 (или 1
+            # для дна), чтобы гравигация сама вернула зону на рыбу.
+            at_top, at_bottom = zone[0] <= 1.0, zone[1] >= ih - 2.0
+            clamp = None
+            if at_top and err < 0:
+                out, clamp = 0.0, "top"
+            elif at_bottom and err > 0:
+                out, clamp = 1.0, "bottom"
 
             # ---------- ШИМ: кто сколько держит внутри короткого окна ----------
             if mode == "pwm":
                 if now - cycle_start >= cycle:
                     cycle_start = now
                     duty = out
-                    if slip and err > 0:                    # рыба уходит — держим на максимум
+                    if slip and err > 0 and clamp is None:  # рыба уходит — держим на максимум
                         duty = 1.0
                     peak_duty = max(peak_duty, duty)
                 want = (now - cycle_start) < duty * cycle
@@ -1954,7 +2120,11 @@ def play_minigame():
                 duty = out
             if fish_lost:
                 want = False
-            if slip and not fish_lost and err > 0:
+            if slip and not fish_lost and err > 0 and clamp is None:
+                want = True
+            if clamp == "top":
+                want = False
+            elif clamp == "bottom":
                 want = True
 
             # ---------- защита от залипания ----------

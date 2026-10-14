@@ -224,6 +224,25 @@ check("README: правило ASCII/CRLF для .bat описано",
 check("README: описан код 9009/«не является внутренней или внешней командой»",
       "9009" in rd or "внутренней или внешней" in rd)
 
+# ------------------------------------------------------------------ 7. состав релизного архива
+print("== 7. В релизном архиве — только то, чем пользуются ==")
+rs = text("scripts/release.py")
+m = re.search(r"INCLUDE_FILES = \[(.*?)\]", rs, re.S)
+files = [x.strip().strip('\"\'') for x in (m.group(1) if m else "").replace("\n", " ").split(",") if x.strip()]
+needed = {"eternal_fishmod.py", "launch.py", "start.bat", "start_admin.bat", "start.vbs",
+          "requirements.txt", "README.md", "VERSION"}
+check("архив: всё необходимое для запуска на месте", needed.issubset(set(files)), str(sorted(needed - set(files))))
+extra = [f for f in files if f not in needed]
+check("архив: без девелоперского мусора", not extra, str(extra))
+mdir = re.search(r"INCLUDE_DIRS = \[(.*?)\]", rs, re.S)
+dirs = (mdir.group(1) if mdir else "")
+check("архив: scripts/ и .github/ в него не попадают", '"scripts"' not in dirs and ".github" not in dirs,
+      " ".join(dirs.split()))
+check("архив: templates/ с откалиброванными картинками едет", "templates" in dirs)
+tpl = os.path.join(ROOT, "templates")
+check("templates/ непустой (иначе бот не найдёт удочку)", os.path.isdir(tpl) and len(os.listdir(tpl)) >= 1,
+      str(sorted(os.listdir(tpl))[:6]) if os.path.isdir(tpl) else "нет папки")
+
 print()
 if fails:
     print("FAILED:", len(fails))

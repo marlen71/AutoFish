@@ -47,11 +47,14 @@ CHANGELOG = os.path.join(ROOT, "CHANGELOG.md")
 MAIN = os.path.join(ROOT, "eternal_fishmod.py")
 RELEASE_NAME_RE = re.compile(r"^## \[(\d+)\.(\d+)\.(\d+)\]")
 
+# В релизный архив попадает ТОЛЬКО то, чем реально пользуются: бот, лаунчер, файлы запуска,
+# requirements и откалиброванные шаблоны. Всё остальное (tests/, scripts/release.py, .github/,
+# CHANGELOG.md, .git*) остаётся в репозитории как исходники: распаковал — двойной клик — работает,
+# без «лишней папки со скриптами». .bat/.vbs в архиве CRLF, потому что workflow собирает архив
+# из checkout, где .gitattributes уже отработал.
 INCLUDE_FILES = ["eternal_fishmod.py", "launch.py", "start.bat", "start_admin.bat", "start.vbs",
-                 "requirements.txt", "README.md", "CHANGELOG.md", "VERSION", ".gitignore",
-                 ".gitattributes"]     # .gitattributes — чтобы .bat/.vbs в архиве были CRLF
-INCLUDE_DIRS = [("templates", False), ("sounds", True), ("scripts", False),
-                 (os.path.join(".github", "workflows"), False), ("lang", False)]
+                 "requirements.txt", "README.md", "VERSION"]
+INCLUDE_DIRS = [("templates", False), ("sounds", True)]
 EXCLUDE_EXT = {".pyc", ".log", ".tmp"}          # мусор; sounds/auto исключается отдельно
 EXCLUDE_DIRS = {"auto", "__pycache__", ".git"}
 
