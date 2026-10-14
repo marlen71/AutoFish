@@ -19,12 +19,14 @@ Eternal FishMod — полуавтомат рыбалки для Skyrim RP-се�
   * Распознавание рыбы не зависит от её цвета (контраст по горизонтали внутри шкалы),
     поэтому подходит для любых видов рыб.
   * Полная локализация интерфейса: RU / EN / UA, переключение на лету (страница «Настройки»).
-  * Авто-закидывание — АВТО-КЛИКЕР (v1.8): фиксированные координаты для 1920x1080
-    (удочка в ПЕРВОМ слоте): курсор -> одно ПКМ [126,256] -> пауза use_menu_delay ->
-    одна ЛКМ по «Использовать» [205,278] -> заброс; то же после каждой рыбы. Ни
-    шаблонов, ни анализа меню. Инвентарь открывает человек (TAB бот не жмёт);
-    координаты правятся на «Настройках» (кнопка 📍 сохраняет сразу). «Только
-    мини-игра» = инвентарь и забросы полностью отключены.
+  * Авто-закидывание — ВИЗУАЛЬНОЕ НАВЕДЕНИЕ (v1.9), тот же конвейер, что у мини-игры
+    (полный DXGI-кадр -> OpenCV): бот сам находит иконку удочки на ВСЁМ экране
+    (мульти-масштабный шаблон rod.png), плавно ПЕРЕТАСКИВАЕТ курсор к ней, одно ПКМ,
+    затем по красной строке «Выбросить» находит пункт «Использовать» и ведёт курсор
+    туда, одна ЛКМ -> заброс; то же после каждой рыбы. Никаких жёстких координат —
+    работает при любом положении и масштабе инвентаря. 📍 на «Настройках» — своя
+    точка + мгновенный снимок шаблона; пусто = автопоиск. Инвентарь открывает
+    человек (TAB бот не жмёт). «Только мини-игра» = инвентарь и забросы отключены.
   * Лаунчер launch.py / start.bat, файл VERSION + scripts/release.py (релизы на GitHub).
 
 Установка:  python launch.py   (сам поставит зависимости)   или   pip install -r requirements.txt
@@ -100,7 +102,7 @@ CFG_PATH = os.path.join(BASE_DIR, "fishmod_config.json")
 STATS_PATH = os.path.join(BASE_DIR, "fishmod_stats.json")
 LOG_PATH = os.path.join(BASE_DIR, "fishmod.log")
 VERSION_PATH = os.path.join(BASE_DIR, "VERSION")
-CFG_VERSION = 5                  # формат конфига: меняем только при НЕсовместимых правках
+CFG_VERSION = 6                  # формат конфига: меняем только при НЕсовместимых правках
 REF_W, REF_H = 1920, 1080
 
 
@@ -143,12 +145,15 @@ DEFAULT_CFG = {
                                          # «Использовать»: игра дорисовывает меню, ранний
                                          # клик давал промахи. Безопасный темп, без спама
     "idle_cursor": [1250, 500],
-    # АВТО-КЛИКЕР ЗАБРОСА: фиксированные координаты для окна инвентаря на 1920x1080
-    # (замерено по скриншотам игры). Удочка должна лежать в ПЕРВОМ слоте.
-    # «Использовать» — ВЕРХНИЙ пункт меню удочки. Свои координаты: страница «Настройки»,
-    # кнопка 📍 у «ПКМ удочка»/«ЛКМ «Использовать»» (сохраняет сразу).
-    "rod_click_pos": [126, 256],         # ПКМ: первый слот инвентаря (удочка)
-    "use_click_pos": [205, 278],         # ЛКМ: пункт «Использовать» меню удочки
+    # ВИЗУАЛЬНЫЙ АВТО-ЗАКИД (v1.9): жёстких координат НЕТ. Удочка ищется по ВСЕМУ экрану
+    # (мульти-масштабный шаблон rod.png), «Использовать» — по красной строке «Выбросить»
+    # в открытом меню. Ключи ниже — только РУЧНОЕ переопределение (страница «Настройки»):
+    # 📍 у «ПКМ удочка» заодно снимает шаблон rod.png с экрана; пусто/None = автопоиск.
+    "rod_click_pos": None,               # ручная точка ПКМ по удочке; None = автопоиск
+    "use_click_pos": None,               # ручная точка «Использовать»; None = поиск по меню
+    "rod_match_min": 0.70,               # порог совпадения шаблона удочки на полном кадре
+    "move_time": 0.30,                   # сколько секунд курсор плавно едет к цели
+    "rod_retry_delay": 3.0,              # пауза между попытками найти удочку/меню
     "sound_start": True, "sound_end": True, "sound_catch": False, "volume": 60,
     "hide_when_running": True,           # прятать окно, пока бот ловит (оверлей не мешает «зрению»)
     "ui_scale": 0.72,
@@ -242,13 +247,13 @@ def load_cfg():
             for k in REMOVED_CFG_KEYS:
                 if k in data and k not in CFG_DROPPED:
                     CFG_DROPPED.append(k)
-            # координаты кликов теперь всегда фиксированные: None/мусор из старых
-            # конфигов молча заменяется стандартом (первый слот / «Использовать»)
+            # ручные точки (v1.9): валидны либо None (автопоиск), либо пара чисел;
+            # мусор из старых конфигов молча превращается в автопоиск
             for k in ("rod_click_pos", "use_click_pos"):
                 v = CFG.get(k)
                 if not (isinstance(v, (list, tuple)) and len(v) == 2
-                        and all(isinstance(n, (int, float)) for n in v)):
-                    CFG[k] = list(DEFAULT_CFG[k])
+                        and all(isinstance(n, (int, float)) and not isinstance(n, bool) for n in v)):
+                    CFG[k] = None
             # устаревшие ЗНАЧЕНИЯ мигрируем явно (CFG_VERSION не меняем — ключ-то на месте).
             # mss из проекта вырезан, а конфиги версий 1.2-1.3 успели записать
             # "capture_backend": "mss" при тихом откате — иначе пользователь навсегда
@@ -257,6 +262,15 @@ def load_cfg():
                 CFG["capture_backend"] = DEFAULT_CFG["capture_backend"]
                 CFG_MIGRATED.append("capture_backend")
             if int(data.get("cfg_version", 1) or 1) < CFG_VERSION:
+                if int(data.get("cfg_version", 1) or 1) < 6:
+                    # в 1.8.0 rod_click_pos/use_click_pos были ЖЁСТКИМИ точками клика
+                    # (дефолт [126,256]/[205,278] — у многих не совпадал с инвентарём).
+                    # В 1.9.0 это ручное переопределение автопоиска: старые значения
+                    # сбрасываем, чтобы сразу работал визуальный поиск по экрану.
+                    CFG["rod_click_pos"] = None
+                    CFG["use_click_pos"] = None
+                    CFG_MIGRATED.append("rod_click_pos")
+                    CFG_MIGRATED.append("use_click_pos")
                 # аддитивная миграция: ничего не выбрасываем, только добавляем недостающие ключи
                 CFG.update({k: v for k, v in DEFAULT_CFG.items() if k not in known})
                 save_cfg()
@@ -328,7 +342,7 @@ STRINGS = {
     "m_maxhold": "Макс. удержание, с",
     "m_lostms": "Потеря зоны, мс", "m_fishthr": "Порог контраста рыбы", "m_fishdet": "Поиск рыбы",
     "m_barpad": "Отступ рамки, px", "m_slipthr": "Порог красной рамки",
-    "s_sec_lang": "ЯЗЫК / LANGUAGE / МОВА", "s_sec_binds": "Горячие клавиши", "s_sec_coords": "Ручные координаты",
+    "s_sec_lang": "ЯЗЫК / LANGUAGE / МОВА", "s_sec_binds": "Горячие клавиши", "s_sec_coords": "Точки удочки (пусто = автопоиск)",
     "s_lang": "Язык интерфейса", "s_bind_toggle": "Старт / Стоп", "s_bind_panic": "Аварийный стоп",
     "s_bind_gui": "Показать / скрыть окно", "s_volume": "Громкость звуков, %", "s_cast_delay": "Задержка заброса, сек",
     "s_rod_pos": "ПКМ удочка:", "s_use_pos": "ЛКМ «Использовать»:",
@@ -338,11 +352,13 @@ STRINGS = {
     "toast_cfg_loaded": "Конфиг загружен успешно", "toast_cfg_missing": "Файл конфига не найден",
     "toast_cfg_reset": "Настройки сброшены", "toast_ints": "Введи целые числа",
     "toast_pick": "Кликни на нужное место…", "toast_coords": "Координаты: ({x}, {y})",
-    "toast_set": "{label} → ({x}, {y})", "toast_auto": "{label} → стандарт ({x}, {y})", "toast_lang": "Язык: {lang}",
+    "toast_set": "{label} → ({x}, {y})", "toast_auto_mode": "{label} → автопоиск по экрану", "toast_lang": "Язык: {lang}",
     "st_stopped": "ОСТАНОВЛЕНО", "st_idle_d": "Нажми СТАРТ или F8",
     "st_starting": "ЗАПУСК", "st_starting_d": "Определяю окно игры…",
     "st_prepare": "ПОДГОТОВКА", "st_prepare_d": "Проверяю удочку и наживку",
     "st_cast": "ЗАКИДЫВАЮ", "st_cast_d": "Закидываю удочку…",
+    "st_rod_find": "ИЩУ УДОЧКУ", "st_rod_find_d": "Ищу иконку удочки на экране…",
+    "st_rod_fail": "УДОЧКА НЕ НАЙДЕНА", "st_rod_fail_d": "Сними шаблон «Шаблон: удочка» («Зрение») или задай точку 📍 («Настройки»)",
     "st_bite": "КЛЁВ", "st_bite_d": "Ожидание клёва…", "st_bite_wait_d": "Ожидание клёва… {n} с",
     "st_mini": "МИНИ-ИГРА", "st_mini_d": "Вылавливаю рыбу!", "st_mini_hold_d": "Удерживаю рыбу в зоне",
     "st_caught": "ЛОВЛЯ", "st_caught_d": "Рыба поймана",
@@ -357,6 +373,14 @@ STRINGS = {
     "log_use_manual": "🖱 «Использовать»: курсор в ({ux}, {uy}), одна ЛКМ",
         "m_det_auto": "авто (контраст)", "m_det_both": "контраст+HSV", "m_det_hsv": "только HSV", "log_step1": "🖱 Шаг 1: курсор на удочку → одно ПКМ", "log_step2": "🖱 Шаг 2: пауза под меню → одна ЛКМ по «Использовать»",
     "log_rod_taken": "✔ Заброс готов: ПКМ по удочке и ЛКМ по «Использовать» отправлены",
+    "log_rod_found": "🎣 Удочка найдена на экране: ({x}, {y}), совпадение {s:.2f}",
+    "log_use_found": "🖱 «Использовать» найдено по красной строке меню: ({ux}, {uy}), одна ЛКМ",
+    "log_menu_missing": "❌ Меню удочки не найдено (нет красной строки «Выбросить») — попробую ещё раз",
+    "log_menu_stuck": "⚠ Меню не закрылось после ЛКМ — жму «Использовать» ещё раз (последняя попытка)",
+    "fail_rod_tpl": "❌ Нет шаблона rod.png — «Зрение» → «Шаблон: удочка» (курсор на иконку) или точка 📍 на «Настройках»",
+    "fail_rod_score": "❌ Удочка не найдена на экране: лучшее совпадение {s:.2f} < порога {min:.2f} — пересними шаблон или задай 📍",
+    "nt_rod_fail": "Удочку не нашёл — пересними шаблон или задай 📍",
+    "nt_rod_tpl": "Нет шаблона rod.png — сними его на странице «Зрение»",
     "log_rod_skip": "🎣 equip_on_start выключен — начинаю с заброса (удочка уже в руках)", "log_bait": "🪱 Наживка: {state} (стаков на экране: {n})",
     "bait_yes": "есть", "bait_no": "НЕТ", "log_rod_missing": "🎣 Удочки нет в руках — беру",
     "log_bait_icon": "🪱 Значок наживки пропал — проверяю инвентарь",
@@ -365,7 +389,7 @@ STRINGS = {
     "nt_inv_wait": "Открой инвентарь в игре",
     "log_bait_skip": "Проверка наживки пропущена — инвентарь закрыт",
     "st_inv_wait": "ОТКРОЙ ИНВЕНТАРЬ", "st_inv_wait_d": "Открой инвентарь — бот ждёт…",
-    "m_menudelay": "Пауза ПКМ→«Использовать», с",
+    "m_menudelay": "Пауза ПКМ→«Использовать», с", "m_rodmatch": "Порог шаблона удочки",
     "log_cast": "🪝 Заброс удочки…", "log_cast_done": "🪝 Заброс выполнен — жду клёва",
     "log_slip": "⚠ Рыба срывается — аварийное удержание", "log_mini_done": "✔ Мини-игра: {dur:.1f} с, срывов {slip}, ЛКМ {sw:.1f} перекл/с",
     "log_debug": "📷 debug_screen.png, debug_bar.png сохранены. {parts} | zone={zone} fish={fish}",
@@ -432,7 +456,7 @@ STRINGS = {
     "m_maxhold": "Max hold, s",
     "m_lostms": "Zone lost, ms", "m_fishthr": "Fish contrast threshold", "m_fishdet": "Fish detection",
     "m_barpad": "Bar border pad, px", "m_slipthr": "Red frame threshold",
-    "s_sec_lang": "ЯЗЫК / LANGUAGE / МОВА", "s_sec_binds": "Hotkeys", "s_sec_coords": "Manual coordinates",
+    "s_sec_lang": "ЯЗЫК / LANGUAGE / МОВА", "s_sec_binds": "Hotkeys", "s_sec_coords": "Rod points (empty = auto-search)",
     "s_lang": "Interface language", "s_bind_toggle": "Start / Stop", "s_bind_panic": "Panic stop",
     "s_bind_gui": "Show / hide window", "s_volume": "Sound volume, %", "s_cast_delay": "Cast delay, s",
     "s_rod_pos": "RMB on rod:", "s_use_pos": "LMB on “Use”:",
@@ -442,11 +466,13 @@ STRINGS = {
     "toast_cfg_loaded": "Config loaded successfully", "toast_cfg_missing": "Config file not found",
     "toast_cfg_reset": "Settings reset", "toast_ints": "Enter whole numbers",
     "toast_pick": "Click on the needed spot…", "toast_coords": "Coordinates: ({x}, {y})",
-    "toast_set": "{label} → ({x}, {y})", "toast_auto": "{label} → default ({x}, {y})", "toast_lang": "Language: {lang}",
+    "toast_set": "{label} → ({x}, {y})", "toast_auto_mode": "{label} → on-screen auto-search", "toast_lang": "Language: {lang}",
     "st_stopped": "STOPPED", "st_idle_d": "Press START or F8",
     "st_starting": "STARTING", "st_starting_d": "Detecting the game window…",
     "st_prepare": "PREPARING", "st_prepare_d": "Checking rod and bait",
     "st_cast": "CASTING", "st_cast_d": "Casting the rod…",
+    "st_rod_find": "FINDING ROD", "st_rod_find_d": "Looking for the rod icon on screen…",
+    "st_rod_fail": "ROD NOT FOUND", "st_rod_fail_d": "Capture the “Rod template” (Vision page) or set the 📍 point (Settings)",
     "st_bite": "WAITING", "st_bite_d": "Waiting for a bite…", "st_bite_wait_d": "Waiting for a bite… {n} s",
     "st_mini": "MINIGAME", "st_mini_d": "Reeling the fish in!", "st_mini_hold_d": "Holding the fish in the zone",
     "st_caught": "FISHING", "st_caught_d": "Fish caught",
@@ -461,6 +487,14 @@ STRINGS = {
     "log_use_manual": "🖱 “Use”: cursor to ({ux}, {uy}), one LMB",
         "m_det_auto": "auto (contrast)", "m_det_both": "contrast+HSV", "m_det_hsv": "HSV only", "log_step1": "🖱 Step 1: cursor to the rod → one RMB", "log_step2": "🖱 Step 2: menu pause → one LMB on “Use”",
     "log_rod_taken": "✔ Ready to cast: RMB on the rod and LMB on “Use” sent",
+    "log_rod_found": "🎣 Rod found on screen: ({x}, {y}), match {s:.2f}",
+    "log_use_found": "🖱 “Use” found via the red row: ({ux}, {uy}), one LMB",
+    "log_menu_missing": "❌ Rod menu not found (no red “Drop” row) — will retry",
+    "log_menu_stuck": "⚠ Menu didn’t close after LMB — clicking “Use” once more (final try)",
+    "fail_rod_tpl": "❌ No rod.png template — Vision → “Rod template” (hover the icon) or set a 📍 point",
+    "fail_rod_score": "❌ Rod not found on screen: best match {s:.2f} < threshold {min:.2f} — recapture the template or set 📍",
+    "nt_rod_fail": "Rod not found — recapture the template or set 📍",
+    "nt_rod_tpl": "No rod.png template — capture it on the Vision page",
     "log_rod_skip": "🎣 equip_on_start is off — starting with the cast (rod already in hands)", "log_bait": "🪱 Bait: {state} (stacks on screen: {n})",
     "bait_yes": "yes", "bait_no": "NONE", "log_rod_missing": "🎣 Rod not in hands — taking it",
     "log_bait_icon": "🪱 Bait icon disappeared — checking the inventory",
@@ -469,7 +503,7 @@ STRINGS = {
     "nt_inv_wait": "Open the inventory in game",
     "log_bait_skip": "Bait check skipped — inventory is closed",
     "st_inv_wait": "OPEN INVENTORY", "st_inv_wait_d": "Open the inventory — the bot is waiting…",
-    "m_menudelay": "RMB→“Use” pause, s",
+    "m_menudelay": "RMB→“Use” pause, s", "m_rodmatch": "Rod template threshold",
     "log_cast": "🪝 Casting…", "log_cast_done": "🪝 Cast done — waiting for a bite",
     "log_slip": "⚠ Fish is slipping — emergency hold", "log_mini_done": "✔ Minigame: {dur:.1f} s, slips {slip}, LMB {sw:.1f} switches/s",
     "log_debug": "📷 debug_screen.png, debug_bar.png saved. {parts} | zone={zone} fish={fish}",
@@ -536,7 +570,7 @@ STRINGS = {
     "m_maxhold": "Макс. утримання, с",
     "m_lostms": "Втрата зони, мс", "m_fishthr": "Поріг контрасту риби", "m_fishdet": "Пошук риби",
     "m_barpad": "Відступ рамки, px", "m_slipthr": "Поріг червоної рамки",
-    "s_sec_lang": "ЯЗЫК / LANGUAGE / МОВА", "s_sec_binds": "Гарячі клавіші", "s_sec_coords": "Ручні координати",
+    "s_sec_lang": "ЯЗЫК / LANGUAGE / МОВА", "s_sec_binds": "Гарячі клавіші", "s_sec_coords": "Точки вудки (порожньо = автопошук)",
     "s_lang": "Мова інтерфейсу", "s_bind_toggle": "Старт / Стоп", "s_bind_panic": "Аварійний стоп",
     "s_bind_gui": "Показати / сховати вікно", "s_volume": "Гучність звуків, %", "s_cast_delay": "Затримка закидання, с",
     "s_rod_pos": "ПКМ вудка:", "s_use_pos": "ЛКМ «Використати»:",
@@ -546,11 +580,13 @@ STRINGS = {
     "toast_cfg_loaded": "Конфіг завантажено успішно", "toast_cfg_missing": "Файл конфігу не знайдено",
     "toast_cfg_reset": "Налаштування скинуто", "toast_ints": "Введіть цілі числа",
     "toast_pick": "Клікніть на потрібне місце…", "toast_coords": "Координати: ({x}, {y})",
-    "toast_set": "{label} → ({x}, {y})", "toast_auto": "{label} → стандарт ({x}, {y})", "toast_lang": "Мова: {lang}",
+    "toast_set": "{label} → ({x}, {y})", "toast_auto_mode": "{label} → автопошук по екрану", "toast_lang": "Мова: {lang}",
     "st_stopped": "ЗУПИНЕНО", "st_idle_d": "Натисни СТАРТ або F8",
     "st_starting": "ЗАПУСК", "st_starting_d": "Визначаю вікно гри…",
     "st_prepare": "ПІДГОТОВКА", "st_prepare_d": "Перевіряю вудку та наживку",
     "st_cast": "ЗАКИДАЮ", "st_cast_d": "Закидаю вудку…",
+    "st_rod_find": "ШУКАЮ ВУДКУ", "st_rod_find_d": "Шукаю іконку вудки на екрані…",
+    "st_rod_fail": "ВУДКУ НЕ ЗНАЙДЕНО", "st_rod_fail_d": "Зніми шаблон «Шаблон: вудка» («Зір») або задай точку 📍 («Налаштування»)",
     "st_bite": "КЛЮВАННЯ", "st_bite_d": "Очікування клювання…", "st_bite_wait_d": "Очікування клювання… {n} с",
     "st_mini": "МІНІ-ГРА", "st_mini_d": "Витягую рибу!", "st_mini_hold_d": "Утримую рибу в зоні",
     "st_caught": "ЛОВЛЯ", "st_caught_d": "Рибу спіймано",
@@ -565,6 +601,14 @@ STRINGS = {
     "log_use_manual": "🖱 «Використати»: курсор у ({ux}, {uy}), одна ЛКМ",
         "m_det_auto": "авто (контраст)", "m_det_both": "контраст+HSV", "m_det_hsv": "лише HSV", "log_step1": "🖱 Крок 1: курсор на вудку → одне ПКМ", "log_step2": "🖱 Крок 2: пауза під меню → одна ЛКМ по «Використати»",
     "log_rod_taken": "✔ До закидання готово: ПКМ по вудці та ЛКМ по «Використати» надіслано",
+    "log_rod_found": "🎣 Вудку знайдено на екрані: ({x}, {y}), збіг {s:.2f}",
+    "log_use_found": "🖱 «Використати» знайдено за червоним рядком меню: ({ux}, {uy}), одна ЛКМ",
+    "log_menu_missing": "❌ Меню вудки не знайдено (немає червоного рядка «Викинути») — спробую ще раз",
+    "log_menu_stuck": "⚠ Меню не закрилося після ЛКМ — тисну «Використати» ще раз (остання спроба)",
+    "fail_rod_tpl": "❌ Немає шаблону rod.png — «Зір» → «Шаблон: вудка» (курсор на іконку) або точка 📍",
+    "fail_rod_score": "❌ Вудку не знайдено на екрані: найкращий збіг {s:.2f} < порогу {min:.2f} — пересніми шаблон або задай 📍",
+    "nt_rod_fail": "Вудку не знайшов — пересними шаблон або задай 📍",
+    "nt_rod_tpl": "Немає шаблону rod.png — зніми його на сторінці «Зір»",
     "log_rod_skip": "🎣 equip_on_start вимкнено — починаю з закидання (вудка вже в руках)", "log_bait": "🪱 Наживка: {state} (стеків на екрані: {n})",
     "bait_yes": "є", "bait_no": "НЕМАЄ", "log_rod_missing": "🎣 Вудки немає в руках — беру",
     "log_bait_icon": "🪱 Значок наживки зник — перевіряю інвентар",
@@ -573,7 +617,7 @@ STRINGS = {
     "nt_inv_wait": "Відкрий інвентар у грі",
     "log_bait_skip": "Перевірку наживки пропущено — інвентар закрито",
     "st_inv_wait": "ВІДКРИЙ ІНВЕНТАР", "st_inv_wait_d": "Відкрий інвентар — бот чекає…",
-    "m_menudelay": "Пауза ПКМ→«Використати», с",
+    "m_menudelay": "Пауза ПКМ→«Використати», с", "m_rodmatch": "Поріг шаблона вудки",
     "log_cast": "🪝 Закидання вудки…", "log_cast_done": "🪝 Закидання виконано — чекаю клювання",
     "log_slip": "⚠ Риба зривається — аварійне утримання", "log_mini_done": "✔ Міні-гра: {dur:.1f} с, зривів {slip}, ЛКМ {sw:.1f} перемик/с",
     "log_debug": "📷 debug_screen.png, debug_bar.png збережено. {parts} | zone={zone} fish={fish}",
@@ -2541,45 +2585,211 @@ def wait_inventory_open():
     return True
 
 
+# --- v1.9.0: ВИЗУАЛЬНЫЙ АВТО-ЗАКИД ---
+# Тот же конвейер, что у мини-игры: полный DXGI-кадр экрана -> OpenCV-анализ -> курсор
+# плавно ведётся к НАЙДЕННОЙ цели. Никаких жёстких координат: положение и масштаб
+# инвентаря могут быть любыми. Ручные точки rod_click_pos/use_click_pos (📍 на
+# «Настройках») лишь ПЕРЕОПРЕДЕЛЯЮТ автопоиск; пусто = автопоиск.
+
+def cursor_pos():
+    """Текущая позиция курсора в физических пикселях экрана захвата."""
+    from ctypes import wintypes
+    pt = wintypes.POINT()
+    ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+    return logical_to_physical(pt.x, pt.y)
+
+
+def smooth_move(x, y):
+    """Плавно ПЕРЕТАСКИВАЕТ курсор к цели (x, y) за move_time секунд: smoothstep
+    (мягкий разгон и торможение) — видно, как мышь едет к иконке, а не телепортируется.
+    Шаг ~24 физических пикселя; в конце — точная установка в цель."""
+    dur = float(CFG.get("move_time", 0.30))
+    try:
+        x0, y0 = cursor_pos()
+    except Exception:
+        x0, y0 = int(x), int(y)
+    dist = max(abs(int(x) - x0), abs(int(y) - y0))
+    if dist < 2:
+        mouse_move_abs(int(x), int(y))
+        return
+    steps = int(max(6, min(36, dist // 24)))
+    for i in range(1, steps + 1):
+        check_stop()
+        tt = i / steps
+        e = tt * tt * (3.0 - 2.0 * tt)          # smoothstep
+        mouse_move_abs(int(round(x0 + (int(x) - x0) * e)), int(round(y0 + (int(y) - y0) * e)))
+        nap(dur / steps)
+    mouse_move_abs(int(x), int(y))
+
+
+def rod_on_screen():
+    """ИЩЕТ иконку удочки на ПОЛНОМ кадре экрана (как мини-игра ищет шкалу): шаблон
+    rod.png прогоняется matchTemplate-ом по всему кадру в нескольких масштабах (запас
+    на DPI/масштаб интерфейса игры). Возвращает (x, y, score) — центр лучшего
+    совпадения в физических пикселях; (None, None, score), если порог не достигнут;
+    (None, None, None), если шаблона rod.png нет вовсе."""
+    t_ = tpl("rod")
+    if t_ is None:
+        return None, None, None
+    frame = grab()                               # полный кадр, физические пиксели
+    if frame is None or frame.size == 0:
+        return None, None, 0.0
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    th, tw = t_.shape
+    if gray.shape[0] <= th or gray.shape[1] <= tw:
+        return None, None, 0.0
+    best = (0.0, None, None)
+    for f in (0.55, 0.70, 0.85, 1.0, 1.15, 1.3, 1.45):
+        fh, fw = max(8, int(th * f)), max(8, int(tw * f))
+        if fh >= gray.shape[0] or fw >= gray.shape[1]:
+            continue
+        tm = t_ if f == 1.0 else cv2.resize(t_, (fw, fh), interpolation=cv2.INTER_AREA)
+        r = cv2.matchTemplate(gray, tm, cv2.TM_CCOEFF_NORMED)
+        r = np.nan_to_num(r, nan=0.0, posinf=0.0, neginf=0.0)
+        _, mv, _, ml = cv2.minMaxLoc(r)
+        if mv > best[0]:
+            best = (float(mv), ml[0] + fw // 2, ml[1] + fh // 2)
+    score = best[0]
+    if best[1] is None or score < float(CFG.get("rod_match_min", 0.70)):
+        return None, None, score               # порог не достигнут — цели нет
+    return best[1], best[2], score
+
+
+def _red_mask(bgr):
+    """Красные пиксели — та же семья детекторов, что красная рамка «РЫБА СРЫВАЕТСЯ»."""
+    a = bgr.astype(np.int16)
+    return (a[..., 2] > 150) & (a[..., 1] < 80) & (a[..., 0] < 80)
+
+
+def context_menu_info(x, y):
+    """Ищет ОТКРЫТОЕ меню удочки в окне вокруг точки ПКМ (x, y): ориентир — КРАСНАЯ
+    нижняя строка «Выбросить» (игра подсвечивает её красным). Возвращает (use_x, use_y)
+    — точку пункта «Использовать» (ВЕРХНИЙ пункт, сразу НАД красной строкой), либо None,
+    если меню не найдено. Все координаты — физические пиксели."""
+    sx, sy = scale()
+    m = monitor()
+    win_w, win_h = int(360 * sx), int(240 * sy)
+    scan_x = max(0, int(x - 40 * sx))
+    scan_y = max(0, int(y - 40 * sy))
+    win_w = min(win_w, m["left"] + m["width"] - scan_x)
+    win_h = min(win_h, m["top"] + m["height"] - scan_y)
+    if win_w < 40 or win_h < 40:
+        return None
+    img = grab_px(scan_x, scan_y, win_w, win_h)
+    if img is None or img.size == 0:
+        return None
+    red = _red_mask(img)
+    if float(red.mean()) < 0.004:                # строка «Выбросить» ~0.5-6% окна
+        return None
+    rows = red.sum(axis=1)
+    w = img.shape[1]
+    row_ok = np.where(rows > 0.30 * w)[0]
+    if row_ok.size == 0:
+        return None
+    red_top = int(row_ok[0])
+    end = red_top
+    while end < red.shape[0] and rows[end] > 0.30 * w:
+        end += 1
+    band_h = max(8, end - red_top)
+    band = red[red_top:end]
+    cols = band.sum(axis=0)
+    xs = np.where(cols > 0.5 * band.shape[0])[0]
+    red_cx = int((int(xs[0]) + int(xs[-1])) / 2) if xs.size else int(w / 2)
+    use_x = scan_x + red_cx
+    use_y = scan_y + red_top - int(round(band_h * 0.75))   # пункт ВЫШЕ красной строки
+    if use_y < 0:
+        return None
+    return use_x, use_y
+
+
 def use_rod():
     """
-    АВТО-КЛИКЕР ПО ФИКСИРОВАННЫМ КООРДИНАТАМ (эталон 1920x1080, удочка в ПЕРВОМ слоте):
-      1) курсор в rod_click_pos ([126, 256] — первый слот инвентаря), пауза, ОДНО ПКМ —
-         открывается контекстное меню;
-      2) пауза use_menu_delay секунд — игра дорисовывает меню, ранний клик давал промахи;
-      3) курсор в use_click_pos ([205, 278] — пункт «Использовать»), пауза, ОДНА ЛКМ.
-    Ни шаблонов, ни анализа меню: ровно два клика по известным точкам, безопасный темп.
-    Координаты берутся из конфига (страница «Настройки», кнопка 📍 сохраняет сразу).
-    Инвентарь должен быть открыт — use_rod сам ждёт его через wait_inventory_open.
+    ВИЗУАЛЬНОЕ ВЗЯТИЕ УДОЧКИ (v1.9.0, полностью вместо авто-кликера v1.8.0):
+      1) инвентарь открыт человеком (бот ждёт, сам TAB/ESC не жмёт);
+      2) ищем иконку удочки НА ВСЁМ ЭКРАНЕ (rod_on_screen: мульти-масштабный шаблон);
+         ручная точка rod_click_pos (📍) заменяет поиск;
+      3) плавно ПЕРЕТАСКИВАЕМ курсор к иконке, ОДНО ПКМ — открылось меню;
+      4) выжидаем use_menu_delay — игра дорисовывает меню;
+      5) находим пункт «Использовать» по красной строке «Выбросить» (context_menu_info);
+         ручная точка use_click_pos (📍) заменяет поиск;
+      6) плавно ведём курсор на пункт, ОДНА ЛКМ; проверяем, что меню закрылось
+         (второй клик — только если меню зависло, максимум 2 ЛКМ, без спама).
+    Цель не найдена — НИ ОДНОГО клика (клики вслепую по углам и были проблемой v1.8):
+    статус «УДОЧКА НЕ НАЙДЕНА», причина в журнале, False. Инвентарь бот не закрывает.
     """
     wait_inventory_open()
-    rx, ry = int(CFG["rod_click_pos"][0]), int(CFG["rod_click_pos"][1])
-    ux, uy = int(CFG["use_click_pos"][0]), int(CFG["use_click_pos"][1])
-    log(t("log_rod_manual", x=rx, y=ry))
+    set_state("st_rod_find", "st_rod_find_d", "busy")
+    # --- где удочка: ручная точка (📍) или автопоиск по всему экрану ---
+    if CFG.get("rod_click_pos"):
+        rx, ry = int(CFG["rod_click_pos"][0]), int(CFG["rod_click_pos"][1])
+        log(t("log_rod_manual", x=rx, y=ry))
+    else:
+        rx, ry, score = rod_on_screen()
+        if rx is None:
+            if score is None:
+                notify("nt_rod_tpl", "warn")
+                log(t("fail_rod_tpl"))
+            else:
+                log(t("fail_rod_score", s=score, min=float(CFG.get("rod_match_min", 0.70))))
+            set_state("st_rod_fail", "st_rod_fail_d", "busy")
+            return False
+        log(t("log_rod_found", x=rx, y=ry, s=score))
+    # --- шаг 1: плавно к удочке, одно ПКМ ---
     log(t("log_step1"))
-    mouse_move_abs(rx, ry)
-    nap(0.6)                                   # игровой курсор должен встать на слот
+    smooth_move(rx, ry)
+    nap(0.5)                                     # игровой курсор должен встать на слот
     _send_mouse(MOUSEEVENTF_RIGHTDOWN)
     nap(0.15)
     _send_mouse(MOUSEEVENTF_RIGHTUP)
+    # --- шаг 2: меню дорисовывается, находим «Использовать» ---
     log(t("log_step2"))
-    nap(float(CFG.get("use_menu_delay", 1.0)))  # меню успевает появиться и дорисоваться
-    log(t("log_use_manual", ux=ux, uy=uy))
-    mouse_move_abs(ux, uy)
-    nap(0.35)                                  # курсор встал на пункт меню
-    _send_mouse(MOUSEEVENTF_LEFTDOWN)
-    nap(0.15)
-    _send_mouse(MOUSEEVENTF_LEFTUP)
+    nap(float(CFG.get("use_menu_delay", 1.0)))
+    tries = 1 if CFG.get("use_click_pos") else 2
+    for attempt in range(1, tries + 1):
+        if CFG.get("use_click_pos"):
+            ux, uy = int(CFG["use_click_pos"][0]), int(CFG["use_click_pos"][1])
+            log(t("log_use_manual", ux=ux, uy=uy))
+        else:
+            info = context_menu_info(rx, ry)
+            if info is None:
+                log(t("log_menu_missing"))
+                set_state("st_rod_fail", "st_rod_fail_d", "busy")
+                return False                     # меню не открылось — кликать наугад нельзя
+            ux, uy = int(info[0]), int(info[1])
+            log(t("log_use_found", ux=ux, uy=uy))
+        # --- шаг 3: плавно на «Использовать», одна ЛКМ ---
+        smooth_move(ux, uy)
+        nap(0.35)                                # курсор встал на пункт меню
+        _send_mouse(MOUSEEVENTF_LEFTDOWN)
+        nap(0.15)
+        _send_mouse(MOUSEEVENTF_LEFTUP)
+        if CFG.get("use_click_pos"):
+            break                                # ручная точка: подтверждения не требуется
+        nap(0.6)                                 # меню должно закрыться само
+        if context_menu_info(rx, ry) is None:    # меню исчезло => «Использовать» выбран
+            break
+        if attempt == tries:
+            set_state("st_rod_fail", "st_rod_fail_d", "busy")
+            return False
+        log(t("log_menu_stuck"))                 # меню зависло — единственный повторный ЛКМ
     nap(float(CFG.get("after_equip_delay", 1.2)))
     log(t("log_rod_taken"))
     return True
 
 
 def equip_cycle():
-    """Взять удочку: одна клик-последовательность «ПКМ по удочке -> „Использовать"»
-    с ожиданием открытого инвентаря. Вызывается при старте и перед КАЖДЫМ забросом
-    (по инструкции: поймал -> пауза -> ПКМ -> пауза -> «Использовать» -> заброс)."""
-    return use_rod()
+    """Взять удочку: визуальные попытки use_rod() с безопасной паузой rod_retry_delay
+    между ними — пока не получится (или ты не остановишь бота F8/F10 и не поправишь
+    шаблон/точку 📍). Неудачная попытка НЕ КЛИКАЕТ вовсе, поэтому спама нет: бот просто
+    ищет взглядом и ждёт. Причина — в журнале и в тосте (один раз за серию)."""
+    first = True
+    while True:
+        if use_rod():
+            return True
+        if first:
+            first = False
+            notify("nt_rod_fail", "warn")
+        nap(float(CFG.get("rod_retry_delay", 3.0)))
 
 
 def bait_check():
@@ -2624,8 +2834,9 @@ def cast():
 
 
 def fishing_run():
-    # Схема заброса — «авто-кликер» по фиксированным координатам: шаблоны удочки/наживки
-    # не нужны (клики всегда в одни и те же точки экрана), HUD-шаблоны не используются.
+    # Схема заброса — ВИЗУАЛЬНОЕ НАВЕДЕНИЕ (v1.9): удочка и пункт «Использовать» ищутся
+    # на кадре экрана (мульти-масштабный шаблон rod.png + красная строка «Выбросить»),
+    # курсор плавно ведётся к найденной цели. Жёстких координат нет.
     STATS.update({"catches": 0, "t0": time.time(), "t_end": None, "mg": [], "checks": 0})
 
     # Если автозакидывание ВЫКЛЮЧЕНО — бот полностью отключён от инвентаря и забросов:
@@ -2653,8 +2864,9 @@ def fishing_run():
     while True:
         check_stop()
         if first or CFG["cast_after_catch"]:
-            # Инструкция: поймал -> пауза (post_catch_delay уже выдержана) -> мышка в
-            # координату удочки, ОДНО ПКМ -> пауза -> «Использовать» (одна ЛКМ) -> заброс.
+            # Инструкция: поймал -> пауза (post_catch_delay уже выдержана) -> плавно
+            # навести курсор на НАЙДЕННУЮ удочку, ОДНО ПКМ -> пауза -> «Использовать»
+            # (найдено по красной строке меню, одна ЛКМ) -> заброс.
             set_state("st_cast", "st_cast_d", "busy")
             if first and not CFG["equip_on_start"]:
                 log(t("log_rod_skip"))          # удочка уже в руках — начинаем с заброса
@@ -3104,9 +3316,9 @@ class App:
     def xy_entry(self, x, y, cfg_key, label_key):
         """Два поля ввода X / Y + кнопка Задать + кнопка Сброс для ручного ввода координат."""
         self.txt(PANEL_X + 56, PANEL_Y + y + 10, t(label_key), 12, C_TEXT)
-        cur = CFG.get(cfg_key) or [0, 0]
-        vx = tk.StringVar(value=str(int(cur[0])))
-        vy = tk.StringVar(value=str(int(cur[1])))
+        cur = CFG.get(cfg_key)                     # None = автопоиск: поля пустые
+        vx = tk.StringVar(value="" if cur is None else str(int(cur[0])))
+        vy = tk.StringVar(value="" if cur is None else str(int(cur[1])))
         S = self.S
         ex = tk.Entry(self.cv, textvariable=vx, width=6, font=(FONT, max(8, int(11 * S))),
                       bg="#3a3a3a", fg="#ffffff", insertbackground="#ffffff",
@@ -3121,8 +3333,15 @@ class App:
         self.txt(PANEL_X + 452, PANEL_Y + y + 10, "Y:", 11, C_DIM)
 
         def apply_coords():
+            xs, ys = vx.get().strip(), vy.get().strip()
+            if not xs and not ys:                  # оба поля пустые = автопоиск по экрану
+                CFG[cfg_key] = None
+                save_cfg()
+                self.toast(t("toast_auto_mode", label=t(label_key)), "ok")
+                self.show_page(self.page)
+                return
             try:
-                xi, yi = int(vx.get()), int(vy.get())
+                xi, yi = int(xs), int(ys)
                 CFG[cfg_key] = [xi, yi]
                 save_cfg()
                 self.toast(t("toast_set", label=t(label_key), x=xi, y=yi), "ok")
@@ -3131,10 +3350,9 @@ class App:
                 self.toast(t("toast_ints"), "warn")
 
         def reset_coord():
-            CFG[cfg_key] = list(DEFAULT_CFG[cfg_key])   # не None, а стандартные точки:
-            save_cfg()                                  # первый слот / «Использовать»
-            d = DEFAULT_CFG[cfg_key]
-            self.toast(t("toast_auto", label=t(label_key), x=int(d[0]), y=int(d[1])), "ok")
+            CFG[cfg_key] = None                 # «Авто» = автопоиск по экрану (v1.9)
+            save_cfg()
+            self.toast(t("toast_auto_mode", label=t(label_key)), "ok")
             self.show_page(self.page)
 
         def pick_and_fill():
@@ -3163,6 +3381,17 @@ class App:
                 save_cfg()                       # 📍 фиксирует координату СРАЗУ (раньше
                 notify("toast_set", "ok",        # требовалось ещё жать «Задать» — терялась)
                        label=t(label_key), x=px, y=py)
+                if cfg_key == "rod_click_pos":
+                    # 📍 у «ПКМ удочка» заодно снимает шаблон rod.png с экрана: дальше
+                    # удочка ищется зрением в любом месте экрана (v1.9)
+                    ox2, oy2, w2, h2 = CAPTURE["rod"]
+                    isx, isy = scale()
+                    img = grab_px(px + ox2 * isx, py + oy2 * isy, w2 * isx, h2 * isy)
+                    if img is not None and img.size:
+                        os.makedirs(TPL_DIR, exist_ok=True)
+                        cv2.imwrite(os.path.join(TPL_DIR, "rod.png"), img)
+                        _tpl_cache.pop("rod", None)
+                        notify("nt_tpl_saved", "ok", name="rod")
             threading.Thread(target=worker_fn, daemon=True).start()
 
         self.button(540, y, 32, 32, t("b_pick"), pick_and_fill, "gray", 12)
@@ -3350,6 +3579,7 @@ class App:
                 ("m_biteto", "s", ("bite_timeout", 20, 180, 5, "{:g}")),
                 ("m_postdelay", "s", ("post_catch_delay", 0.5, 6, 0.25, "{:.2f}")),
                 ("m_menudelay", "s", ("use_menu_delay", 0.2, 5.0, 0.1, "{:.1f}")),
+                ("m_rodmatch", "s", ("rod_match_min", 0.40, 0.95, 0.05, "{:.2f}")),
                 ("m_hide", "t", "hide_when_running"), ("m_snd_start", "t", "sound_start"),
                 ("m_snd_end", "t", "sound_end"), ("m_snd_catch", "t", "sound_catch"),
                 ("m_maxhold", "s", ("max_hold", 0.5, 8, 0.25, "{:.2f}")),

@@ -10,6 +10,7 @@ import json
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import math          # noqa: E402
+import cv2           # noqa: E402
 import numpy as np   # noqa: E402
 
 import eternal_fishmod as ef  # noqa: E402
@@ -105,25 +106,84 @@ check("inv_header НЕ виден вне инвентаря", ef.find("inv_heade
 set_screen(shot("1791751385077-image.png"))
 check("rod не ложно-срабатывает на игровом экране", ef.best_score("rod") < ef.THR["rod"], f"{ef.best_score('rod'):.2f}")
 
-print("== 3. Авто-кликер заброса: фиксированные координаты и миграция старых конфигов ==")
-check("ПКМ по удочке = первый слот (126, 256)", ef.DEFAULT_CFG["rod_click_pos"] == [126, 256],
-      str(ef.DEFAULT_CFG["rod_click_pos"]))
-check("ЛКМ по «Использовать» = (205, 278)", ef.DEFAULT_CFG["use_click_pos"] == [205, 278],
-      str(ef.DEFAULT_CFG["use_click_pos"]))
-# клик «Использовать» (205, 278) измерен на скриншоте с меню: красная строка «Выбросить»
-# была на y=298, клик выше неё — верхний пункт меню
-check("клик «Использовать» выше красной строки «Выбросить» (y=298)", 278 < 298)
+print("== 3. Визуальный авто-закид (v1.9): автопоиск по кадру, красная строка меню, конфиг ==")
+check("жёстких координат по умолчанию НЕТ (автопоиск)",
+      ef.DEFAULT_CFG["rod_click_pos"] is None and ef.DEFAULT_CFG["use_click_pos"] is None,
+      f"{ef.DEFAULT_CFG['rod_click_pos']} / {ef.DEFAULT_CFG['use_click_pos']}")
+check("новые ключи v1.9 на месте",
+      ef.DEFAULT_CFG["rod_match_min"] == 0.70 and ef.DEFAULT_CFG["move_time"] == 0.30
+      and ef.DEFAULT_CFG["rod_retry_delay"] == 3.0)
+
+# --- удочка: мульти-масштабный поиск по ПОЛНОМУ кадру (реальный скриншот инвентаря) ---
+class _Cap3:
+    """Полный «экран» = img; координаты 1:1 (1920x1080)."""
+    def __init__(self, img):
+        self.img = img
+        self.mon = {"left": 0, "top": 0, "width": img.shape[1], "height": img.shape[0]}
+        self.sx = self.sy = 1.0
+        self.backend, self.is_fallback, self.fps, self.avg_ms = "test", False, 0.0, 0.0
+        self.streaming, self.stream_rect, self.frames = False, None, 0
+
+    def grab_region(self, l, t, w, h):
+        H, W = self.img.shape[:2]
+        x0, y0 = max(0, int(l)), max(0, int(t))
+        x1, y1 = min(W, int(l) + int(w)), min(H, int(t) + int(h))
+        if y1 <= y0 or x1 <= x0:
+            return None
+        return self.img[y0:y1, x0:x1]
+
+    def grab_ref(self, rect):
+        x, y, w, h = rect
+        return self.grab_region(x, y, w, h)
+
+    def grab_full(self):
+        return self.img
+
+
+INV3 = cv2.imread(os.path.join(ROOT, "1791751387911-image.png"))
+MENU3 = cv2.imread(os.path.join(ROOT, "1791751384528-image.png"))
+GAME3 = cv2.imread(os.path.join(ROOT, "27033efd-f8b1-489a-97b3-64f476efafbf.png"))
+assert all(x is not None for x in (INV3, MENU3, GAME3))
+ef.CAP = _Cap3(INV3)
+ef.scale = lambda: (1.0, 1.0)
+ef.monitor = lambda: ef.CAP.mon
+rx, ry, rs = ef.rod_on_screen()
+check("удочка найдена на полном кадре инвентаря (центр (126, 256), score~1.0)",
+      (rx, ry) == (126, 256) and rs > 0.95, f"({rx}, {ry}) score={rs}")
+ef.CAP = _Cap3(GAME3)
+rx2, ry2, rs2 = ef.rod_on_screen()
+check("в игровом кадре (инвентарь закрыт) удочки нет",
+      rx2 is None and rs2 < ef.CFG["rod_match_min"], f"score={rs2}")
+
+# --- меню: красная строка «Выбросить» -> точка «Использовать» ---
+ef.CAP = _Cap3(MENU3)
+info = ef.context_menu_info(126, 256)
+check("меню найдено по красной строке: «Использовать» = (205, y над строкой y=298)",
+      info is not None and info[0] == 205 and 260 <= info[1] < 298, str(info))
+ef.CAP = _Cap3(INV3)
+check("меню закрыто -> None (нет красной строки)", ef.context_menu_info(126, 256) is None)
+
+# --- конфиг: миграция 5 -> 6 и санитизация ---
 import json as _json
 tmp3 = os.path.join(ROOT, "tests", "vision_cfg.json")
 ef.CFG_PATH = tmp3
 with open(tmp3, "w", encoding="utf-8") as f:
-    _json.dump({"rod_click_pos": None, "use_click_pos": [1], "lang": "ru", "cfg_version": 5}, f)
-ef.reset_cfg()
+    _json.dump({"cfg_version": 5, "rod_click_pos": [126, 256], "use_click_pos": [205, 278], "lang": "ru"}, f)
 ef.CFG_DROPPED.clear()
+ef.CFG_MIGRATED.clear()
+ef.CFG.clear()
+ef.CFG.update(ef.DEFAULT_CFG)
 ef.load_cfg()
-check("None/короткий список координат заменён стандартом первого слота",
-      ef.CFG["rod_click_pos"] == [126, 256] and ef.CFG["use_click_pos"] == [205, 278],
+check("конфиг v5 (жёсткие точки 1.8) мигрирует в автопоиск (None/None)",
+      ef.CFG["rod_click_pos"] is None and ef.CFG["use_click_pos"] is None,
       f"{ef.CFG['rod_click_pos']} / {ef.CFG['use_click_pos']}")
+with open(tmp3, "w", encoding="utf-8") as f:
+    _json.dump({"cfg_version": 6, "rod_click_pos": "мусор", "use_click_pos": [1], "lang": "ru"}, f)
+ef.CFG.clear()
+ef.CFG.update(ef.DEFAULT_CFG)
+ef.load_cfg()
+check("битые координаты -> None (автопоиск), без падений",
+      ef.CFG["rod_click_pos"] is None and ef.CFG["use_click_pos"] is None)
 os.remove(tmp3)
 
 print("== 4. relay_decide: реле с предсказанием останова, гистерезис ==")

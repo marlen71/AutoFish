@@ -180,58 +180,104 @@ ef.inventory_open = _real_invopen
 screens["cur"] = GAME
 check("инвентарь закрыт -> None (пропуск, не ошибка)", ef.bait_check() is None)
 
-print("== 3. use_rod: авто-кликер по фиксированным координатам (ПКМ -> пауза -> ЛКМ) ==")
+print("== 3. use_rod: визуальный поиск удочки на полном кадре + меню по красной строке ==")
 screens["cur"] = INV
 sent.clear()
+ef.cursor_pos = lambda: (900, 540)                     # курсор «стоит» вдалеке — бот должен ВЕСТИ его к иконке
+_real_use_rod_fn = ef.use_rod
+_real_send_switch = ef._send_mouse
 
 
-def menu_must_not_be_called(x, y):
-    raise AssertionError("context_menu_info не должен вызываться: клики вслепую по фикс. точкам")
+def send_switch(flags, dx=0, dy=0):
+    sent.append(("mouse", flags, dx, dy))
+    if flags == ef.MOUSEEVENTF_RIGHTUP:
+        screens["cur"] = MENU                          # ПКМ -> игра открыла меню
+    elif flags == ef.MOUSEEVENTF_LEFTUP and screens["cur"] is MENU:
+        screens["cur"] = INV                           # ЛКМ по «Использовать» -> меню закрылось
 
 
-ef.context_menu_info = menu_must_not_be_called
-ef.use_rod()
+ef._send_mouse = send_switch
+ok3 = ef.use_rod()
+ef._send_mouse = _real_send_switch
+check("use_rod успех: удочка найдена зрением, меню отработано", ok3 is True)
+check("курсор ПРИВЕДЁН к найденной удочке (финальный move (126, 256) — центр иконки на кадре)",
+      ("move", 126, 256) in sent, str([k for k in sent if k[0] == "move"][-3:]))
+check("курсор приведён к «Использовать» (x=205, над красной строкой, y 270..300)",
+      any(k[0] == "move" and k[1] == 205 and 270 <= k[2] <= 300 for k in sent))
 flags_seq = [k[1] for k in sent if k[0] == "mouse"]
-check("наведение на первый слот (126, 256)", any(k == ("move", 126, 256) for k in sent))
-check("наведение на «Использовать» (205, 278)", any(k == ("move", 205, 278) for k in sent))
-check("ровно одно ПКМ (одна пара RIGHTDOWN/RIGHTUP)",
-      flags_seq.count(ef.MOUSEEVENTF_RIGHTDOWN) == 1 and flags_seq.count(ef.MOUSEEVENTF_RIGHTUP) == 1,
-      str(flags_seq))
-check("ровно одна ЛКМ (одна пара LEFTDOWN/LEFTUP)",
-      flags_seq.count(ef.MOUSEEVENTF_LEFTDOWN) == 1 and flags_seq.count(ef.MOUSEEVENTF_LEFTUP) == 1,
+check("ровно одно ПКМ и одна ЛКМ",
+      flags_seq.count(ef.MOUSEEVENTF_RIGHTDOWN) == 1 and flags_seq.count(ef.MOUSEEVENTF_RIGHTUP) == 1
+      and flags_seq.count(ef.MOUSEEVENTF_LEFTDOWN) == 1 and flags_seq.count(ef.MOUSEEVENTF_LEFTUP) == 1,
       str(flags_seq))
 check("ПКМ строго раньше ЛКМ", flags_seq.index(ef.MOUSEEVENTF_RIGHTDOWN) < flags_seq.index(ef.MOUSEEVENTF_LEFTDOWN))
 check("бот не трогал клавиатуру (TAB/ESC)", not [k for k in sent if k[0] in ("keydown", "keyup")])
-check("меню не анализировалось (авто-кликер, зрение не нужно)", True)
+check("плавное перетаскивание: к удочке несколько промежуточных точек, не телепорт",
+      len([k for k in sent if k[0] == "move"]) >= 20, str(len([k for k in sent if k[0] == "move"])))
 
-print("== 4. use_rod с координатами из конфига (📍/ручной ввод) ==")
+print("== 3b. Не нашли цель — ни одного клика (никаких слепых кликов по углам) ==")
+_real_inv_open = ef.inventory_open
+ef.inventory_open = lambda: True
+# 1) на экране нет иконки удочки (низкий score)
+screens["cur"] = np.zeros_like(INV) + 15
+sent.clear()
+ef.cursor_pos = lambda: (900, 540)
+check("удочка не найдена на экране -> False", ef.use_rod() is False)
+check("...и НЕ СДЕЛАНО НИ ОДНОГО движения/клика", not sent, str(sent[:4]))
+check("статс «УДОЧКА НЕ НАЙДЕНА»", ef.state_text()[0] == "УДОЧКА НЕ НАЙДЕНА", ef.state_text()[0])
+# 2) файла шаблона нет вовсе
+_real_tpl = ef.tpl
+ef.tpl = lambda name: None if name == "rod" else _real_tpl(name)
+screens["cur"] = INV
+sent.clear()
+check("нет rod.png -> False и ноль кликов", ef.use_rod() is False and not sent)
+ef.tpl = _real_tpl
+# 3) меню после ПКМ не открылось -> ЛКМ не нажимается
+screens["cur"] = INV
+sent.clear()
+ok3b = ef.use_rod()
+mq = [k[1] for k in sent if k[0] == "mouse"]
+check("меню не открылось -> False: ПКМ есть, ЛКМ НЕТ",
+      ok3b is False and mq.count(ef.MOUSEEVENTF_RIGHTDOWN) == 1 and mq.count(ef.MOUSEEVENTF_LEFTDOWN) == 0, str(mq))
+ef.inventory_open = _real_inv_open
+
+print("== 4. Ручные точки 📍 переопределяют автопоиск ==")
+_real_rod_on_screen, _real_cmi = ef.rod_on_screen, ef.context_menu_info
+
+
+def must_not_search():
+    raise AssertionError("автопоиск не должен запускаться: задана ручная точка")
+
+
+ef.rod_on_screen = must_not_search
+ef.context_menu_info = must_not_search
 ef.CFG["rod_click_pos"] = [300, 400]
 ef.CFG["use_click_pos"] = [520, 330]
 sent.clear()
-ef.use_rod()
-check("ПКМ по координате удочки из конфига", any(k == ("move", 300, 400) for k in sent))
-check("ЛКМ по координате «Использовать» из конфига", any(k == ("move", 520, 330) for k in sent))
-ef.CFG["rod_click_pos"] = [126, 256]
-ef.CFG["use_click_pos"] = [205, 278]
+ef.cursor_pos = lambda: (300, 400)
+check("ручная точка удочки: ПКМ по (300, 400)", ef.use_rod() is True and ("move", 300, 400) in sent)
+check("ручная точка «Использовать»: ЛКМ по (520, 330)", ("move", 520, 330) in sent)
+ef.rod_on_screen, ef.context_menu_info = _real_rod_on_screen, _real_cmi
+ef.CFG["rod_click_pos"] = None
+ef.CFG["use_click_pos"] = None
 
-print("== 4b. equip_cycle: ожидание инвентаря + одна последовательность кликов ==")
-sent.clear()
-screens["cur"] = INV                                  # inventory_open() = True
-calls["n"] = 0
-_real_use = ef.use_rod
-
-
-def spy_use_rod():
-    calls["n"] += 1
-    return _real_use()
+print("== 4b. equip_cycle: повторяет попытки без кликов, тост один раз ==")
+calls4 = {"n": 0}
+_real_use_rod = ef.use_rod
+_real_notify = ef.notify
 
 
-ef.use_rod = spy_use_rod
-check("equip_cycle вернул True и вызвал use_rod один раз", ef.equip_cycle() is True and calls["n"] == 1)
-check("equip_cycle не спамит: ровно одно ПКМ и одна ЛКМ",
-      [k[1] for k in sent if k[0] == "mouse"].count(ef.MOUSEEVENTF_RIGHTDOWN) == 1
-      and [k[1] for k in sent if k[0] == "mouse"].count(ef.MOUSEEVENTF_LEFTDOWN) == 1)
-ef.use_rod = _real_use
+def flaky_use_rod():
+    calls4["n"] += 1
+    return calls4["n"] >= 3                # две неудачи, третья — успех
+
+
+ef.use_rod = flaky_use_rod
+notifies4 = []
+ef.notify = lambda kind, tone="ok", **kw: notifies4.append(kind)
+check("equip_cycle довёл до успеха (3 попытки)", ef.equip_cycle() is True and calls4["n"] == 3)
+check("тост «не нашёл» ровно один раз за серию неудач", notifies4.count("nt_rod_fail") == 1)
+ef.use_rod = _real_use_rod
+ef.notify = _real_notify
 
 print("== 5. Заброс и отпускание ЛКМ ==")
 sent.clear()
