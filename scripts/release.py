@@ -474,7 +474,8 @@ def main():
         if url is None:
             warn("GitHub Release НЕ создан: нужен авторизованный gh (gh auth login) или GITHUB_TOKEN.")
         cleanup(notes_file, asset, args, keep=(url is None), drop_asset=bool(asset_ok))
-        summary(tag, new_v, url, pushed=True, asset_ok=asset_ok)
+        summary(tag, new_v, url, pushed=True,
+                asset_ok=(None if args.no_asset else asset_ok))
         return 0 if url else 6
 
     hdr("1. Версия и CHANGELOG")
@@ -593,7 +594,8 @@ def main():
         print("          set GITHUB_TOKEN=**** && python scripts/release.py publish-only %s" % new_v)
         method = "none"
     cleanup(notes_file, asset, args, keep=(url is None), drop_asset=bool(asset_ok))
-    summary(tag, new_v, url, pushed=pushed, asset_ok=asset_ok)
+    summary(tag, new_v, url, pushed=pushed,
+            asset_ok=(None if args.no_asset else asset_ok))
     return 0 if (pushed and url) or args.no_push else 6
 
 
@@ -644,9 +646,12 @@ def summary(tag, new_v, url, pushed=True, asset_ok=None):
         print("  релиз:       %s" % url)
     else:
         print("  релиз:       не создан (см. подсказки выше)")
-    if asset_ok is not None:
-        print("  архив:       %s" % ("прикреплён к релизу" if asset_ok else
-                                     "НЕ прикреплён (см. подсказку выше; качай исходники тега)"))
+    if asset_ok is None:
+        print("  архив:       не собирался (--no-asset); приложит workflow Release build по тегу")
+    elif asset_ok:
+        print("  архив:       прикреплён к релизу")
+    else:
+        print("  архив:       НЕ прикреплён (см. подсказку выше; качай исходники тега)")
     print("")
 
 
