@@ -127,8 +127,7 @@ def install_stubs():
     ef.nap = lambda sec: None
     ef.check_stop = lambda: 0.0
     ef.CFG["tpl_selflearn"] = False             # тесты не должны переписывать шаблоны
-    ef.ROD_MEM["pos"] = None                    # память ячейки — не переносить между секциями
-    ef.ROD_MEM["f"] = None
+    ef.CFG["cast_macro"] = None                 # макро — не переносить между секциями
     ef.learn_game_window = lambda timeout=15.0: "Skyrim"
     ef.game_focused = lambda: True
     ef.GAME_TITLE = "Skyrim"
@@ -183,129 +182,58 @@ ef.inventory_open = _real_invopen
 screens["cur"] = GAME
 check("инвентарь закрыт -> None (пропуск, не ошибка)", ef.bait_check() is None)
 
-print("== 3. use_rod: визуальный поиск удочки на полном кадре + меню по красной строке ==")
+print("== 3. macro_play: запись повторяется 1-в-1 (движения, ПКМ, ЛКМ, тайминги) ==")
 screens["cur"] = INV
 sent.clear()
-ef.cursor_pos = lambda: (900, 540)                     # курсор «стоит» вдалеке — бот должен ВЕСТИ его к иконке
-_real_use_rod_fn = ef.use_rod
-_real_send_switch = ef._send_mouse
+ef.CFG["cast_macro"] = [
+    [0.0, "move", 126, 256], [0.3, "down", "r"], [0.45, "up", "r"],
+    [1.4, "move", 205, 286], [1.7, "down", "l"], [1.85, "up", "l"],
+]
+naps3 = []
+_real_nap3 = ef.nap
+ef.nap = lambda sec: naps3.append(round(float(sec), 3))
+ok3 = ef.macro_play()
+ef.nap = _real_nap3
+check("macro_play успех", ok3 is True)
+moves3 = [k for k in sent if k[0] == "move"]
+check("курсор встал в записанные точки: (126, 256) и (205, 286)",
+      moves3 == [("move", 126, 256), ("move", 205, 286)], str(moves3))
+flags3 = [k[1] for k in sent if k[0] == "mouse"]
+check("ровно одно ПКМ и одна ЛКМ — как в записи",
+      flags3.count(ef.MOUSEEVENTF_RIGHTDOWN) == 1 and flags3.count(ef.MOUSEEVENTF_RIGHTUP) == 1
+      and flags3.count(ef.MOUSEEVENTF_LEFTDOWN) == 1 and flags3.count(ef.MOUSEEVENTF_LEFTUP) == 1,
+      str(flags3))
+check("порядок как записано: ПКМ раньше ЛКМ",
+      flags3.index(ef.MOUSEEVENTF_RIGHTDOWN) < flags3.index(ef.MOUSEEVENTF_LEFTDOWN))
+check("клавиатура не тронута", not [k for k in sent if k[0] in ("keydown", "keyup")])
+check("тайминги из записи переданы в паузы (ПКМ на 0.3 с, «Использовать» на 1.4 с)",
+      any(0.28 <= v <= 0.32 for v in naps3) and any(1.38 <= v <= 1.42 for v in naps3),
+      str(naps3[:6]))
+log_text3 = io.open(ef.LOG_PATH, encoding="utf-8").read() if os.path.exists(ef.LOG_PATH) else ""
+check("в журнале: макро проиграно", "Макро" in log_text3 or "макро" in log_text3.lower(),
+      log_text3.strip()[-70:])
 
-
-def send_switch(flags, dx=0, dy=0):
-    sent.append(("mouse", flags, dx, dy))
-    if flags == ef.MOUSEEVENTF_RIGHTUP:
-        screens["cur"] = MENU                          # ПКМ -> игра открыла меню
-    elif flags == ef.MOUSEEVENTF_LEFTUP and screens["cur"] is MENU:
-        screens["cur"] = INV                           # ЛКМ по «Использовать» -> меню закрылось
-
-
-ef._send_mouse = send_switch
-ok3 = ef.use_rod()
-ef._send_mouse = _real_send_switch
-check("use_rod успех: удочка найдена зрением, меню отработано", ok3 is True)
-check("курсор ПРИВЕДЁН к найденной удочке (центр иконки ~ (126, 256) на кадре, ±5 px)",
-      any(k[0] == "move" and abs(k[1] - 126) <= 5 and abs(k[2] - 256) <= 5 for k in sent),
-      str([k for k in sent if k[0] == "move"][-3:]))
-check("курсор приведён к «Использовать» (x=205, над красной строкой, y 270..300)",
-      any(k[0] == "move" and k[1] == 205 and 270 <= k[2] <= 300 for k in sent))
-flags_seq = [k[1] for k in sent if k[0] == "mouse"]
-check("ровно одно ПКМ и одна ЛКМ",
-      flags_seq.count(ef.MOUSEEVENTF_RIGHTDOWN) == 1 and flags_seq.count(ef.MOUSEEVENTF_RIGHTUP) == 1
-      and flags_seq.count(ef.MOUSEEVENTF_LEFTDOWN) == 1 and flags_seq.count(ef.MOUSEEVENTF_LEFTUP) == 1,
-      str(flags_seq))
-check("ПКМ строго раньше ЛКМ", flags_seq.index(ef.MOUSEEVENTF_RIGHTDOWN) < flags_seq.index(ef.MOUSEEVENTF_LEFTDOWN))
-check("бот не трогал клавиатуру (TAB/ESC)", not [k for k in sent if k[0] in ("keydown", "keyup")])
-check("плавное перетаскивание: к удочке несколько промежуточных точек, не телепорт",
-      len([k for k in sent if k[0] == "move"]) >= 4, str(len([k for k in sent if k[0] == "move"])))
-check("успех запомнил подтверждённую ячейку удочки",
-      ef.ROD_MEM["pos"] is not None and abs(ef.ROD_MEM["pos"][0] - 126) <= 6,
-      str(ef.ROD_MEM["pos"]))
-
-print("== 3c. Память ячейки: повторный заброс без поиска, ровно в ту же точку ==")
-_real_cands = ef.rod_candidates
-
-
-def no_search(*a, **k):
-    raise AssertionError("поиск не нужен: ячейка подтверждена и проверена")
-
-
-ef.rod_candidates = no_search
+print("== 3b. Макро не записано: ни одного клика, сессия останавливается с no_macro ==")
+ef.CFG["cast_macro"] = None
 sent.clear()
-screens["cur"] = INV
-_saved_send = ef._send_mouse
-ef._send_mouse = send_switch               # тот же переключатель экранов, что в §3
-ok_mem = ef.use_rod()
-ef._send_mouse = _saved_send
-check("повторный use_rod прошёл по памяти", ok_mem is True)
-check("клик ровно в запомненную точку", ("move", ef.ROD_MEM["pos"][0], ef.ROD_MEM["pos"][1]) in sent)
-ef.rod_candidates = _real_cands
-ef.ROD_MEM["pos"] = None
-ef.ROD_MEM["f"] = None
+check("macro_play без записи -> False", ef.macro_play() is False)
+check("...и ноль нажатий", not sent, str(sent[:4]))
+ef.CFG.update({"auto_cast": True, "equip_on_start": True})
+ef.STATS.update({"catches": 0, "t0": time.time(), "t_end": None, "mg": [], "checks": 0})
+check("fishing_run без макро возвращает no_macro", ef.fishing_run() == "no_macro")
+check("причина no_macro переводится", "макро" in ef.reason_text("no_macro", "").lower(),
+      ef.reason_text("no_macro", ""))
+ef.CFG["cast_macro"] = [[0.0, "down", "r"], [0.2, "up", "r"], [0.5, "down", "l"], [0.7, "up", "l"]]
 
-print("== 3b. Не нашли цель — ни одного клика (никаких слепых кликов по углам) ==")
-_real_inv_open = ef.inventory_open
-ef.inventory_open = lambda: True
-# 1) на экране нет иконки удочки (низкий score)
-screens["cur"] = np.zeros_like(INV) + 15
+print("== 4. macro_run: произвольные кнопки и порядок (ПКМ-режим без движений) ==")
 sent.clear()
-ef.cursor_pos = lambda: (900, 540)
-check("удочка не найдена на экране -> False", ef.use_rod() is False)
-check("...и НЕ СДЕЛАНО НИ ОДНОГО движения/клика", not sent, str(sent[:4]))
-check("статс «УДОЧКА НЕ НАЙДЕНА»", ef.state_text()[0] == "УДОЧКА НЕ НАЙДЕНА", ef.state_text()[0])
-# 2) файла шаблона нет вовсе
-_real_tpl = ef.tpl
-ef.tpl = lambda name: None if name == "rod" else _real_tpl(name)
-screens["cur"] = INV
-sent.clear()
-check("нет rod.png -> False и ноль кликов", ef.use_rod() is False and not sent)
-ef.tpl = _real_tpl
-# 3) меню после ПКМ не открылось -> ЛКМ не нажимается
-screens["cur"] = INV
-sent.clear()
-ok3b = ef.use_rod()
-mq = [k[1] for k in sent if k[0] == "mouse"]
-check("меню не открылось -> False: ПКМ есть, ЛКМ НЕТ",
-      ok3b is False and mq.count(ef.MOUSEEVENTF_RIGHTDOWN) == 1 and mq.count(ef.MOUSEEVENTF_LEFTDOWN) == 0, str(mq))
-ef.inventory_open = _real_inv_open
-
-print("== 4. Ручные точки 📍 переопределяют автопоиск ==")
-_real_rod_locate, _real_cmi = ef._rod_locate, ef.context_menu_info
-
-
-def must_not_search(*a, **k):
-    raise AssertionError("автопоиск не должен запускаться: задана ручная точка")
-
-
-ef._rod_locate = must_not_search
-ef.context_menu_info = must_not_search
-ef.CFG["rod_click_pos"] = [300, 400]
-ef.CFG["use_click_pos"] = [520, 330]
-sent.clear()
-ef.cursor_pos = lambda: (300, 400)
-check("ручная точка удочки: ПКМ по (300, 400)", ef.use_rod() is True and ("move", 300, 400) in sent)
-check("ручная точка «Использовать»: ЛКМ по (520, 330)", ("move", 520, 330) in sent)
-ef._rod_locate, ef.context_menu_info = _real_rod_locate, _real_cmi
-ef.CFG["rod_click_pos"] = None
-ef.CFG["use_click_pos"] = None
-
-print("== 4b. equip_cycle: повторяет попытки без кликов, тост один раз ==")
-calls4 = {"n": 0}
-_real_use_rod = ef.use_rod
-_real_notify = ef.notify
-
-
-def flaky_use_rod(*a, **k):
-    calls4["n"] += 1
-    return calls4["n"] >= 3                # две неудачи, третья — успех
-
-
-ef.use_rod = flaky_use_rod
-notifies4 = []
-ef.notify = lambda kind, tone="ok", **kw: notifies4.append(kind)
-check("equip_cycle довёл до успеха (3 попытки)", ef.equip_cycle() is True and calls4["n"] == 3)
-check("тост «не нашёл» ровно один раз за серию неудач", notifies4.count("nt_rod_fail") == 1)
-ef.use_rod = _real_use_rod
-ef.notify = _real_notify
+ok4 = ef.macro_run(ef.CFG["cast_macro"])
+flags4 = [k[1] for k in sent if k[0] == "mouse"]
+check("macro_run доиграл до конца", ok4 is True)
+check("события ровно как в записи", flags4 == [ef.MOUSEEVENTF_RIGHTDOWN, ef.MOUSEEVENTF_RIGHTUP,
+                                               ef.MOUSEEVENTF_LEFTDOWN, ef.MOUSEEVENTF_LEFTUP],
+      str(flags4))
+ef.CFG["cast_macro"] = None
 
 print("== 5. Заброс и отпускание ЛКМ ==")
 sent.clear()
@@ -348,7 +276,7 @@ print("== 6. Главный цикл: поймал рыбу -> стоп по н�
 ef.CFG.update({"auto_cast": True, "equip_on_start": True, "bite_timeout": 1,
                "no_bite_limit": 3, "post_catch_delay": 0.0, "cast_delay": 0.0})
 screens["cur"] = GAME
-ef.equip_cycle = lambda: sent.append(("equip",)) or True
+ef.macro_play = lambda: sent.append(("equip",)) or True
 bites["n"] = 0
 
 
@@ -372,7 +300,7 @@ check("цикл прерван стопом на втором клёве", raise
 check("одна рыба засчитана", ef.STATS["catches"] == 1, str(ef.STATS["catches"]))
 check("время мини-игры записано в статистику", ef.STATS["mg"] == [3.5], str(ef.STATS["mg"]))
 check("клёв ожидался дважды (после улова цикл продолжился)", bites["n"] == 2, str(bites["n"]))
-check("перед забросом удочка взята (equip_cycle вызван)", any(k[0] == "equip" for k in sent))
+check("перед забросом макро проиграно (macro_play вызван)", any(k[0] == "equip" for k in sent))
 check("наживка не останавливала сессию (только журнал)",
       not [k for k in sent if k[0] == "stop_no_bait"])
 log_text = io.open(ef.LOG_PATH, encoding="utf-8").read() if os.path.exists(ef.LOG_PATH) else ""

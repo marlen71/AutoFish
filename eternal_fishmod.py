@@ -19,19 +19,13 @@ Eternal FishMod — полуавтомат рыбалки для Skyrim RP-се�
   * Распознавание рыбы не зависит от её цвета (контраст по горизонтали внутри шкалы),
     поэтому подходит для любых видов рыб.
   * Полная локализация интерфейса: RU / EN / UA, переключение на лету (страница «Настройки»).
-  * Авто-закидывание — ВИЗУАЛЬНОЕ НАВЕДЕНИЕ (v1.10), тот же конвейер, что у мини-игры
-    (полный DXGI-кадр -> OpenCV): бот сканирует ВЕСЬ экран — иконка удочки ищется
-    мульти-масштабным шаблоном (грубая лестница на полукадре + точный подбор масштаба),
-    кривой шаблон обрезается от полей и после подтверждённого клика САМ обновляется
-    с экрана; курсор плавно ПЕРЕТАСКИВАЕТСЯ к цели, одно ПКМ, затем по красной строке
-    «Выбросить» находит пункт «Использовать» и ведёт курсор туда, одна ЛКМ -> заброс;
-    то же после каждой рыбы. Прицел «чётко в предмет»: совпадение принимается только
-    рядом с реальной иконкой предмета (сетка предметов с экрана), подтверждённая меню
-    ячейка запоминается — следующие забросы кликают точно в неё. Клики маппятся через
-    весь виртуальный рабочий стол (MULTIMONITOR-безопасно). Никаких жёстких координат —
-    работает при любом положении, разрешении и масштабе инвентаря. 📍 на «Настройках» —
-    своя точка + мгновенный снимок шаблона; пусто = автопоиск. Инвентарь открывает
-    человек (TAB бот не жмёт). «Только мини-игра» = инвентарь и забросы отключены.
+  * Авто-закидывание — ЗАПИСЬ/ПОВТОР МАКРО (v1.12): один раз жмёшь «⏺ Записать» на
+    «Настройках», сам делаешь закид (ПКМ по удочке -> пауза -> клик по «Использовать»)
+    — бот запоминает все движения мыши и нажатия с таймингами и затем повторяет запись
+    1-в-1 после каждой рыбы. Работает при любом интерфейсе, разрешении и скинах:
+    запись уже «работает», повторять её надёжнее любого распознавания. «▷ Проверить»
+    — проиграть запись, «✕ Стереть» — записать заново. Инвентарь открывает человек
+    (TAB бот не жмёт). «Только мини-игра» = инвентарь и забросы отключены.
   * Лаунчер launch.py / start.bat, файл VERSION + scripts/release.py (релизы на GitHub).
 
 Установка:  python launch.py   (сам поставит зависимости)   или   pip install -r requirements.txt
@@ -107,7 +101,7 @@ CFG_PATH = os.path.join(BASE_DIR, "fishmod_config.json")
 STATS_PATH = os.path.join(BASE_DIR, "fishmod_stats.json")
 LOG_PATH = os.path.join(BASE_DIR, "fishmod.log")
 VERSION_PATH = os.path.join(BASE_DIR, "VERSION")
-CFG_VERSION = 8                  # формат конфига: меняем только при НЕсовместимых правках
+CFG_VERSION = 9                  # формат конфига: меняем только при НЕсовместимых правках
 REF_W, REF_H = 1920, 1080
 
 
@@ -146,22 +140,16 @@ DEFAULT_CFG = {
     "post_catch_delay": 2.5,             # пауза после пойманной рыбы перед следующим циклом
     "after_equip_delay": 1.2,            # пауза после «Использовать» до заброса
     "cast_delay": 0.8,                   # пауза перед закидыванием удочки
-    "use_menu_delay": 1.0,               # пауза (с) между ПКМ по удочке и ЛКМ по
-                                         # «Использовать»: игра дорисовывает меню, ранний
-                                         # клик давал промахи. Безопасный темп, без спама
     "idle_cursor": [1250, 500],
     # ВИЗУАЛЬНЫЙ АВТО-ЗАКИД (v1.9): жёстких координат НЕТ. Удочка ищется по ВСЕМУ экрану
     # (мульти-масштабный шаблон rod.png), «Использовать» — по красной строке «Выбросить»
     # в открытом меню. Ключи ниже — только РУЧНОЕ переопределение (страница «Настройки»):
     # 📍 у «ПКМ удочка» заодно снимает шаблон rod.png с экрана; пусто/None = автопоиск.
-    "rod_click_pos": None,               # ручная точка ПКМ по удочке; None = автопоиск
-    "use_click_pos": None,               # ручная точка «Использовать»; None = поиск по меню
-    "rod_match_min": 0.70,               # порог совпадения шаблона удочки на полном кадре
-    "move_time": 0.18,                   # сколько секунд курсор едет к цели (коротко и решительно)
-    "rod_retry_delay": 3.0,              # пауза между попытками найти удочку/меню
-    "tpl_selflearn": True,               # нашла цель с высоким совпадением -> шаблон
-                                         # обновляется с экрана (самообучение: кривой
-                                         # кроп/чужое разрешение чинятся сами)
+    "tpl_selflearn": True,               # наживка: лучший стек обновляет bait.png с экрана
+    # АВТО-ЗАКИД = ЗАПИСАННОЕ МАКРО (v1.12): один раз записываешь свои движения и клики
+    # (ПКМ по удочке -> пауза -> клик по «Использовать»), бот повторяет запись 1-в-1
+    # после каждой рыбы. Запись: «Настройки» -> «⏺ Записать».
+    "cast_macro": None,                  # события [[t, "move"|"down"|"up", ...], ...] или None
     "sound_start": True, "sound_end": True, "sound_catch": False, "volume": 60,
     "hide_when_running": True,           # прятать окно, пока бот ловит (оверлей не мешает «зрению»)
     "ui_scale": 0.72,
@@ -211,7 +199,8 @@ REMOVED_CFG_KEYS = ("pid_mode", "pid_kp", "pid_ki", "pid_kd", "pid_ilim", "pid_d
                     "pwm_hz", "vel_gain", "vel_max", "stop_acc", "zone_margin", "deadzone",
                     "lead_time", "lead_max", "hover_adapt", "hover_ref", "hover_k", "hover_span",
                     "brake_ms", "bait_check_every", "use_offset", "equip_retry_delay",
-                    "inv_wheel_center")
+                    "inv_wheel_center", "rod_click_pos", "use_click_pos", "rod_match_min",
+                    "move_time", "use_menu_delay", "rod_retry_delay")
 CFG = dict(DEFAULT_CFG)
 
 THR = {"rod": 0.90, "bait": 0.90, "inv_header": 0.80,
@@ -255,13 +244,13 @@ def load_cfg():
             for k in REMOVED_CFG_KEYS:
                 if k in data and k not in CFG_DROPPED:
                     CFG_DROPPED.append(k)
-            # ручные точки (v1.9): валидны либо None (автопоиск), либо пара чисел;
-            # мусор из старых конфигов молча превращается в автопоиск
-            for k in ("rod_click_pos", "use_click_pos"):
-                v = CFG.get(k)
-                if not (isinstance(v, (list, tuple)) and len(v) == 2
-                        and all(isinstance(n, (int, float)) and not isinstance(n, bool) for n in v)):
-                    CFG[k] = None
+            # макро закидывания (v1.12): список событий [t, kind, ...]; мусор -> None
+            _m = CFG.get("cast_macro")
+            if _m is not None and not (isinstance(_m, list) and _m
+                                       and all(isinstance(e, (list, tuple)) and len(e) >= 3
+                                               and isinstance(e[0], (int, float))
+                                               and e[1] in ("move", "down", "up") for e in _m)):
+                CFG["cast_macro"] = None
             # устаревшие ЗНАЧЕНИЯ мигрируем явно (CFG_VERSION не меняем — ключ-то на месте).
             # mss из проекта вырезан, а конфиги версий 1.2-1.3 успели записать
             # "capture_backend": "mss" при тихом откате — иначе пользователь навсегда
@@ -270,20 +259,8 @@ def load_cfg():
                 CFG["capture_backend"] = DEFAULT_CFG["capture_backend"]
                 CFG_MIGRATED.append("capture_backend")
             if int(data.get("cfg_version", 1) or 1) < CFG_VERSION:
-                if int(data.get("cfg_version", 1) or 1) < 8:
-                    # v1.11: ход курсора короче и решительнее (0.30 -> 0.18 с)
-                    CFG["move_time"] = DEFAULT_CFG["move_time"]
-                    CFG_MIGRATED.append("move_time")
-                if int(data.get("cfg_version", 1) or 1) < 6:
-                    # в 1.8.0 rod_click_pos/use_click_pos были ЖЁСТКИМИ точками клика
-                    # (дефолт [126,256]/[205,278] — у многих не совпадал с инвентарём).
-                    # В 1.9.0 это ручное переопределение автопоиска: старые значения
-                    # сбрасываем, чтобы сразу работал визуальный поиск по экрану.
-                    CFG["rod_click_pos"] = None
-                    CFG["use_click_pos"] = None
-                    CFG_MIGRATED.append("rod_click_pos")
-                    CFG_MIGRATED.append("use_click_pos")
-                # аддитивная миграция: ничего не выбрасываем, только добавляем недостающие ключи
+                # аддитивная миграция: недостающие ключи (в т.ч. cast_macro) добавляем
+                # дефолтами; устаревшие чистит REMOVED_CFG_KEYS выше
                 CFG.update({k: v for k, v in DEFAULT_CFG.items() if k not in known})
                 save_cfg()
             return True
@@ -354,23 +331,35 @@ STRINGS = {
     "m_maxhold": "Макс. удержание, с",
     "m_lostms": "Потеря зоны, мс", "m_fishthr": "Порог контраста рыбы", "m_fishdet": "Поиск рыбы",
     "m_barpad": "Отступ рамки, px", "m_slipthr": "Порог красной рамки",
-    "s_sec_lang": "ЯЗЫК / LANGUAGE / МОВА", "s_sec_binds": "Горячие клавиши", "s_sec_coords": "Точки удочки (пусто = автопоиск)",
-    "s_lang": "Язык интерфейса", "s_bind_toggle": "Старт / Стоп", "s_bind_panic": "Аварийный стоп",
+    "s_sec_lang": "ЯЗЫК / LANGUAGE / МОВА", "s_sec_binds": "Горячие клавиши", "s_lang": "Язык интерфейса", "s_bind_toggle": "Старт / Стоп", "s_bind_panic": "Аварийный стоп",
     "s_bind_gui": "Показать / скрыть окно", "s_volume": "Громкость звуков, %", "s_cast_delay": "Задержка заброса, сек",
-    "s_rod_pos": "ПКМ удочка:", "s_use_pos": "ЛКМ «Использовать»:",
     "s_game_none": "Окно игры определяется при старте (F8 в игре)", "s_game": "Окно игры: «{title}»",
     "s_version": "Версия {v} · захват: {b}", "s_capture_backend": "Захват при старте",
     "toast_cfg_saved": "Конфиг сохранён успешно", "toast_cfg_save_fail": "Не удалось сохранить конфиг",
     "toast_cfg_loaded": "Конфиг загружен успешно", "toast_cfg_missing": "Файл конфига не найден",
-    "toast_cfg_reset": "Настройки сброшены", "toast_ints": "Введи целые числа",
-    "toast_pick": "Кликни на нужное место…", "toast_coords": "Координаты: ({x}, {y})",
-    "toast_set": "{label} → ({x}, {y})", "toast_auto_mode": "{label} → автопоиск по экрану", "toast_lang": "Язык: {lang}",
+    "toast_cfg_reset": "Настройки сброшены", "toast_lang": "Язык: {lang}",
+    "s_sec_macro": "МАКРО ЗАКИДЫВАНИЯ (запиши один раз — бот повторяет сам)",
+    "s_macro_none": "не записано", "s_macro_len": "записано: {d:.1f} с · кликов: {n}",
+    "b_rec": "⏺ Записать", "b_play": "▷ Проверить", "b_clear": "✕ Стереть",
+    "toast_rec_go": "Запись через {i}…",
+    "toast_rec_on": "⏺ ПИШУ: сделай ПКМ по удочке → пауза → клик по «Использовать», потом 2 с не трогай мышь",
+    "toast_rec_done": "Макро сохранено: {d:.1f} с, кликов {n}",
+    "toast_rec_empty": "В записи нет кликов — макро не сохранено",
+    "toast_rec_running": "Сначала останови бота (F8)",
+    "toast_macro_cleared": "Макро стёрто",
+    "toast_macro_need_inv": "Открой инвентарь в игре — потом «▷ Проверить»",
+    "log_macro_play": "▶ Макро закидывания: повторяю запись ({d:.1f} с, {n} событий)",
+    "log_macro_done": "✔ Макро выполнено — удочка взята",
+    "log_macro_none": "❌ Макро закидывания не записано — «Настройки» → «⏺ Записать»",
+    "log_macro_saved": "💾 Макро закидывания сохранено: {d:.1f} с, {n} событий",
+    "log_rec_fail": "❌ Запись макро не удалась: {e}",
+    "nt_macro_none": "Сначала запиши закид: «Настройки» → «⏺ Записать»",
+    "reason_no_macro": "макро закидывания не записано",
+    "log_rod_skip": "🎣 equip_on_start выключен — начинаю с заброса (удочка уже в руках)",
     "st_stopped": "ОСТАНОВЛЕНО", "st_idle_d": "Нажми СТАРТ или F8",
     "st_starting": "ЗАПУСК", "st_starting_d": "Определяю окно игры…",
     "st_prepare": "ПОДГОТОВКА", "st_prepare_d": "Проверяю удочку и наживку",
     "st_cast": "ЗАКИДЫВАЮ", "st_cast_d": "Закидываю удочку…",
-    "st_rod_find": "ИЩУ УДОЧКУ", "st_rod_find_d": "Ищу иконку удочки на экране…",
-    "st_rod_fail": "УДОЧКА НЕ НАЙДЕНА", "st_rod_fail_d": "Сними шаблон «Шаблон: удочка» («Зрение») или задай точку 📍 («Настройки»)",
     "st_bite": "КЛЁВ", "st_bite_d": "Ожидание клёва…", "st_bite_wait_d": "Ожидание клёва… {n} с",
     "st_mini": "МИНИ-ИГРА", "st_mini_d": "Вылавливаю рыбу!", "st_mini_hold_d": "Удерживаю рыбу в зоне",
     "st_caught": "ЛОВЛЯ", "st_caught_d": "Рыба поймана",
@@ -381,24 +370,10 @@ STRINGS = {
     "log_resume": "▶ Окно игры снова активно", "log_start": "▶ Рыбалка началась",
     "log_stop": "■ Рыбалка закончилась — {reason}. Поймано: {n}", "log_mini": "🎣 Мини-игра",
     "log_caught": "🐟 Поймано #{n} (мини-игра {dur:.1f} с)", "log_no_bite": "⌛ Нет поклёвки {t} с ({k}/{lim})",
-    "log_rod_manual": "🎣 Удочка: курсор в ({x}, {y}), одно ПКМ",
-    "log_use_manual": "🖱 «Использовать»: курсор в ({ux}, {uy}), одна ЛКМ",
-        "m_det_auto": "авто (контраст)", "m_det_both": "контраст+HSV", "m_det_hsv": "только HSV", "log_step1": "🖱 Шаг 1: курсор на удочку → одно ПКМ", "log_step2": "🖱 Шаг 2: пауза под меню → одна ЛКМ по «Использовать»",
-    "log_rod_taken": "✔ Заброс готов: ПКМ по удочке и ЛКМ по «Использовать» отправлены",
-    "log_rod_found": "🎣 Удочка найдена на экране: ({x}, {y}), совпадение {s:.2f}",
-    "log_use_found": "🖱 «Использовать» найдено по красной строке меню: ({ux}, {uy}), одна ЛКМ",
-    "log_menu_missing": "❌ Меню удочки не найдено (нет красной строки «Выбросить») — попробую ещё раз",
-    "log_menu_stuck": "⚠ Меню не закрылось после ЛКМ — жму «Использовать» ещё раз (последняя попытка)",
-    "fail_rod_tpl": "❌ Нет шаблона rod.png — «Зрение» → «Шаблон: удочка» (курсор на иконку) или точка 📍 на «Настройках»",
-    "fail_rod_score": "❌ Удочка не найдена на экране: лучшее совпадение {s:.2f} < порога {min:.2f} — пересними шаблон или задай 📍",
-    "nt_rod_fail": "Удочку не нашёл — пересними шаблон или задай 📍",
-    "nt_rod_tpl": "Нет шаблона rod.png — сними его на странице «Зрение»",
+    "m_det_auto": "авто (контраст)", "m_det_both": "контраст+HSV", "m_det_hsv": "только HSV", "log_use_found": "🖱 «Использовать» найдено по красной строке меню: ({ux}, {uy}), одна ЛКМ",
     "log_self_learn": "🧠 Шаблон {name}.png обновлён с экрана (совпадение {s:.2f}) — поиск станет точнее",
     "log_bait_notpl": "Нет шаблона bait.png — наживка не проверяется («Зрение» → «Шаблон: наживка»)",
-    "log_rod_mem": "🎯 Клик по запомненной ячейке удочки ({x}, {y}) — там меню уже подтверждалось",
-    "log_rod_mem_lost": "🧭 Запомненная ячейка не подтвердилась ({s:.2f}) — ищу по всему экрану",
-    "log_rod_freeform": "⚠ Сетка предметов не найдена — клик по свободной точке ({x}, {y}), совпадение {s:.2f}",
-    "log_rod_skip": "🎣 equip_on_start выключен — начинаю с заброса (удочка уже в руках)", "log_bait": "🪱 Наживка: {state} (стаков на экране: {n})",
+    "log_bait": "🪱 Наживка: {state} (стаков на экране: {n})",
     "bait_yes": "есть", "bait_no": "НЕТ", "log_rod_missing": "🎣 Удочки нет в руках — беру",
     "log_bait_icon": "🪱 Значок наживки пропал — проверяю инвентарь",
     "log_mode_mini_only": "🎣 Режим: только мини-игра — инвентарь и забросы полностью отключены",
@@ -406,7 +381,7 @@ STRINGS = {
     "nt_inv_wait": "Открой инвентарь в игре",
     "log_bait_skip": "Проверка наживки пропущена — инвентарь закрыт",
     "st_inv_wait": "ОТКРОЙ ИНВЕНТАРЬ", "st_inv_wait_d": "Открой инвентарь — бот ждёт…",
-    "m_menudelay": "Пауза ПКМ→«Использовать», с", "m_rodmatch": "Порог шаблона удочки", "m_selflearn": "Обновлять шаблоны с экрана",
+    "m_selflearn": "Обновлять шаблоны с экрана",
     "log_cast": "🪝 Заброс удочки…", "log_cast_done": "🪝 Заброс выполнен — жду клёва",
     "log_slip": "⚠ Рыба срывается — аварийное удержание", "log_mini_done": "✔ Мини-игра: {dur:.1f} с, срывов {slip}, ЛКМ {sw:.1f} перекл/с",
     "log_debug": "📷 debug_screen.png, debug_bar.png сохранены. {parts} | zone={zone} fish={fish}",
@@ -473,23 +448,35 @@ STRINGS = {
     "m_maxhold": "Max hold, s",
     "m_lostms": "Zone lost, ms", "m_fishthr": "Fish contrast threshold", "m_fishdet": "Fish detection",
     "m_barpad": "Bar border pad, px", "m_slipthr": "Red frame threshold",
-    "s_sec_lang": "ЯЗЫК / LANGUAGE / МОВА", "s_sec_binds": "Hotkeys", "s_sec_coords": "Rod points (empty = auto-search)",
-    "s_lang": "Interface language", "s_bind_toggle": "Start / Stop", "s_bind_panic": "Panic stop",
+    "s_sec_lang": "ЯЗЫК / LANGUAGE / МОВА", "s_sec_binds": "Hotkeys", "s_lang": "Interface language", "s_bind_toggle": "Start / Stop", "s_bind_panic": "Panic stop",
     "s_bind_gui": "Show / hide window", "s_volume": "Sound volume, %", "s_cast_delay": "Cast delay, s",
-    "s_rod_pos": "RMB on rod:", "s_use_pos": "LMB on “Use”:",
     "s_game_none": "Game window is detected on start (press F8 inside the game)", "s_game": "Game window: “{title}”",
     "s_version": "Version {v} · capture: {b}", "s_capture_backend": "Capture on start",
     "toast_cfg_saved": "Config saved successfully", "toast_cfg_save_fail": "Failed to save config",
     "toast_cfg_loaded": "Config loaded successfully", "toast_cfg_missing": "Config file not found",
-    "toast_cfg_reset": "Settings reset", "toast_ints": "Enter whole numbers",
-    "toast_pick": "Click on the needed spot…", "toast_coords": "Coordinates: ({x}, {y})",
-    "toast_set": "{label} → ({x}, {y})", "toast_auto_mode": "{label} → on-screen auto-search", "toast_lang": "Language: {lang}",
+    "toast_cfg_reset": "Settings reset", "toast_lang": "Language: {lang}",
+    "s_sec_macro": "CAST MACRO (record once — the bot repeats it itself)",
+    "s_macro_none": "not recorded", "s_macro_len": "recorded: {d:.1f} s · clicks: {n}",
+    "b_rec": "⏺ Record", "b_play": "▷ Test", "b_clear": "✕ Clear",
+    "toast_rec_go": "Recording in {i}…",
+    "toast_rec_on": "⏺ RECORDING: RMB on the rod → pause → click “Use”, then keep the mouse still for 2 s",
+    "toast_rec_done": "Macro saved: {d:.1f} s, {n} clicks",
+    "toast_rec_empty": "No clicks recorded — macro not saved",
+    "toast_rec_running": "Stop the bot first (F8)",
+    "toast_macro_cleared": "Macro cleared",
+    "toast_macro_need_inv": "Open the in-game inventory — then “▷ Test”",
+    "log_macro_play": "▶ Cast macro: replaying the recording ({d:.1f} s, {n} events)",
+    "log_macro_done": "✔ Macro done — rod is taken",
+    "log_macro_none": "❌ Cast macro not recorded — Settings → “⏺ Record”",
+    "log_macro_saved": "💾 Cast macro saved: {d:.1f} s, {n} events",
+    "log_rec_fail": "❌ Macro recording failed: {e}",
+    "nt_macro_none": "Record the cast first: Settings → “⏺ Record”",
+    "reason_no_macro": "cast macro not recorded",
+    "log_rod_skip": "🎣 equip_on_start is off — starting with the cast (rod already in hands)",
     "st_stopped": "STOPPED", "st_idle_d": "Press START or F8",
     "st_starting": "STARTING", "st_starting_d": "Detecting the game window…",
     "st_prepare": "PREPARING", "st_prepare_d": "Checking rod and bait",
     "st_cast": "CASTING", "st_cast_d": "Casting the rod…",
-    "st_rod_find": "FINDING ROD", "st_rod_find_d": "Looking for the rod icon on screen…",
-    "st_rod_fail": "ROD NOT FOUND", "st_rod_fail_d": "Capture the “Rod template” (Vision page) or set the 📍 point (Settings)",
     "st_bite": "WAITING", "st_bite_d": "Waiting for a bite…", "st_bite_wait_d": "Waiting for a bite… {n} s",
     "st_mini": "MINIGAME", "st_mini_d": "Reeling the fish in!", "st_mini_hold_d": "Holding the fish in the zone",
     "st_caught": "FISHING", "st_caught_d": "Fish caught",
@@ -500,24 +487,10 @@ STRINGS = {
     "log_resume": "▶ Game window is active again", "log_start": "▶ Fishing started",
     "log_stop": "■ Fishing finished — {reason}. Caught: {n}", "log_mini": "🎣 Minigame",
     "log_caught": "🐟 Caught #{n} (minigame {dur:.1f} s)", "log_no_bite": "⌛ No bite for {t} s ({k}/{lim})",
-    "log_rod_manual": "🎣 Rod: cursor to ({x}, {y}), one RMB",
-    "log_use_manual": "🖱 “Use”: cursor to ({ux}, {uy}), one LMB",
-        "m_det_auto": "auto (contrast)", "m_det_both": "contrast+HSV", "m_det_hsv": "HSV only", "log_step1": "🖱 Step 1: cursor to the rod → one RMB", "log_step2": "🖱 Step 2: menu pause → one LMB on “Use”",
-    "log_rod_taken": "✔ Ready to cast: RMB on the rod and LMB on “Use” sent",
-    "log_rod_found": "🎣 Rod found on screen: ({x}, {y}), match {s:.2f}",
-    "log_use_found": "🖱 “Use” found via the red row: ({ux}, {uy}), one LMB",
-    "log_menu_missing": "❌ Rod menu not found (no red “Drop” row) — will retry",
-    "log_menu_stuck": "⚠ Menu didn’t close after LMB — clicking “Use” once more (final try)",
-    "fail_rod_tpl": "❌ No rod.png template — Vision → “Rod template” (hover the icon) or set a 📍 point",
-    "fail_rod_score": "❌ Rod not found on screen: best match {s:.2f} < threshold {min:.2f} — recapture the template or set 📍",
-    "nt_rod_fail": "Rod not found — recapture the template or set 📍",
-    "nt_rod_tpl": "No rod.png template — capture it on the Vision page",
+    "m_det_auto": "auto (contrast)", "m_det_both": "contrast+HSV", "m_det_hsv": "HSV only", "log_use_found": "🖱 “Use” found via the red row: ({ux}, {uy}), one LMB",
     "log_self_learn": "🧠 Template {name}.png updated from screen (match {s:.2f}) — detection gets sharper",
     "log_bait_notpl": "No bait.png template — bait not checked (Vision → “Bait template”)",
-    "log_rod_mem": "🎯 Clicking the remembered rod cell ({x}, {y}) — menu confirmed there before",
-    "log_rod_mem_lost": "🧭 Remembered cell didn’t verify ({s:.2f}) — scanning the whole screen",
-    "log_rod_freeform": "⚠ No item grid found — clicking a free point ({x}, {y}), match {s:.2f}",
-    "log_rod_skip": "🎣 equip_on_start is off — starting with the cast (rod already in hands)", "log_bait": "🪱 Bait: {state} (stacks on screen: {n})",
+    "log_bait": "🪱 Bait: {state} (stacks on screen: {n})",
     "bait_yes": "yes", "bait_no": "NONE", "log_rod_missing": "🎣 Rod not in hands — taking it",
     "log_bait_icon": "🪱 Bait icon disappeared — checking the inventory",
     "log_mode_mini_only": "🎣 Mode: minigame only — inventory and casting are fully disabled",
@@ -525,7 +498,7 @@ STRINGS = {
     "nt_inv_wait": "Open the inventory in game",
     "log_bait_skip": "Bait check skipped — inventory is closed",
     "st_inv_wait": "OPEN INVENTORY", "st_inv_wait_d": "Open the inventory — the bot is waiting…",
-    "m_menudelay": "RMB→“Use” pause, s", "m_rodmatch": "Rod template threshold", "m_selflearn": "Auto-refresh templates from screen",
+    "m_selflearn": "Auto-refresh templates from screen",
     "log_cast": "🪝 Casting…", "log_cast_done": "🪝 Cast done — waiting for a bite",
     "log_slip": "⚠ Fish is slipping — emergency hold", "log_mini_done": "✔ Minigame: {dur:.1f} s, slips {slip}, LMB {sw:.1f} switches/s",
     "log_debug": "📷 debug_screen.png, debug_bar.png saved. {parts} | zone={zone} fish={fish}",
@@ -592,23 +565,35 @@ STRINGS = {
     "m_maxhold": "Макс. утримання, с",
     "m_lostms": "Втрата зони, мс", "m_fishthr": "Поріг контрасту риби", "m_fishdet": "Пошук риби",
     "m_barpad": "Відступ рамки, px", "m_slipthr": "Поріг червоної рамки",
-    "s_sec_lang": "ЯЗЫК / LANGUAGE / МОВА", "s_sec_binds": "Гарячі клавіші", "s_sec_coords": "Точки вудки (порожньо = автопошук)",
-    "s_lang": "Мова інтерфейсу", "s_bind_toggle": "Старт / Стоп", "s_bind_panic": "Аварійний стоп",
+    "s_sec_lang": "ЯЗЫК / LANGUAGE / МОВА", "s_sec_binds": "Гарячі клавіші", "s_lang": "Мова інтерфейсу", "s_bind_toggle": "Старт / Стоп", "s_bind_panic": "Аварійний стоп",
     "s_bind_gui": "Показати / сховати вікно", "s_volume": "Гучність звуків, %", "s_cast_delay": "Затримка закидання, с",
-    "s_rod_pos": "ПКМ вудка:", "s_use_pos": "ЛКМ «Використати»:",
     "s_game_none": "Вікно гри визначається на старті (F8 у грі)", "s_game": "Вікно гри: «{title}»",
     "s_version": "Версія {v} · захват: {b}", "s_capture_backend": "Захват на старті",
     "toast_cfg_saved": "Конфіг збережено успішно", "toast_cfg_save_fail": "Не вдалося зберегти конфіг",
     "toast_cfg_loaded": "Конфіг завантажено успішно", "toast_cfg_missing": "Файл конфігу не знайдено",
-    "toast_cfg_reset": "Налаштування скинуто", "toast_ints": "Введіть цілі числа",
-    "toast_pick": "Клікніть на потрібне місце…", "toast_coords": "Координати: ({x}, {y})",
-    "toast_set": "{label} → ({x}, {y})", "toast_auto_mode": "{label} → автопошук по екрану", "toast_lang": "Мова: {lang}",
+    "toast_cfg_reset": "Налаштування скинуто", "toast_lang": "Мова: {lang}",
+    "s_sec_macro": "МАКРО ЗАКИДАННЯ (запиши один раз — бот повторює сам)",
+    "s_macro_none": "не записано", "s_macro_len": "записано: {d:.1f} с · кліків: {n}",
+    "b_rec": "⏺ Записати", "b_play": "▷ Перевірити", "b_clear": "✕ Стерти",
+    "toast_rec_go": "Запис через {i}…",
+    "toast_rec_on": "⏺ ПИШУ: зроби ПКМ по вудці → пауза → клік по «Використати», потім 2 с не рухай мишею",
+    "toast_rec_done": "Макро збережено: {d:.1f} с, кліків {n}",
+    "toast_rec_empty": "У записі немає кліків — макро не збережено",
+    "toast_rec_running": "Спочатку зупини бота (F8)",
+    "toast_macro_cleared": "Макро стерто",
+    "toast_macro_need_inv": "Відкрий інвентар у грі — потім «▷ Перевірити»",
+    "log_macro_play": "▶ Макро закидання: повторюю запис ({d:.1f} с, {n} подій)",
+    "log_macro_done": "✔ Макро виконано — вудку взято",
+    "log_macro_none": "❌ Макро закидання не записано — «Налаштування» → «⏺ Записати»",
+    "log_macro_saved": "💾 Макро закидання збережено: {d:.1f} с, {n} подій",
+    "log_rec_fail": "❌ Запис макро не вдався: {e}",
+    "nt_macro_none": "Спочатку запиши закид: «Налаштування» → «⏺ Записати»",
+    "reason_no_macro": "макро закидання не записано",
+    "log_rod_skip": "🎣 equip_on_start вимкнено — починаю з закидання (вудку вже в руках)",
     "st_stopped": "ЗУПИНЕНО", "st_idle_d": "Натисни СТАРТ або F8",
     "st_starting": "ЗАПУСК", "st_starting_d": "Визначаю вікно гри…",
     "st_prepare": "ПІДГОТОВКА", "st_prepare_d": "Перевіряю вудку та наживку",
     "st_cast": "ЗАКИДАЮ", "st_cast_d": "Закидаю вудку…",
-    "st_rod_find": "ШУКАЮ ВУДКУ", "st_rod_find_d": "Шукаю іконку вудки на екрані…",
-    "st_rod_fail": "ВУДКУ НЕ ЗНАЙДЕНО", "st_rod_fail_d": "Зніми шаблон «Шаблон: вудка» («Зір») або задай точку 📍 («Налаштування»)",
     "st_bite": "КЛЮВАННЯ", "st_bite_d": "Очікування клювання…", "st_bite_wait_d": "Очікування клювання… {n} с",
     "st_mini": "МІНІ-ГРА", "st_mini_d": "Витягую рибу!", "st_mini_hold_d": "Утримую рибу в зоні",
     "st_caught": "ЛОВЛЯ", "st_caught_d": "Рибу спіймано",
@@ -619,24 +604,10 @@ STRINGS = {
     "log_resume": "▶ Вікно гри знову активне", "log_start": "▶ Риболовля почалась",
     "log_stop": "■ Риболовля завершилась — {reason}. Спіймано: {n}", "log_mini": "🎣 Міні-гра",
     "log_caught": "🐟 Спіймано #{n} (міні-гра {dur:.1f} с)", "log_no_bite": "⌛ Немає клювання {t} с ({k}/{lim})",
-    "log_rod_manual": "🎣 Вудка: курсор у ({x}, {y}), одне ПКМ",
-    "log_use_manual": "🖱 «Використати»: курсор у ({ux}, {uy}), одна ЛКМ",
-        "m_det_auto": "авто (контраст)", "m_det_both": "контраст+HSV", "m_det_hsv": "лише HSV", "log_step1": "🖱 Крок 1: курсор на вудку → одне ПКМ", "log_step2": "🖱 Крок 2: пауза під меню → одна ЛКМ по «Використати»",
-    "log_rod_taken": "✔ До закидання готово: ПКМ по вудці та ЛКМ по «Використати» надіслано",
-    "log_rod_found": "🎣 Вудку знайдено на екрані: ({x}, {y}), збіг {s:.2f}",
-    "log_use_found": "🖱 «Використати» знайдено за червоним рядком меню: ({ux}, {uy}), одна ЛКМ",
-    "log_menu_missing": "❌ Меню вудки не знайдено (немає червоного рядка «Викинути») — спробую ще раз",
-    "log_menu_stuck": "⚠ Меню не закрилося після ЛКМ — тисну «Використати» ще раз (остання спроба)",
-    "fail_rod_tpl": "❌ Немає шаблону rod.png — «Зір» → «Шаблон: вудка» (курсор на іконку) або точка 📍",
-    "fail_rod_score": "❌ Вудку не знайдено на екрані: найкращий збіг {s:.2f} < порогу {min:.2f} — пересніми шаблон або задай 📍",
-    "nt_rod_fail": "Вудку не знайшов — пересними шаблон або задай 📍",
-    "nt_rod_tpl": "Немає шаблону rod.png — зніми його на сторінці «Зір»",
+    "m_det_auto": "авто (контраст)", "m_det_both": "контраст+HSV", "m_det_hsv": "лише HSV", "log_use_found": "🖱 «Використати» знайдено за червоним рядком меню: ({ux}, {uy}), одна ЛКМ",
     "log_self_learn": "🧠 Шаблон {name}.png оновлено з екрана (збіг {s:.2f}) — пошук стане точнішим",
     "log_bait_notpl": "Немає шаблону bait.png — наживку не перевірено («Зір» → «Шаблон: наживка»)",
-    "log_rod_mem": "🎯 Клік по запам'ятованій клітинці вудки ({x}, {y}) — меню там уже підтверджувалось",
-    "log_rod_mem_lost": "🧭 Запам'ятовану клітинку не підтверджено ({s:.2f}) — шукаю по всьому екрану",
-    "log_rod_freeform": "⚠ Сітку предметів не знайдено — клік по вільній точці ({x}, {y}), збіг {s:.2f}",
-    "log_rod_skip": "🎣 equip_on_start вимкнено — починаю з закидання (вудка вже в руках)", "log_bait": "🪱 Наживка: {state} (стеків на екрані: {n})",
+    "log_bait": "🪱 Наживка: {state} (стеків на екрані: {n})",
     "bait_yes": "є", "bait_no": "НЕМАЄ", "log_rod_missing": "🎣 Вудки немає в руках — беру",
     "log_bait_icon": "🪱 Значок наживки зник — перевіряю інвентар",
     "log_mode_mini_only": "🎣 Режим: лише міні-гра — інвентар та закидання повністю вимкнено",
@@ -644,7 +615,7 @@ STRINGS = {
     "nt_inv_wait": "Відкрий інвентар у грі",
     "log_bait_skip": "Перевірку наживки пропущено — інвентар закрито",
     "st_inv_wait": "ВІДКРИЙ ІНВЕНТАР", "st_inv_wait_d": "Відкрий інвентар — бот чекає…",
-    "m_menudelay": "Пауза ПКМ→«Використати», с", "m_rodmatch": "Поріг шаблона вудки", "m_selflearn": "Оновлювати шаблони з екрана",
+    "m_selflearn": "Оновлювати шаблони з екрана",
     "log_cast": "🪝 Закидання вудки…", "log_cast_done": "🪝 Закидання виконано — чекаю клювання",
     "log_slip": "⚠ Риба зривається — аварійне утримання", "log_mini_done": "✔ Міні-гра: {dur:.1f} с, зривів {slip}, ЛКМ {sw:.1f} перемик/с",
     "log_debug": "📷 debug_screen.png, debug_bar.png збережено. {parts} | zone={zone} fish={fish}",
@@ -682,12 +653,14 @@ STRINGS = {
 LANGS = [("ru", "RU"), ("en", "EN"), ("ua", "UA")]
 
 
-def t(key, **kw):
-    """Перевод строки по ключу для CFG['lang']; при пропуске — ru, потом сам ключ."""
+def t(k, **kw):
+    """Перевод строки по ключу для CFG['lang']; при пропуске — ru, потом сам ключ.
+    Первый параметр намеренно назван k: вызовы вида t("...", key=..., to=...) подставляют
+    значения для format() и не должны конфликтовать с именем параметра."""
     table = STRINGS.get(CFG.get("lang", "ru")) or STRINGS["ru"]
-    s = table.get(key)
+    s = table.get(k)
     if s is None:
-        s = STRINGS["ru"].get(key, key)
+        s = STRINGS["ru"].get(k, k)
     if kw:
         try:
             s = s.format(**kw)
@@ -2606,10 +2579,6 @@ def play_minigame():
 # ==========================================================================
 # 7. ИНВЕНТАРЬ, УДОЧКА, НАЖИВКА
 # ==========================================================================
-def hud_present(name):
-    return find(name) is not None
-
-
 def inventory_open():
     return find("inv_header") is not None
 
@@ -2633,11 +2602,10 @@ def wait_inventory_open():
     return True
 
 
-# --- v1.9.0: ВИЗУАЛЬНЫЙ АВТО-ЗАКИД ---
-# Тот же конвейер, что у мини-игры: полный DXGI-кадр экрана -> OpenCV-анализ -> курсор
-# плавно ведётся к НАЙДЕННОЙ цели. Никаких жёстких координат: положение и масштаб
-# инвентаря могут быть любыми. Ручные точки rod_click_pos/use_click_pos (📍 на
-# «Настройках») лишь ПЕРЕОПРЕДЕЛЯЮТ автопоиск; пусто = автопоиск.
+# --- v1.12.0: координаты курсора для записи макро ---
+# cursor_pos() возвращает позицию мыши В СИСТЕМЕ КАДРА ЗАХВАТА — те же координаты,
+# что у поиска на экране и у кликов (mouse_move_abs), поэтому записанное макро
+# повторяется точно, в том числе на мультимониторе.
 
 def cursor_pos():
     """Текущая позиция курсора в координатах кадра захвата (физические пиксели
@@ -2652,29 +2620,6 @@ def cursor_pos():
                 max(0, min(int(m["height"]) - 1, ly - int(m["top"]))))
     except Exception:
         return lx, ly
-
-
-def smooth_move(x, y):
-    """Плавно ПЕРЕТАСКИВАЕТ курсор к цели (x, y) за move_time секунд: smoothstep
-    (мягкий разгон и торможение) — видно, как мышь едет к иконке, а не телепортируется.
-    Шаг ~24 физических пикселя; в конце — точная установка в цель."""
-    dur = float(CFG.get("move_time", 0.30))
-    try:
-        x0, y0 = cursor_pos()
-    except Exception:
-        x0, y0 = int(x), int(y)
-    dist = max(abs(int(x) - x0), abs(int(y) - y0))
-    if dist < 2:
-        mouse_move_abs(int(x), int(y))
-        return
-    steps = int(max(4, min(18, dist // 32)))
-    for i in range(1, steps + 1):
-        check_stop()
-        tt = i / steps
-        e = tt * tt * (3.0 - 2.0 * tt)          # smoothstep
-        mouse_move_abs(int(round(x0 + (int(x) - x0) * e)), int(round(y0 + (int(y) - y0) * e)))
-        nap(dur / steps)
-    mouse_move_abs(int(x), int(y))
 
 
 def _tpl_trimmed(name):
@@ -2805,322 +2750,129 @@ def _match_scales(gray, t_, max_n=1, thr=0.60, with_f=False):
     return out
 
 
-def _item_centers(gray):
-    """СЕТКА ПРЕДМЕТОВ на кадре: в тёмной панели инвентаря ищем светлые пятна-иконки.
-    Даёт СПИСОК РЕАЛЬНЫХ предметов на экране: в них можно прицелиться, в пустоту — нет.
-    Возвращает [(x, y), ...] — центры иконок в координатах кадра."""
-    dark = (gray < 64).astype(np.uint8)
-    panel = cv2.morphologyEx(dark, cv2.MORPH_CLOSE, np.ones((31, 31), np.uint8))
-    n, labels, stats, _ = cv2.connectedComponentsWithStats(panel, 8)
-    pm = np.zeros_like(dark)
-    for i in range(1, n):
-        if stats[i, cv2.CC_STAT_AREA] >= 40000:
-            pm[labels == i] = 1
-    bright = ((gray > 60) & (pm > 0)).astype(np.uint8)
-    bright = cv2.morphologyEx(bright, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
-    n2, _l2, st2, cent2 = cv2.connectedComponentsWithStats(bright, 8)
-    out = []
-    for i in range(1, n2):
-        w, h, area = int(st2[i, 2]), int(st2[i, 3]), int(st2[i, 4])
-        if 12 <= w <= 150 and 12 <= h <= 150 and area >= 60:
-            out.append((int(cent2[i][0]), int(cent2[i][1])))
-    return out
+# --- v1.12.0: АВТО-ЗАКИД = ЗАПИСАННОЕ МАКРО ---
+# Ты один раз показываешь боту закид: «⏺ Записать» на «Настройках» -> 3 с отсчёт ->
+# делаешь ПКМ по удочке, паузу, клик по «Использовать». Бот запоминает ВСЕ движения
+# мыши и нажатия с таймингами и потом повторяет запись 1-в-1 после каждой рыбы.
+# Никакого распознавания при закиде: запись уже «работает», повторять её надёжнее,
+# чем искать заново. (Шаблоны остаются только для пассивной проверки наживки.)
+
+MACRO_STATE = {"rec": False}              # идёт ли запись макро прямо сейчас
 
 
-def _item_radius(centers):
-    """Радиус привязки к предмету: половина типичного шага сетки (медиана расстояний
-    до ближайшего соседа); на пустом наборе — консервативные 40 px."""
-    if len(centers) < 2:
-        return 40
-    d = []
-    for i, (x, y) in enumerate(centers):
-        best = min((x - a) ** 2 + (y - b) ** 2
-                   for j, (a, b) in enumerate(centers) if j != i)
-        d.append(best ** 0.5)
-    return max(30, int(float(np.median(d)) * 0.55))
+def macro_record():
+    """Записывает движения мыши и нажатия (ПКМ/ЛКМ) в CFG["cast_macro"]:
+      * отсчёт 3 с -> запись -> автоматический стоп после 2.0 с тишины, если оба
+        клика уже сделаны (4.0 с при одном клике; потолок 30 с);
+      * движения пишутся шагом >= 3 px, кнопки — по переходам down/up (VK-поллинг
+        50 Гц), время — относительно старта записи;
+      * координаты — в системе кадра захвата (те же, что у кликов бота), поэтому
+        повтор точно попадает в записанные точки даже на мультимониторе.
+    Вызов из GUI («⏺ Записать»); повторная запись и запись при работающем боте
+    отклоняются с тостом."""
+    if MACRO_STATE["rec"]:
+        return
+    if STATE.get("running"):
+        notify("toast_rec_running", "warn")
+        return
+    MACRO_STATE["rec"] = True
+
+    def worker():
+        try:
+            for i in (3, 2, 1):
+                notify("toast_rec_go", "ok", i=i)
+                time.sleep(1.0)
+            notify("toast_rec_on", "ok")
+            log(t("toast_rec_on"))
+            events = []
+            clicks = 0
+            t0 = time.perf_counter()
+            prev = {"l": False, "r": False}
+            last_act = t0
+            last_pos = None
+            while True:
+                now = time.perf_counter()
+                for name, vk in (("l", 0x01), ("r", 0x02)):      # VK_LBUTTON, VK_RBUTTON
+                    down = bool(ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000)
+                    if down != prev[name]:
+                        events.append([round(now - t0, 3), "down" if down else "up", name])
+                        prev[name] = down
+                        if down:
+                            clicks += 1
+                        last_act = now
+                try:
+                    pos = cursor_pos()
+                except Exception:
+                    pos = None
+                if pos is not None and (last_pos is None
+                                        or abs(pos[0] - last_pos[0]) + abs(pos[1] - last_pos[1]) >= 3):
+                    events.append([round(now - t0, 3), "move", int(pos[0]), int(pos[1])])
+                    last_pos = pos
+                    last_act = now
+                if clicks >= 2 and now - last_act >= 2.0:
+                    break                          # ПКМ и ЛКМ есть, 2 с тишины — хватит
+                if clicks >= 1 and now - last_act >= 4.0:
+                    break                          # один клик и долгая тишина
+                if now - t0 >= 30.0:
+                    break                          # потолок записи
+                time.sleep(0.02)
+            dur = float(events[-1][0]) if events else 0.0
+            if clicks < 1 or not events:
+                notify("toast_rec_empty", "warn")
+                log(t("log_rec_fail", e="no clicks"))
+                return
+            CFG["cast_macro"] = events
+            save_cfg()
+            notify("toast_rec_done", "ok", d=dur, n=clicks)
+            log(t("log_macro_saved", d=dur, n=len(events)))
+        except Exception as e:
+            try:
+                log(t("log_rec_fail", e=f"{type(e).__name__}: {e}"))
+            except Exception:
+                pass
+        finally:
+            MACRO_STATE["rec"] = False
+    threading.Thread(target=worker, daemon=True).start()
 
 
-def rod_candidates(frame, n=3):
-    """ТОП-N кандидатов в удочку (v1.11 — прицел «чётко в предмет»):
-      1) мульти-масштабный поиск даёт точные попадания шаблона;
-      2) каждое попадание ПРОВЕРЯЕТСЯ по сетке предметов: рядом (<= половины шага
-         сетки) обязана лежать реальная иконка. Совпадение «в пустоте» отбрасывается —
-         в молоко бот не кликает НИКОГДА.
-    Возвращает [(score, x, y, f), ...] по убыванию score; [] — целей нет."""
-    t_ = _tpl_trimmed("rod")
-    if t_ is None or frame is None or frame.size == 0:
-        return []
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    H, W = gray.shape
-    th, tw = t_.shape
-    if min(th, tw) < 8 or H <= th or W <= tw:
-        return []
-    centers = _item_centers(gray)
-    if not centers:
-        return []
-    snap = _item_radius(centers)
-    snap2 = snap * snap
-    cands = []
-    for entry in _coarse_hits(gray, t_, 4):
-        s_, tl, ff = _fine_match(gray, t_, entry)
-        if tl is None:
-            continue
-        px, py = tl[0] + int(tw * ff) // 2, tl[1] + int(th * ff) // 2
-        if not any((cx - px) ** 2 + (cy - py) ** 2 <= snap2 for cx, cy in centers):
-            continue                                   # мимо сетки предметов
-        if any((px - a) ** 2 + (py - b) ** 2 < 24 * 24 for _, a, b, _ in cands):
-            continue                                   # дубликат той же цели
-        cands.append((float(s_), int(px), int(py), float(ff)))
-        if len(cands) >= n:
-            break
-    cands.sort(key=lambda z: -z[0])
-    return cands
-
-
-def _rod_locate(frame):
-    """ИЩЕТ иконку удочки на ПРИСЛАННОМ кадре: мульти-масштабный поиск + шаблон с
-    обрезанными полями. Возвращает (x, y, score, f, t_); x=None, если порог
-    rod_match_min не достигнут или шаблона нет (тогда t_=None)."""
-    t_ = _tpl_trimmed("rod")
-    if t_ is None:
-        return None, None, None, None, None
-    if frame is None or frame.size == 0:
-        return None, None, 0.0, None, t_
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    score, pos, f = _match_scales(gray, t_)
-    if pos is None or score < float(CFG.get("rod_match_min", 0.70)):
-        return None, None, float(score), None, t_
-    return pos[0], pos[1], float(score), f, t_
-
-
-def rod_on_screen():
-    """ИЩЕТ иконку удочки на ПОЛНОМ кадре экрана. Возвращает (x, y, score);
-    (None, None, score), если порог не достигнут; (None, None, None), если нет
-    шаблона rod.png."""
-    rx, ry, score, _f, _t = _rod_locate(grab())
-    return rx, ry, score
-
-
-def _red_mask(bgr):
-    """Красные пиксели — та же семья детекторов, что красная рамка «РЫБА СРЫВАЕТСЯ»."""
-    a = bgr.astype(np.int16)
-    return (a[..., 2] > 150) & (a[..., 1] < 80) & (a[..., 0] < 80)
-
-
-def context_menu_info(x, y):
-    """Ищет ОТКРЫТОЕ меню удочки в окне вокруг точки ПКМ (x, y): ориентир — КРАСНАЯ
-    нижняя строка «Выбросить» (игра подсвечивает её красным). Возвращает (use_x, use_y)
-    — точку пункта «Использовать» (ВЕРХНИЙ пункт, сразу НАД красной строкой), либо None,
-    если меню не найдено. Все координаты — физические пиксели."""
-    sx, sy = scale()
-    m = monitor()
-    win_w, win_h = int(360 * sx), int(240 * sy)
-    scan_x = max(0, int(x - 40 * sx))
-    scan_y = max(0, int(y - 40 * sy))
-    win_w = min(win_w, m["left"] + m["width"] - scan_x)
-    win_h = min(win_h, m["top"] + m["height"] - scan_y)
-    if win_w < 40 or win_h < 40:
-        return None
-    img = grab_px(scan_x, scan_y, win_w, win_h)
-    if img is None or img.size == 0:
-        return None
-    red = _red_mask(img)
-    if float(red.mean()) < 0.004:                # строка «Выбросить» ~0.5-6% окна
-        return None
-    rows = red.sum(axis=1)
-    w = img.shape[1]
-    row_ok = np.where(rows > 0.30 * w)[0]
-    if row_ok.size == 0:
-        return None
-    red_top = int(row_ok[0])
-    end = red_top
-    while end < red.shape[0] and rows[end] > 0.30 * w:
-        end += 1
-    band_h = max(8, end - red_top)
-    band = red[red_top:end]
-    cols = band.sum(axis=0)
-    xs = np.where(cols > 0.5 * band.shape[0])[0]
-    red_cx = int((int(xs[0]) + int(xs[-1])) / 2) if xs.size else int(w / 2)
-    use_x = scan_x + red_cx
-    use_y = scan_y + red_top - int(round(band_h * 0.75))   # пункт ВЫШЕ красной строки
-    if use_y < 0:
-        return None
-    return use_x, use_y
-
-
-ROD_MEM = {"pos": None, "f": None}        # ячейка удочки, подтверждённая меню (эта сессия)
-
-
-def _rod_mem_score(frame, x, y, f, t_):
-    """Одиночная проверка запомненной ячейки: шаблон в запомненном масштабе на ROI
-    вокруг (x, y). Возвращает score либо None (нет данных)."""
-    if t_ is None or frame is None or frame.size == 0:
-        return None
-    H, W = frame.shape[:2]
-    th, tw = t_.shape
-    ff = float(f or 1.0)
-    fh, fw = int(th * ff), int(tw * ff)
-    if fh < 12 or fw < 12:
-        return None
-    x0, y0 = max(0, int(x) - 64), max(0, int(y) - 64)
-    x1, y1 = min(W, int(x) + 64), min(H, int(y) + 64)
-    roi = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
-    if roi.shape[0] < fh or roi.shape[1] < fw:
-        return None
-    t2 = cv2.resize(t_, (fw, fh), interpolation=cv2.INTER_AREA)
-    r = np.nan_to_num(cv2.matchTemplate(roi, t2, cv2.TM_CCOEFF_NORMED))
-    return float(r.max())
-
-
-def use_rod(select=0):
-    """
-    ВИЗУАЛЬНОЕ ВЗЯТИЕ УДОЧКИ (v1.11.0 — прицел «чётко в предмет»):
-      1) инвентарь открыт человеком (бот ждёт, сам TAB/ESC не жмёт);
-      2) ГДЕ УДОЧКА (в порядке надёжности):
-         a) ручная точка rod_click_pos (📍 на «Настройках»);
-         b) ЗАПОМНЕННАЯ ячейка — место, где меню уже подтверждалось (проверяется на
-            кадре одиночным сравнением; инвентарь не двигается -> клик в ту же точку);
-         c) ПОИСК по всему кадру: топ совпадений шаблона, но каждое принимается
-            ТОЛЬКО если рядом лежит реальная иконка предмета (_item_centers) —
-            кликать «в пустоту» бот не может. select=1/2 — следующий/следующий
-            кандидат (equip_cycle так перебирает цели при неудачной попытке);
-         d) сетка предметов не нашлась (нестандартный UI) — свободная точка, но с
-            повышенным порогом rod_match_min + 0.05;
-      3) плавный короткий ход курсора к цели, ОДНО ПКМ;
-      4) меню ждём ТЕРПЕЛИВО: use_menu_delay + до 1.5 с поллинга (каждые 0.15 с);
-      5) «Использовать» по красной строке «Выбросить» (или ручная use_click_pos),
-         плавный ход, ОДНА ЛКМ; меню закрылось -> успех (зависло — максимум 2 ЛКМ).
-    Цели нет / меню не открылось — НИ ОДНОГО лишнего клика, False. После
-    подтверждённого меню: запоминаем ячейку (ROD_MEM) и, если шаблон был неидеален
-    (0.70-0.93), обновляем его свежим снимком (самообучение, tpl_selflearn).
-    """
-    wait_inventory_open()
-    set_state("st_rod_find", "st_rod_find_d", "busy")
-    rx = ry = None
-    score = 0.0
-    f_hit = None
-    t_hit = None
-    hit_frame = None                            # кадр попытки — для самообучения
-    mem_used = False
-    # --- a) ручная точка ---
-    if CFG.get("rod_click_pos"):
-        rx, ry = int(CFG["rod_click_pos"][0]), int(CFG["rod_click_pos"][1])
-        log(t("log_rod_manual", x=rx, y=ry))
-    else:
-        frame = grab()
-        # --- b) запомненная подтверждённая ячейка ---
-        if ROD_MEM.get("pos"):
-            s_mem = _rod_mem_score(frame, ROD_MEM["pos"][0], ROD_MEM["pos"][1],
-                                   ROD_MEM.get("f"), _tpl_trimmed("rod"))
-            if s_mem is not None and s_mem >= float(CFG.get("rod_match_min", 0.70)):
-                rx, ry = int(ROD_MEM["pos"][0]), int(ROD_MEM["pos"][1])
-                score, f_hit = float(s_mem), ROD_MEM.get("f")
-                t_hit = _tpl_trimmed("rod")
-                hit_frame = frame
-                mem_used = True
-                log(t("log_rod_mem", x=rx, y=ry))
-            else:
-                log(t("log_rod_mem_lost", s=s_mem if s_mem is not None else 0.0))
-                ROD_MEM["pos"] = None
-        # --- c) поиск по всему кадру с проверкой по сетке предметов ---
-        if rx is None:
-            cands = rod_candidates(frame, 3)
-            if cands:
-                s_, px, py, ff = cands[min(max(0, int(select)), len(cands) - 1)]
-                rx, ry, score, f_hit = px, py, s_, ff
-                t_hit = _tpl_trimmed("rod")
-                hit_frame = frame
-                log(t("log_rod_found", x=rx, y=ry, s=score))
-        # --- d) сетки нет — свободная точка с повышенным порогом ---
-        if rx is None:
-            fx, fy, fs, ff, ft = _rod_locate(frame)
-            if fx is not None and fs >= float(CFG.get("rod_match_min", 0.70)) + 0.05:
-                rx, ry, score, f_hit, t_hit = fx, fy, fs, ff, ft
-                hit_frame = frame
-                log(t("log_rod_freeform", x=rx, y=ry, s=score))
-        if rx is None:
-            fx, fy, fs, _ff, ft = _rod_locate(frame)
-            if ft is None:
-                notify("nt_rod_tpl", "warn")
-                log(t("fail_rod_tpl"))
-            else:
-                log(t("fail_rod_score", s=fs, min=float(CFG.get("rod_match_min", 0.70))))
-            set_state("st_rod_fail", "st_rod_fail_d", "busy")
+def macro_run(ev):
+    """Проигрывает события макро (движения/кнопки в координатах кадра) с записанными
+    таймингами. True — доиграл до конца; False — прерван (запись/стоп)."""
+    t0 = time.perf_counter()
+    for t_rel, kind, *args in ev:
+        wait = t0 + float(t_rel) - time.perf_counter()
+        if wait > 0:
+            nap(wait)
+        if kind == "move":
+            mouse_move_abs(int(args[0]), int(args[1]))
+        elif kind == "down":
+            _send_mouse(MOUSEEVENTF_LEFTDOWN if args[0] == "l" else MOUSEEVENTF_RIGHTDOWN)
+        elif kind == "up":
+            _send_mouse(MOUSEEVENTF_LEFTUP if args[0] == "l" else MOUSEEVENTF_RIGHTUP)
+        if MACRO_STATE["rec"]:
             return False
-    # --- шаг 1: плавно к удочке, одно ПКМ ---
-    log(t("log_step1"))
-    smooth_move(rx, ry)
-    nap(0.45)                                    # игровой курсор должен встать на слот
-    _send_mouse(MOUSEEVENTF_RIGHTDOWN)
-    nap(0.15)
-    _send_mouse(MOUSEEVENTF_RIGHTUP)
-    # --- шаг 2: ждём меню (терпеливо: use_menu_delay + до 1.5 с поллинга) ---
-    log(t("log_step2"))
-    nap(float(CFG.get("use_menu_delay", 1.0)))
-    tries = 1 if CFG.get("use_click_pos") else 2
-    for attempt in range(1, tries + 1):
-        info = None
-        if CFG.get("use_click_pos"):
-            ux, uy = int(CFG["use_click_pos"][0]), int(CFG["use_click_pos"][1])
-            log(t("log_use_manual", ux=ux, uy=uy))
-        else:
-            deadline = time.perf_counter() + 1.5
-            info = context_menu_info(rx, ry)
-            while info is None and time.perf_counter() < deadline:
-                check_stop()
-                nap(0.15)
-                info = context_menu_info(rx, ry)
-            if info is None:
-                log(t("log_menu_missing"))
-                set_state("st_rod_fail", "st_rod_fail_d", "busy")
-                return False                     # меню не открылось — кликать наугад нельзя
-            ux, uy = int(info[0]), int(info[1])
-            log(t("log_use_found", ux=ux, uy=uy))
-            # меню появилось -> игра ПОДТВЕРДИЛА: клик был по удочке. Запоминаем ячейку
-            # и, если шаблон был неидеален (0.70-0.93), учимся на кадре этой попытки
-            # (он снят ДО ПКМ — меню в нём не мешает). Мусорный шаблон, совпавший не
-            # с удочкой, меню не подтвердит — и ничего не испортит.
-            if not mem_used and f_hit and score < 0.93 and CFG.get("tpl_selflearn", True):
-                _self_learn("rod", hit_frame, rx, ry,
-                            max(8, int(t_hit.shape[1] * f_hit)),
-                            max(8, int(t_hit.shape[0] * f_hit)), score)
-            ROD_MEM["pos"] = (rx, ry)
-            ROD_MEM["f"] = f_hit
-        # --- шаг 3: плавно на «Использовать», одна ЛКМ ---
-        smooth_move(ux, uy)
-        nap(0.35)                                # курсор встал на пункт меню
-        _send_mouse(MOUSEEVENTF_LEFTDOWN)
-        nap(0.15)
-        _send_mouse(MOUSEEVENTF_LEFTUP)
-        if CFG.get("use_click_pos"):
-            break                                # ручная точка: подтверждения не требуется
-        nap(0.6)                                 # меню должно закрыться само
-        if context_menu_info(rx, ry) is None:    # меню исчезло => «Использовать» выбран
-            break
-        if attempt == tries:
-            set_state("st_rod_fail", "st_rod_fail_d", "busy")
-            return False
-        log(t("log_menu_stuck"))                 # меню зависло — единственный повторный ЛКМ
-    nap(float(CFG.get("after_equip_delay", 1.2)))
-    log(t("log_rod_taken"))
     return True
 
 
-def equip_cycle():
-    """Взять удочку: визуальные попытки use_rod() с безопасной паузой rod_retry_delay
-    между ними. Первая неудача НЕ значит «нет удочки»: на следующей попытке бот берёт
-    СЛЕДУЮЩЕГО кандидата (select=1, 2, ...), затем ищет заново. Неудачная попытка
-    НЕ КЛИКАЕТ мимо — потому спама нет. Причина — в журнале и в тосте (один раз)."""
-    first = True
-    k = 0
-    while True:
-        if use_rod(select=k):
-            return True
-        if first:
-            first = False
-            notify("nt_rod_fail", "warn")
-        nap(float(CFG.get("rod_retry_delay", 3.0)))
-        k += 1
+def macro_play():
+    """АВТО-ЗАКИД КАК ЗАПИСЬ (v1.12): ждёт открытый инвентарь (его открываешь ТЫ),
+    затем 1-в-1 повторяет записанный макро: ПКМ по удочке -> пауза -> «Использовать» —
+    ровно те же движения, паузы и точки, что ты показал при записи. Дальше обычный
+    цикл: заброс -> клёв -> мини-игра -> снова макро. Макро нет -> False (сессия
+    остановится с понятной причиной no_macro)."""
+    ev = CFG.get("cast_macro")
+    if not ev:
+        notify("nt_macro_none", "warn")
+        log(t("log_macro_none"))
+        return False
+    wait_inventory_open()
+    set_state("st_cast", "st_cast_d", "busy")
+    log(t("log_macro_play", d=float(ev[-1][0]), n=len(ev)))
+    if not macro_run(ev):
+        return False
+    nap(float(CFG.get("after_equip_delay", 1.2)))
+    log(t("log_macro_done"))
+    return True
 
 
 def bait_check():
@@ -3157,7 +2909,7 @@ def bait_check():
 # ==========================================================================
 # 8. РЫБАЛКА (главный цикл)
 # ==========================================================================
-REASON_KEYS = ("user", "no_bait", "no_bite", "error")
+REASON_KEYS = ("user", "no_bait", "no_bite", "no_macro", "error")
 
 
 def reason_text(key, detail=""):
@@ -3217,8 +2969,8 @@ def fishing_run():
             set_state("st_cast", "st_cast_d", "busy")
             if first and not CFG["equip_on_start"]:
                 log(t("log_rod_skip"))          # удочка уже в руках — начинаем с заброса
-            else:
-                equip_cycle()
+            elif not macro_play():              # повторяем записанный макро закидывания
+                return "no_macro"               # записи нет — стоп с понятной причиной
             cast()
         first = False
         set_state("st_bite", "st_bite_d", "run")
@@ -3279,11 +3031,12 @@ def bot_thread():
         save_totals()
         text = reason_text(reason, detail)
         log(t("log_stop", reason=text, n=STATS["catches"]))
-        set_state("st_stopped", text[:80], "error" if reason in ("error", "no_bite") else "idle")
+        set_state("st_stopped", text[:80],
+                  "error" if reason in ("error", "no_bite", "no_macro") else "idle")
         STATE["running"] = False
-        notify("nt_finished", "warn" if reason in ("error", "no_bite") else "ok", text=text[:60])
+        notify("nt_finished", "warn" if reason in ("error", "no_bite", "no_macro") else "ok", text=text[:60])
         if CFG["sound_end"]:
-            play("alert" if reason in ("error", "no_bite") else "end")
+            play("alert" if reason in ("error", "no_bite", "no_macro") else "end")
         EVENTS.put(("run", False))
 
 
@@ -3661,91 +3414,32 @@ class App:
             self.show_page(self.page)
             return False
 
-    def xy_entry(self, x, y, cfg_key, label_key):
-        """Два поля ввода X / Y + кнопка Задать + кнопка Сброс для ручного ввода координат."""
-        self.txt(PANEL_X + 56, PANEL_Y + y + 10, t(label_key), 12, C_TEXT)
-        cur = CFG.get(cfg_key)                     # None = автопоиск: поля пустые
-        vx = tk.StringVar(value="" if cur is None else str(int(cur[0])))
-        vy = tk.StringVar(value="" if cur is None else str(int(cur[1])))
-        S = self.S
-        ex = tk.Entry(self.cv, textvariable=vx, width=6, font=(FONT, max(8, int(11 * S))),
-                      bg="#3a3a3a", fg="#ffffff", insertbackground="#ffffff",
-                      relief="flat", bd=4, highlightthickness=0)
-        ey = tk.Entry(self.cv, textvariable=vy, width=6, font=(FONT, max(8, int(11 * S))),
-                      bg="#3a3a3a", fg="#ffffff", insertbackground="#ffffff",
-                      relief="flat", bd=4, highlightthickness=0)
-        wx = self.cv.create_window(self.u(PANEL_X + 390), self.u(PANEL_Y + y + 8), window=ex, anchor="nw", tags=("page",))
-        wy = self.cv.create_window(self.u(PANEL_X + 460), self.u(PANEL_Y + y + 8), window=ey, anchor="nw", tags=("page",))
-        self._page_wins.extend([ex, ey])
-        self.txt(PANEL_X + 382, PANEL_Y + y + 10, "X:", 11, C_DIM)
-        self.txt(PANEL_X + 452, PANEL_Y + y + 10, "Y:", 11, C_DIM)
+    def _macro_label(self):
+        ev = CFG.get("cast_macro")
+        if not ev:
+            return t("s_macro_none")
+        n = sum(1 for e in ev if len(e) >= 3 and e[1] == "down")
+        return t("s_macro_len", d=float(ev[-1][0]), n=n)
 
-        def apply_coords():
-            xs, ys = vx.get().strip(), vy.get().strip()
-            if not xs and not ys:                  # оба поля пустые = автопоиск по экрану
-                CFG[cfg_key] = None
-                save_cfg()
-                self.toast(t("toast_auto_mode", label=t(label_key)), "ok")
-                self.show_page(self.page)
-                return
-            try:
-                xi, yi = int(xs), int(ys)
-                CFG[cfg_key] = [xi, yi]
-                save_cfg()
-                self.toast(t("toast_set", label=t(label_key), x=xi, y=yi), "ok")
-                self.show_page(self.page)
-            except ValueError:
-                self.toast(t("toast_ints"), "warn")
+    def do_macro_record(self):
+        macro_record()
+        self.show_page(self.page)
 
-        def reset_coord():
-            CFG[cfg_key] = None                 # «Авто» = автопоиск по экрану (v1.9)
-            save_cfg()
-            self.toast(t("toast_auto_mode", label=t(label_key)), "ok")
-            self.show_page(self.page)
+    def do_macro_play(self):
+        ev = CFG.get("cast_macro")
+        if not ev:
+            self.toast(t("nt_macro_none"), "warn")
+            return
+        if not inventory_open():
+            self.toast(t("toast_macro_need_inv"), "warn")
+            return
+        threading.Thread(target=macro_run, args=(ev,), daemon=True).start()
 
-        def pick_and_fill():
-            """Ждёт клик на экране, конвертирует в физические координаты, вставляет в поля X/Y."""
-            self.toast(t("toast_pick"), "ok")
-
-            def worker_fn():
-                from ctypes import wintypes
-                VK_LBUTTON = 0x01
-                while ctypes.windll.user32.GetAsyncKeyState(VK_LBUTTON) & 0x8000:
-                    time.sleep(0.05)
-                while not (ctypes.windll.user32.GetAsyncKeyState(VK_LBUTTON) & 0x8000):
-                    time.sleep(0.02)
-                pt = wintypes.POINT()
-                ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
-                px, py = logical_to_physical(pt.x, pt.y)
-                try:
-                    self.root.clipboard_clear()
-                    self.root.clipboard_append(f"{px} {py}")
-                    self.root.update()
-                except Exception:
-                    pass
-                vx.set(str(px))
-                vy.set(str(py))
-                CFG[cfg_key] = [int(px), int(py)]
-                save_cfg()                       # 📍 фиксирует координату СРАЗУ (раньше
-                notify("toast_set", "ok",        # требовалось ещё жать «Задать» — терялась)
-                       label=t(label_key), x=px, y=py)
-                if cfg_key == "rod_click_pos":
-                    # 📍 у «ПКМ удочка» заодно снимает шаблон rod.png с экрана: дальше
-                    # удочка ищется зрением в любом месте экрана (v1.9)
-                    ox2, oy2, w2, h2 = CAPTURE["rod"]
-                    isx, isy = scale()
-                    img = grab_px(px + ox2 * isx, py + oy2 * isy, w2 * isx, h2 * isy)
-                    if img is not None and img.size:
-                        os.makedirs(TPL_DIR, exist_ok=True)
-                        cv2.imwrite(os.path.join(TPL_DIR, "rod.png"), img)
-                        _tpl_cache.pop("rod", None)
-                        _tpl_trim_cache.pop("rod", None)
-                        notify("nt_tpl_saved", "ok", name="rod")
-            threading.Thread(target=worker_fn, daemon=True).start()
-
-        self.button(540, y, 32, 32, t("b_pick"), pick_and_fill, "gray", 12)
-        self.button(580, y, 82, 32, t("b_apply"), apply_coords, "gray", 10)
-        self.button(670, y, 68, 32, t("b_auto"), reset_coord, "dark", 10)
+    def do_macro_clear(self):
+        CFG["cast_macro"] = None
+        save_cfg()
+        self.toast(t("toast_macro_cleared"), "ok")
+        self.show_page(self.page)
 
     # ------------------------------------------------------------ выбор из списка / элемент списка CFG
     def choice(self, x, y, key, options, size=11, w=142, h=30):
@@ -3927,8 +3621,6 @@ class App:
                 ("m_castafter", "t", "cast_after_catch"),
                 ("m_biteto", "s", ("bite_timeout", 20, 180, 5, "{:g}")),
                 ("m_postdelay", "s", ("post_catch_delay", 0.5, 6, 0.25, "{:.2f}")),
-                ("m_menudelay", "s", ("use_menu_delay", 0.2, 5.0, 0.1, "{:.1f}")),
-                ("m_rodmatch", "s", ("rod_match_min", 0.40, 0.95, 0.05, "{:.2f}")),
                 ("m_selflearn", "t", "tpl_selflearn"),
                 ("m_hide", "t", "hide_when_running"), ("m_snd_start", "t", "sound_start"),
                 ("m_snd_end", "t", "sound_end"), ("m_snd_catch", "t", "sound_catch"),
@@ -3978,10 +3670,12 @@ class App:
         y = 336
         self.txt(PANEL_X + 400, PANEL_Y + y + 8, t("s_cast_delay"), 11, C_TEXT)
         self.stepper(600, y, "cast_delay", 0.3, 3.0, 0.1, "{:.1f}")
-        # --- ручные координаты ---
-        self.txt(PANEL_X + 56, PANEL_Y + 412, t("s_sec_coords"), 10, C_DIM, True)
-        self.xy_entry(0, 426, "rod_click_pos", "s_rod_pos")
-        self.xy_entry(0, 462, "use_click_pos", "s_use_pos")
+        # --- макро закидывания (v1.12) ---
+        self.txt(PANEL_X + 56, PANEL_Y + 412, t("s_sec_macro"), 10, C_DIM, True)
+        self.dyn["macro_st"] = self.txt(PANEL_X + 56, PANEL_Y + 434, self._macro_label(), 11, C_TEXT)
+        self.button(56, 458, 132, 32, t("b_rec"), self.do_macro_record, "red", 10)
+        self.button(200, 458, 120, 32, t("b_play"), self.do_macro_play, "gray", 10)
+        self.button(332, 458, 104, 32, t("b_clear"), self.do_macro_clear, "dark", 10)
         self.dyn["game"] = self.txt(PANEL_X + 56, PANEL_Y + 500, "", 10, C_DIM)
         self.button(424, 496, 100, 30, t("b_save"), self.do_save, "gray", 10)
         self.button(532, 496, 100, 30, t("b_load"), self.do_load, "gray", 10)
