@@ -19,8 +19,10 @@ Eternal FishMod — полуавтомат рыбалки для Skyrim RP-се�
   * Распознавание рыбы не зависит от её цвета (контраст по горизонтали внутри шкалы),
     поэтому подходит для любых видов рыб.
   * Полная локализация интерфейса: RU / EN / UA, переключение на лету (страница «Настройки»).
-  * Исправлено меню удочки: «Использовать» = ВЕРХНИЙ пункт, клик берётся НАД красной
-    строкой «Выбросить».
+  * Авто-закидывание без спама (v1.7): инвентарь открывает человек (бот не жмёт TAB),
+    удочка берётся ОДНИМ ПКМ по иконке -> пауза -> ОДНА ЛКМ по «Использовать» (верхний
+    пункт меню, над красной строкой «Выбросить»); кликов вслепую нет, между попытками
+    безопасные паузы. «Только мини-игра» = инвентарь и забросы полностью отключены.
   * Лаунчер launch.py / start.bat, файл VERSION + scripts/release.py (релизы на GitHub).
 
 Установка:  python launch.py   (сам поставит зависимости)   или   pip install -r requirements.txt
@@ -96,7 +98,7 @@ CFG_PATH = os.path.join(BASE_DIR, "fishmod_config.json")
 STATS_PATH = os.path.join(BASE_DIR, "fishmod_stats.json")
 LOG_PATH = os.path.join(BASE_DIR, "fishmod.log")
 VERSION_PATH = os.path.join(BASE_DIR, "VERSION")
-CFG_VERSION = 2                  # формат конфига: меняем только при НЕсовместимых правках
+CFG_VERSION = 4                  # формат конфига: меняем только при НЕсовместимых правках
 REF_W, REF_H = 1920, 1080
 
 
@@ -133,9 +135,13 @@ DEFAULT_CFG = {
     "bait_check_every": 12,              # проверять наживку по инвентарю каждые N рыб
     "bite_timeout": 90,                  # сколько секунд ждать поклёвку
     "no_bite_limit": 3,                  # столько таймаутов подряд -> стоп (нет поклёвок/перегруз)
-    "post_catch_delay": 1.8,
-    "after_equip_delay": 1.2,
+    "post_catch_delay": 2.5,             # пауза после пойманной рыбы перед следующим циклом
+    "after_equip_delay": 1.2,            # пауза после «Использовать» до заброса
     "cast_delay": 0.8,                   # пауза перед закидыванием удочки
+    "use_menu_delay": 1.0,               # пауза (с) после появления меню удочки перед кликом
+                                         # «Использовать»: игра дорисовывает меню, и ранний
+                                         # клик давал промахи. Безопасный темп, без спама
+    "equip_retry_delay": 3.0,            # пауза (с) между попытками взять удочку (их максимум 3)
     "idle_cursor": [1250, 500],
     # ВАЖНО: «Использовать» — ВЕРХНИЙ пункт меню, «Выбросить» — НИЖНИЙ (красный фон).
     # use_offset = [dx, dy_up]:
@@ -145,7 +151,6 @@ DEFAULT_CFG = {
     "use_offset": [76, 20],
     "rod_click_pos": None,               # [x, y] координаты удочки в инвентаре (None = авто поиск)
     "use_click_pos": None,               # [x, y] координаты кнопки «Использовать» (None = поиск по красной строке)
-    "inv_wheel_center": [320, 600],
     "sound_start": True, "sound_end": True, "sound_catch": False, "volume": 60,
     "hide_when_running": True,           # прятать окно, пока бот ловит (оверлей не мешает «зрению»)
     "ui_scale": 0.72,
@@ -346,11 +351,18 @@ STRINGS = {
     "log_rod_manual": "🎣 Удочка: ручные координаты ({x}, {y})", "log_rod_tpl": "🎣 Удочка найдена по шаблону ({x}, {y})",
     "log_use_manual": "🖱 «Использовать»: ручные координаты ({ux}, {uy})",
     "log_use_auto": "🖱 «Использовать»: над красной строкой меню ({ux}, {uy})",
-        "log_use_fb": "🖱 «Использовать»: грубое смещение ({ux}, {uy})", "m_det_auto": "авто (контраст)", "m_det_both": "контраст+HSV", "m_det_hsv": "только HSV", "log_step1": "🖱 Шаг 1: ПКМ по удочке…", "log_step2": "🖱 Шаг 2: ЛКМ по «Использовать»…",
+        "m_det_auto": "авто (контраст)", "m_det_both": "контраст+HSV", "m_det_hsv": "только HSV", "log_step1": "🖱 Шаг 1: одно ПКМ по удочке…", "log_step2": "🖱 Шаг 2: жду меню, затем одна ЛКМ по «Использовать»…",
     "log_rod_taken": "🎣 Удочка взята", "log_bait": "🪱 Наживка: {state} (стаков на экране: {n})",
     "bait_yes": "есть", "bait_no": "НЕТ", "log_rod_missing": "🎣 Удочки нет в руках — беру",
     "log_bait_icon": "🪱 Значок наживки пропал — проверяю инвентарь",
-    "log_mode_mini_only": "🎣 Режим: только мини-игра (без автозакидывания)",
+    "log_mode_mini_only": "🎣 Режим: только мини-игра — инвентарь и забросы полностью отключены",
+    "log_inv_wait": "📂 Жду, пока откроешь инвентарь (сам я его не открываю)",
+    "nt_inv_wait": "Открой инвентарь в игре",
+    "log_menu_missing": "Меню удочки не появилось — попытка прервана (кликов вслепую нет)",
+    "log_equip_retry": "↻ Попытка {n} через {d:.0f} с",
+    "log_bait_skip": "Проверка наживки пропущена — инвентарь закрыт",
+    "st_inv_wait": "ОТКРОЙ ИНВЕНТАРЬ", "st_inv_wait_d": "Открой инвентарь — бот ждёт…",
+    "m_menudelay": "Пауза перед «Использовать», с", "m_retrydelay": "Пауза между попытками, с",
     "log_cast": "🪝 Заброс удочки…", "log_cast_done": "🪝 Заброс выполнен — жду клёва",
     "log_slip": "⚠ Рыба срывается — аварийное удержание", "log_mini_done": "✔ Мини-игра: {dur:.1f} с, срывов {slip}, ЛКМ {sw:.1f} перекл/с",
     "log_debug": "📷 debug_screen.png, debug_bar.png сохранены. {parts} | zone={zone} fish={fish}",
@@ -375,8 +387,7 @@ STRINGS = {
     "log_adapt": "⚖ Физика зоны измерена: разгон вверх {up:.0f} px/с², падение {dn:.0f} px/с² (замеров {n})",
     "m_adapt": "Измерять физику зоны",
     "log_ready": "{app}: готов. {toggle} — старт/стоп, {panic} — аварийный стоп",
-    "fail_rod": "удочка не найдена в инвентаре", "fail_inv": "не удалось открыть инвентарь (TAB). Окно игры должно быть активным",
-    "fail_inv2": "не удалось открыть инвентарь (TAB)",
+    "fail_rod": "удочка не найдена в открытом инвентаре", "fail_inv": "не удалось взять удочку за 3 попытки — проверь, что инвентарь открыт и меню «Использовать» появляется",
     "fail_capture": "ни один бэкенд захвата не запустился", "fail_templates": "нет шаблонов в папке templates: {files}", "fail_window": "не удалось определить окно игры: переключись в игру и нажми F8",
     "nt_started": "Рыбалка началась", "nt_finished": "Рыбалка закончилась: {text}", "nt_pause": "Пауза: вернись в игру",
     "nt_snapshot": "Снимок сохранён (debug_screen.png)", "nt_tpl_saved": "Шаблон «{name}» сохранён",
@@ -448,11 +459,18 @@ STRINGS = {
     "log_rod_manual": "🎣 Rod: manual coordinates ({x}, {y})", "log_rod_tpl": "🎣 Rod found by template ({x}, {y})",
     "log_use_manual": "🖱 “Use”: manual coordinates ({ux}, {uy})",
     "log_use_auto": "🖱 “Use”: above the red menu row ({ux}, {uy})",
-        "log_use_fb": "🖱 “Use”: rough offset ({ux}, {uy})", "m_det_auto": "auto (contrast)", "m_det_both": "contrast+HSV", "m_det_hsv": "HSV only", "log_step1": "🖱 Step 1: right-click the rod…", "log_step2": "🖱 Step 2: click “Use”…",
+        "m_det_auto": "auto (contrast)", "m_det_both": "contrast+HSV", "m_det_hsv": "HSV only", "log_step1": "🖱 Step 1: one right-click on the rod…", "log_step2": "🖱 Step 2: waiting for the menu, then one click on “Use”…",
     "log_rod_taken": "🎣 Rod equipped", "log_bait": "🪱 Bait: {state} (stacks on screen: {n})",
     "bait_yes": "yes", "bait_no": "NONE", "log_rod_missing": "🎣 Rod not in hands — taking it",
     "log_bait_icon": "🪱 Bait icon disappeared — checking the inventory",
-    "log_mode_mini_only": "🎣 Mode: minigame only (no auto-cast)",
+    "log_mode_mini_only": "🎣 Mode: minigame only — inventory and casting are fully disabled",
+    "log_inv_wait": "📂 Waiting for you to open the inventory (I never open it myself)",
+    "nt_inv_wait": "Open the inventory in game",
+    "log_menu_missing": "The rod context menu did not appear — attempt aborted (no blind clicks)",
+    "log_equip_retry": "↻ Attempt {n} in {d:.0f} s",
+    "log_bait_skip": "Bait check skipped — inventory is closed",
+    "st_inv_wait": "OPEN INVENTORY", "st_inv_wait_d": "Open the inventory — the bot is waiting…",
+    "m_menudelay": "Delay before “Use”, s", "m_retrydelay": "Pause between attempts, s",
     "log_cast": "🪝 Casting…", "log_cast_done": "🪝 Cast done — waiting for a bite",
     "log_slip": "⚠ Fish is slipping — emergency hold", "log_mini_done": "✔ Minigame: {dur:.1f} s, slips {slip}, LMB {sw:.1f} switches/s",
     "log_debug": "📷 debug_screen.png, debug_bar.png saved. {parts} | zone={zone} fish={fish}",
@@ -477,8 +495,7 @@ STRINGS = {
     "log_adapt": "⚖ Zone physics measured: lift {up:.0f} px/s², fall {dn:.0f} px/s² ({n} samples)",
     "m_adapt": "Measure zone physics",
     "log_ready": "{app}: ready. {toggle} — start/stop, {panic} — panic stop",
-    "fail_rod": "rod not found in the inventory", "fail_inv": "cannot open the inventory (TAB). The game window must be active",
-    "fail_inv2": "cannot open the inventory (TAB)",
+    "fail_rod": "rod not found in the open inventory", "fail_inv": "could not take the rod in 3 attempts — make sure the inventory is open and the “Use” menu appears",
     "fail_capture": "no capture backend could be started", "fail_templates": "no templates in the templates folder: {files}", "fail_window": "cannot detect the game window: focus the game and press F8",
     "nt_started": "Fishing started", "nt_finished": "Fishing finished: {text}", "nt_pause": "Paused: go back to the game",
     "nt_snapshot": "Snapshot saved (debug_screen.png)", "nt_tpl_saved": "Template “{name}” saved",
@@ -550,11 +567,18 @@ STRINGS = {
     "log_rod_manual": "🎣 Вудка: ручні координати ({x}, {y})", "log_rod_tpl": "🎣 Вудку знайдено за шаблоном ({x}, {y})",
     "log_use_manual": "🖱 «Використати»: ручні координати ({ux}, {uy})",
     "log_use_auto": "🖱 «Використати»: над червоним рядком меню ({ux}, {uy})",
-        "log_use_fb": "🖱 «Використати»: грубе зміщення ({ux}, {uy})", "m_det_auto": "авто (контраст)", "m_det_both": "контраст+HSV", "m_det_hsv": "лише HSV", "log_step1": "🖱 Крок 1: ПКМ по вудці…", "log_step2": "🖱 Крок 2: ЛКМ по «Використати»…",
+        "m_det_auto": "авто (контраст)", "m_det_both": "контраст+HSV", "m_det_hsv": "лише HSV", "log_step1": "🖱 Крок 1: одне ПКМ по вудці…", "log_step2": "🖱 Крок 2: чекаю меню, потім одна ЛКМ по «Використати»…",
     "log_rod_taken": "🎣 Вудку взято", "log_bait": "🪱 Наживка: {state} (стеків на екрані: {n})",
     "bait_yes": "є", "bait_no": "НЕМАЄ", "log_rod_missing": "🎣 Вудки немає в руках — беру",
     "log_bait_icon": "🪱 Значок наживки зник — перевіряю інвентар",
-    "log_mode_mini_only": "🎣 Режим: лише міні-гра (без авто-закидання)",
+    "log_mode_mini_only": "🎣 Режим: лише міні-гра — інвентар та закидання повністю вимкнено",
+    "log_inv_wait": "📂 Чекаю, поки відкриєш інвентар (сам я його не відкриваю)",
+    "nt_inv_wait": "Відкрий інвентар у грі",
+    "log_menu_missing": "Меню вудки не з'явилося — спробу перервано (кліків навмання немає)",
+    "log_equip_retry": "↻ Спроба {n} через {d:.0f} с",
+    "log_bait_skip": "Перевірку наживки пропущено — інвентар закрито",
+    "st_inv_wait": "ВІДКРИЙ ІНВЕНТАР", "st_inv_wait_d": "Відкрий інвентар — бот чекає…",
+    "m_menudelay": "Пауза перед «Використати», с", "m_retrydelay": "Пауза між спробами, с",
     "log_cast": "🪝 Закидання вудки…", "log_cast_done": "🪝 Закидання виконано — чекаю клювання",
     "log_slip": "⚠ Риба зривається — аварійне утримання", "log_mini_done": "✔ Міні-гра: {dur:.1f} с, зривів {slip}, ЛКМ {sw:.1f} перемик/с",
     "log_debug": "📷 debug_screen.png, debug_bar.png збережено. {parts} | zone={zone} fish={fish}",
@@ -579,8 +603,7 @@ STRINGS = {
     "log_adapt": "⚖ Фізику зони виміряно: розгін вгору {up:.0f} px/с², падіння {dn:.0f} px/с² (вимірів {n})",
     "m_adapt": "Міряти фізику зони",
     "log_ready": "{app}: готово. {toggle} — старт/стоп, {panic} — аварійний стоп",
-    "fail_rod": "вудку не знайдено в інвентарі", "fail_inv": "не вдалося відкрити інвентар (TAB). Вікно гри має бути активним",
-    "fail_inv2": "не вдалося відкрити інвентар (TAB)",
+    "fail_rod": "вудку не знайдено у відкритому інвентарі", "fail_inv": "не вдалося взяти вудку за 3 спроби — перевір, що інвентар відкритий і меню «Використати» з'являється",
     "fail_capture": "жоден бекенд захвату не запустився", "fail_templates": "немає шаблонів у папці templates: {files}", "fail_window": "не вдалося визначити вікно гри: перемкнись у гру та натисни F8",
     "nt_started": "Риболовля почалась", "nt_finished": "Риболовля завершилась: {text}", "nt_pause": "Пауза: повернись у гру",
     "nt_snapshot": "Знімок збережено (debug_screen.png)", "nt_tpl_saved": "Шаблон «{name}» збережено",
@@ -1590,7 +1613,6 @@ def find(name, thr=None):
 # ---------------------------------------------------------------------------
 # 4B. МЕНЮ УДОЧКИ: «Использовать» — СВЕРХУ, «Выбросить» (красный) — СНИЗУ
 # ---------------------------------------------------------------------------
-USE_ROW_DY_FALLBACK = 34      # если красную строку не нашли: смещение вниз от точки ПКМ (px эталона)
 RED_MIN_FRAC = 0.004          # доля красных пикселей в окне поиска, ниже которой меню считается закрытым
 
 
@@ -1866,14 +1888,6 @@ def click_px(x, y, button="left", pre=0.12, post=0.15):
         nap(0.06)
         _send_mouse(MOUSEEVENTF_RIGHTUP)
     nap(post)
-
-
-def wheel(notches):
-    """Колесо мыши: отрицательное — вниз."""
-    try:
-        ctypes.windll.user32.mouse_event(0x0800, 0, 0, ctypes.c_ulong(int(notches * 120) & 0xFFFFFFFF), 0)
-    except Exception:
-        pass
 
 
 def set_mouse(down, force=False):
@@ -2568,165 +2582,126 @@ def inventory_open():
     return find("inv_header") is not None
 
 
-def open_inventory():
+def wait_inventory_open():
+    """Инвентарь открывает ЧЕЛОВЕК: бот никогда не нажимает TAB/ESC и не двигает ползунки.
+    Если окна инвентаря на экране нет — бот пишет в статус/журнал/тост «Открой инвентарь»
+    и ждёт (прервать — F8/F10). Ожидание бесконечное: рыбалка продолжится сама, как только
+    инвентарь появится."""
     if inventory_open():
         return True
-    for _ in range(3):
-        tap("tab")
-        nap(0.8)
-        if inventory_open():
-            return True
-    return False
-
-
-def close_inventory():
-    for _ in range(3):
-        if not inventory_open():
-            return True
-        tap("tab")
-        nap(0.7)
-    if inventory_open():
-        tap("esc")
-        nap(0.7)
-    return not inventory_open()
-
-
-def scroll_inventory(notches):
-    move_px(*P(*CFG["inv_wheel_center"]))
-    nap(0.15)
-    wheel(notches)
-    nap(0.45)
-
-
-def locate_in_inventory(name, pages=5):
-    for _ in range(pages + 1):
-        move_px(*P(*CFG["idle_cursor"]))
-        nap(0.2)
-        m = find(name)
-        if m:
-            return m
-        scroll_inventory(-3)
-    return None
+    set_state("st_inv_wait", "st_inv_wait_d", "busy")
+    log(t("log_inv_wait"))
+    notify("nt_inv_wait", "warn")
+    last_note = time.perf_counter()
+    while not inventory_open():
+        check_stop()
+        if time.perf_counter() - last_note >= 20.0:      # напоминание раз в 20 с
+            last_note = time.perf_counter()
+            log(t("log_inv_wait"))
+        nap(0.4)
+    return True
 
 
 def use_rod():
     """
-    ПКМ по удочке -> ЛКМ по «Использовать» (ВЕРХНИЙ пункт меню).
-    Инвентарь уже открыт, игра сама его закроет после «Использовать».
-
-    Порядок поиска точки клика:
-      1) CFG["use_click_pos"] — ручные координаты (самый надёжный способ, калибруется кнопкой «📍»);
-      2) найденная КРАСНАЯ строка «Выбросить» (нижний пункт) -> клик на use_offset[1] пикселей ВЫШЕ неё;
-      3) грубое смещение от точки ПКМ (use_offset[0] вправо, USE_ROW_DY_FALLBACK вниз).
+    ОДНА попытка взять удочку, безопасный темп, никакого спама нажатиями:
+      1) навести курсор на слот удочки и ОДИН раз нажать ПКМ;
+      2) дождаться контекстного меню (до 2 с), затем выждать use_menu_delay секунд —
+         «игра дорисовывает меню», и клик вслепую как раз давал промахи;
+      3) ОДИН раз нажать ЛКМ по пункту «Использовать» (ВЕРХНИЙ пункт меню, НАД красной
+         строкой «Выбросить»).
+    Точка клика: use_click_pos (ручные, калибруются «📍») > красная строка меню.
+    Меню не появилось — попытка честно прерывается БЕЗ кликов вслепую. Инвентарь бот не
+    открывает и не закрывает. True — успех; False — попытка не удалась.
     """
-    sx, sy = scale()
-    m = monitor()
-    # --- где лежать удочке ---
+    wait_inventory_open()
+    # --- где удочка: ручные координаты надёжнее шаблона ---
     if CFG.get("rod_click_pos"):
         rx, ry = int(CFG["rod_click_pos"][0]), int(CFG["rod_click_pos"][1])
         log(t("log_rod_manual", x=rx, y=ry))
     else:
-        scroll_inventory(10)
-        found = locate_in_inventory("rod")
+        found = find("rod")
         if not found:
-            close_inventory()
-            raise Fail(t("fail_rod"))
+            log(t("fail_rod"))                 # без прокруток и повторов — сразу честный отчёт
+            return False
         _, rx, ry = found
         log(t("log_rod_tpl", x=rx, y=ry))
 
-    # --- Шаг 1: навести и ПКМ ---
+    # --- Шаг 1: одно ПКМ по иконке удочки ---
     log(t("log_step1"))
-    mouse_move_abs(int(rx), int(ry))
-    nap(0.6)                                   # ждём, пока игровой курсор встанет на иконку
+    mouse_move_abs(rx, ry)
+    nap(0.6)                                   # игровой курсор должен встать на иконку
     _send_mouse(MOUSEEVENTF_RIGHTDOWN)
     nap(0.15)
     _send_mouse(MOUSEEVENTF_RIGHTUP)
-    nap(0.5)                                   # меню рисуется не мгновенно
 
-    # --- Шаг 2: найти меню и кликнуть по «Использовать» (НАД красной строкой) ---
+    # --- Шаг 2: где «Использовать» + выждать use_menu_delay ---
     log(t("log_step2"))
-    ux = uy = None
-    how = "manual"
     if CFG.get("use_click_pos"):
         ux, uy = int(CFG["use_click_pos"][0]), int(CFG["use_click_pos"][1])
+        log(t("log_use_manual", ux=ux, uy=uy))
+        nap(float(CFG.get("use_menu_delay", 1.0)))       # меню должно успеть появиться
     else:
-        for _ in range(10):                    # до 1.5 с ждём появления меню
+        end = time.perf_counter() + 2.0
+        ux = uy = None
+        while time.perf_counter() < end:
             info = context_menu_info(rx, ry)
             if info:
                 ux, uy = int(info["use_x"]), int(info["use_y"])
-                how = "red_row"
                 break
             nap(0.15)
         if ux is None:
-            dx, dy_up = CFG["use_offset"]
-            ux = int(rx + dx * sx)
-            uy = int(m["top"] + (ry - m["top"]) + USE_ROW_DY_FALLBACK * sy)
-            how = "fallback"
-    log(t({"manual": "log_use_manual", "red_row": "log_use_auto"}.get(how, "log_use_fb"), ux=ux, uy=uy))
+            log(t("log_menu_missing"))
+            return False                       # кликать «наугад» нельзя — это и были промахи
+        log(t("log_use_auto", ux=ux, uy=uy))
+        nap(float(CFG.get("use_menu_delay", 1.0)))       # безопасная пауза перед кликом
+
+    # --- Шаг 3: одна ЛКМ по «Использовать» ---
     mouse_move_abs(ux, uy)
-    nap(0.45)
+    nap(0.35)                                  # курсор встал на пункт меню
     _send_mouse(MOUSEEVENTF_LEFTDOWN)
     nap(0.15)
     _send_mouse(MOUSEEVENTF_LEFTUP)
 
-    # --- Инвентарь должен закрыться сам; если нет — пробуем ещё раз/закрываем руками ---
+    # --- подтверждение: удочка в руках (если HUD откалиброван) ---
     nap(1.0)
-    for _ in range(4):
-        if not inventory_open():
-            break
-        nap(0.5)
-    else:
-        if CFG.get("use_click_pos") or how == "manual":
-            close_inventory()
-        else:                                  # возможно, смещение мимо кнопки — один повтор
-            info = context_menu_info(rx, ry)
-            if info:
-                mouse_move_abs(int(info["use_x"]), int(info["use_y"]))
-                nap(0.3)
-                _send_mouse(MOUSEEVENTF_LEFTDOWN)
-                nap(0.12)
-                _send_mouse(MOUSEEVENTF_LEFTUP)
-                nap(1.0)
-            if inventory_open():
-                close_inventory()
-    nap(CFG.get("after_equip_delay", 1.2))
+    if tpl("hud_fish") is not None:
+        end = time.perf_counter() + 2.5
+        while not hud_present("hud_fish") and time.perf_counter() < end:
+            check_stop()
+            nap(0.25)
+    nap(float(CFG.get("after_equip_delay", 1.2)))
     log(t("log_rod_taken"))
+    return True
 
 
-def bait_in_open_inventory():
-    scroll_inventory(10)
-    stacks = len(find_all("bait"))
-    present = stacks > 0 or locate_in_inventory("bait") is not None
-    STATS["checks"] += 1
-    log(t("log_bait", state=t("bait_yes") if present else t("bait_no"), n=stacks))
-    return present
+def equip_cycle():
+    """Взять удочку: максимум 3 попытки с безопасной паузой equip_retry_delay между ними
+    (никакого спама кликами — между попытками бот просто ждёт). Все попытки неудачны ->
+    Fail с понятной причиной."""
+    attempts = 3
+    for n in range(1, attempts + 1):
+        if use_rod():
+            return True
+        if n < attempts:
+            log(t("log_equip_retry", n=n + 1, d=float(CFG.get("equip_retry_delay", 3.0))))
+            set_state("st_prepare", "st_prepare_rod_d", "busy")
+            nap(float(CFG.get("equip_retry_delay", 3.0)))
+    raise Fail(t("fail_inv"))
 
 
 def bait_check():
-    """True — есть, False — нет, None — инвентарь не открылся."""
-    if not open_inventory():
+    """Пассивная проверка наживки: только если инвентарь СЕЙЧАС открыт (бот сам его не
+    открывает). True — есть, False — нет, None — инвентарь закрыт (проверка пропущена,
+    это НЕ ошибка)."""
+    if not inventory_open():
+        log(t("log_bait_skip"))
         return None
-    present = bait_in_open_inventory()
-    close_inventory()
-    nap(0.5)
+    stacks = len(find_all("bait"))
+    present = stacks > 0 or find("bait") is not None
+    STATS["checks"] += 1
+    log(t("log_bait", state=t("bait_yes") if present else t("bait_no"), n=stacks))
     return present
-
-
-def prepare(equip):
-    """Открывает инвентарь, проверяет наживку и (если нужно) берёт удочку."""
-    if not open_inventory():
-        return None
-    present = bait_in_open_inventory()
-    if not present:
-        close_inventory()
-        return False
-    if equip:
-        # use_rod сам закрывает инвентарь (игра делает это после «Использовать»)
-        use_rod()
-    else:
-        close_inventory()
-        nap(0.5)
-    return True
 
 
 # ==========================================================================
@@ -2756,30 +2731,21 @@ def cast():
 
 
 def _bait_guard():
-    """Проверка наживки: 'ok' | 'no_bait' | бросает Fail."""
+    """Проверка наживки: 'ok' | 'no_bait'. Инвентарь закрыт — проверка пропускается (не ошибка)."""
     set_state("st_check", "st_check_d", "busy")
     r = bait_check()
-    if r is None:
-        raise Fail(t("fail_inv2"))
-    return "ok" if r else "no_bait"
+    return "no_bait" if r is False else "ok"
 
 
 def fishing_run():
-    miss = [n for n in ("rod", "bait", "inv_header") if tpl(n) is None]
-    if miss:
-        raise Fail(t("fail_templates", files=", ".join(m + ".png" for m in miss)))
-    hud_ok = all(tpl(t_) is not None for t_ in ("hud_fish", "hud_bait", "hud_shield"))
+    # Шаблоны удочки/наживки/инвентаря нужны ТОЛЬКО в режиме автозакидывания: «только
+    # мини-игра» не трогает инвентарь вообще, и ей ничего из этого не требуется.
     STATS.update({"catches": 0, "t0": time.time(), "t_end": None, "mg": [], "checks": 0})
-    set_state("st_prepare", "st_prepare_d", "busy")
 
-    # Если автозакидывание выключено — только мини-игра (рыбачит человек)
+    # Если автозакидывание ВЫКЛЮЧЕНО — бот полностью отключён от инвентаря и забросов:
+    # никакой TAB/ПКМ/ЛКМ, только наблюдение за шкалой и мини-игра. Рыбачит человек.
     if not CFG["auto_cast"]:
         log(t("log_mode_mini_only"))
-        r = prepare(False)
-        if r is None:
-            raise Fail(t("fail_inv"))
-        if r is False:
-            return "no_bait"
         while True:
             check_stop()
             set_state("st_await", "st_await_d", "run")
@@ -2792,35 +2758,30 @@ def fishing_run():
                 if CFG["sound_catch"]:
                     play("catch")
                 nap(CFG["post_catch_delay"])
-                n = CFG["bait_check_every"]
-                if n and STATS["catches"] % n == 0 and _bait_guard() == "no_bait":
-                    return "no_bait"
             if CAP is not None:
-                CAP.stop_stream()               # сброс потока между забросами
+                CAP.stop_stream()               # сброс потока между рыбами
 
     # ---------- режим с автозакидыванием ----------
-    rod_in_hand = hud_present("hud_fish") if hud_ok else False
-    r = prepare(CFG["equip_on_start"] and not rod_in_hand)
-    if r is None:
-        raise Fail(t("fail_inv"))
-    if r is False:
-        return "no_bait"
+    miss = [n for n in ("rod", "bait", "inv_header") if tpl(n) is None]
+    if miss:
+        raise Fail(t("fail_templates", files=", ".join(m + ".png" for m in miss)))
+    hud_ok = all(tpl(t_) is not None for t_ in ("hud_fish", "hud_bait", "hud_shield"))
+    set_state("st_prepare", "st_prepare_d", "busy")
+    if CFG["equip_on_start"] and not (hud_ok and hud_present("hud_fish")):
+        equip_cycle()
     seen_bait_icon = hud_present("hud_bait") if hud_ok else False
     last_equip = time.perf_counter()
     no_bite, first = 0, True
     while True:
         check_stop()
-        if hud_ok and hud_present("hud_shield"):            # HUD виден — значкам можно верить
+        # страховка: HUD виден, а удочка пропала из рук — вернуть (не чаще раза в 45 с)
+        if hud_ok and hud_present("hud_shield"):
             now = time.perf_counter()
             if not hud_present("hud_fish") and now - last_equip > 45:
                 log(t("log_rod_missing"))
                 set_state("st_prepare", "st_prepare_rod_d", "busy")
                 last_equip = now
-                r = prepare(True)
-                if r is None:
-                    raise Fail(t("fail_inv2"))
-                if r is False:
-                    return "no_bait"
+                equip_cycle()
                 first = True
             elif seen_bait_icon and not hud_present("hud_bait"):
                 log(t("log_bait_icon"))
@@ -2831,7 +2792,11 @@ def fishing_run():
             elif hud_present("hud_bait"):
                 seen_bait_icon = True
         if first or CFG["cast_after_catch"]:
+            # Порядок из инструкции: после каждой рыбы — пауза (post_catch_delay уже
+            # выдержана) -> ОДНО ПКМ по удочке -> пауза -> «Использовать» (одна ЛКМ) ->
+            # заброс. Никаких серий нажатий.
             set_state("st_cast", "st_cast_d", "busy")
+            equip_cycle()
             cast()
         first = False
         set_state("st_bite", "st_bite_d", "run")
@@ -2855,10 +2820,7 @@ def fishing_run():
             no_bite += 1
             log(t("log_no_bite", t=CFG["bite_timeout"], k=no_bite, lim=CFG["no_bite_limit"]))
             set_state("st_check", "st_check_nobite_d", "busy")
-            r = bait_check()
-            if r is None:
-                raise Fail(t("fail_inv2"))
-            if r is False:
+            if bait_check() is False:           # None = инвентарь закрыт, проверка пропущена
                 return "no_bait"
             if no_bite >= CFG["no_bite_limit"]:
                 return "no_bite"
@@ -3546,17 +3508,19 @@ class App:
                 ("m_castafter", "t", "cast_after_catch"), ("m_baitevery", "s", ("bait_check_every", 1, 50, 1, "{:g}")),
                 ("m_biteto", "s", ("bite_timeout", 20, 180, 5, "{:g}")),
                 ("m_postdelay", "s", ("post_catch_delay", 0.5, 6, 0.25, "{:.2f}")),
+                ("m_menudelay", "s", ("use_menu_delay", 0.2, 5.0, 0.1, "{:.1f}")),
+                ("m_retrydelay", "s", ("equip_retry_delay", 1.0, 15.0, 0.5, "{:.1f}")),
                 ("m_hide", "t", "hide_when_running"), ("m_snd_start", "t", "sound_start"),
                 ("m_snd_end", "t", "sound_end"), ("m_snd_catch", "t", "sound_catch"),
                 ("m_maxhold", "s", ("max_hold", 0.5, 8, 0.25, "{:.2f}")),
-                ("m_lostms", "s", ("lost_ms", 40, 900, 20, "{:g}")),
-                ("m_barref", "t", "bar_refine"), ("m_barfit", "t", "bar_autofit")]
+                ("m_lostms", "s", ("lost_ms", 40, 900, 20, "{:g}"))]
         right = [("m_hyst", "s", ("relay_hyst", 2.0, 60.0, 1.0, "{:g}")),
                  ("m_look", "s", ("relay_look_ms", 60, 300, 10, "{:g}")),
                  ("m_aup", "s", ("relay_a_up", 400.0, 4000.0, 100.0, "{:g}")),
                  ("m_g", "s", ("relay_g", 400.0, 4000.0, 100.0, "{:g}")),
                  ("m_vmax", "s", ("relay_vmax", 300.0, 1500.0, 50.0, "{:g}")),
-                 ("m_adapt", "t", "relay_adapt"),
+                 ("m_adapt", "t", "relay_adapt"), ("m_barref", "t", "bar_refine"),
+                 ("m_barfit", "t", "bar_autofit"),
                  ("m_fishthr", "s", ("fish_thr", 6, 90, 2, "{:g}")),
                  ("m_slipthr", "s", ("slip_thr", 0.02, 0.6, 0.02, "{:.2f}"))]
         for col, rows in ((44, left), (400, right)):
