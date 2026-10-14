@@ -190,13 +190,24 @@ ef.CFG.clear()
 ef.CFG.update(ef.DEFAULT_CFG)
 ef.load_cfg()
 check("битое макро -> None, без падений", ef.CFG["cast_macro"] is None)
-_good = [[0.0, "move", 10, 20], [0.5, "down", "r"], [0.7, "up", "r"]]
+_old = [[0.0, "move", 10, 20], [0.5, "down", "r"], [0.7, "up", "r"]]
 with open(tmp3, "w", encoding="utf-8") as f:
-    _json.dump({"cfg_version": 9, "cast_macro": _good, "lang": "ru"}, f)
+    _json.dump({"cfg_version": 10, "cast_macro": _old, "lang": "ru"}, f)
 ef.CFG.clear()
 ef.CFG.update(ef.DEFAULT_CFG)
 ef.load_cfg()
-check("корректное макро переживает загрузку конфига", ef.CFG["cast_macro"] == _good)
+check("макро СТАРОГО формата (абсолютные \"move\") -> None: повтор невозможен",
+      ef.CFG["cast_macro"] is None)
+_good = [[0.0, "p", 10, 20], [0.5, "down", "r"], [0.7, "up", "r"], [1.1, "m", 5, -3]]
+with open(tmp3, "w", encoding="utf-8") as f:
+    _json.dump({"cfg_version": 10, "cast_macro": _good, "lang": "ru"}, f)
+ef.CFG.clear()
+ef.CFG.update(ef.DEFAULT_CFG)
+ef.CFG_MIGRATED.clear()
+ef.load_cfg()
+check("корректное макро (дельты, cfg v10) переживает загрузку конфига",
+      ef.CFG["cast_macro"] == _good)
+check("...и миграция его не трогает", "cast_macro" not in ef.CFG_MIGRATED, str(ef.CFG_MIGRATED))
 os.remove(tmp3)
 _shutil.rmtree(_tmp3, ignore_errors=True)
 

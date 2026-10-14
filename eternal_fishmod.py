@@ -101,7 +101,7 @@ CFG_PATH = os.path.join(BASE_DIR, "fishmod_config.json")
 STATS_PATH = os.path.join(BASE_DIR, "fishmod_stats.json")
 LOG_PATH = os.path.join(BASE_DIR, "fishmod.log")
 VERSION_PATH = os.path.join(BASE_DIR, "VERSION")
-CFG_VERSION = 9                  # формат конфига: меняем только при НЕсовместимых правках
+CFG_VERSION = 10                 # формат конфига: меняем только при НЕсовместимых правках
 REF_W, REF_H = 1920, 1080
 
 
@@ -245,12 +245,13 @@ def load_cfg():
             for k in REMOVED_CFG_KEYS:
                 if k in data and k not in CFG_DROPPED:
                     CFG_DROPPED.append(k)
-            # макро закидывания (v1.12): список событий [t, kind, ...]; мусор -> None
+            # макро закидывания (v1.16): дельты движения ["m", dx, dy], кнопки
+            # ["down"/"up", btn], старт ["p", x, y]; мусор/старый формат -> None
             _m = CFG.get("cast_macro")
             if _m is not None and not (isinstance(_m, list) and _m
                                        and all(isinstance(e, (list, tuple)) and len(e) >= 3
                                                and isinstance(e[0], (int, float))
-                                               and e[1] in ("move", "down", "up") for e in _m)):
+                                               and e[1] in ("p", "m", "down", "up") for e in _m)):
                 CFG["cast_macro"] = None
             # устаревшие ЗНАЧЕНИЯ мигрируем явно (CFG_VERSION не меняем — ключ-то на месте).
             # mss из проекта вырезан, а конфиги версий 1.2-1.3 успели записать
@@ -260,6 +261,11 @@ def load_cfg():
                 CFG["capture_backend"] = DEFAULT_CFG["capture_backend"]
                 CFG_MIGRATED.append("capture_backend")
             if int(data.get("cfg_version", 1) or 1) < CFG_VERSION:
+                if int(data.get("cfg_version", 1) or 1) < 10 and CFG.get("cast_macro"):
+                    # v1.16: макро переведено на относительные дельты (точно как мышь);
+                    # старую абсолютную запись просим сделать заново (20 секунд)
+                    CFG["cast_macro"] = None
+                    CFG_MIGRATED.append("cast_macro")
                 # аддитивная миграция: недостающие ключи (в т.ч. cast_macro) добавляем
                 # дефолтами; устаревшие чистит REMOVED_CFG_KEYS выше
                 CFG.update({k: v for k, v in DEFAULT_CFG.items() if k not in known})
@@ -347,6 +353,7 @@ STRINGS = {
     "toast_rec_done": "Макро сохранено: {d:.1f} с, кликов {n}",
     "toast_rec_empty": "В записи нет кликов — макро не сохранено",
     "toast_rec_running": "Сначала останови бота (F8)", "toast_rec_cancel": "⏹ Запись отменена — ничего не сохранено",
+    "toast_macro_play": "▸ Проигрываю макро…",
     "toast_macro_cleared": "Макро стёрто",
     "toast_macro_need_inv": "Открой инвентарь в игре — потом «▷ Проверить»",
     "log_macro_play": "▶ Макро закидывания: повторяю запись ({d:.1f} с, {n} событий)",
@@ -390,7 +397,7 @@ STRINGS = {
     "log_capture": "🖥 Захват: {backend} ({detail})", "log_capture_fallback": "⚠️ DXGI-захват недоступен ({err}) — работаю через GDI (резерв без зависимостей)",
     "log_capture_skipped": "🖥 {reason}",
     "log_cfg_migrate": "⚙ Конфиг: значение \"{key}\": \"mss\" устарело (mss вырезан) — включено {to}.",
-    "log_cfg_drop": "⚙ Конфиг: ключ \"{key}\" устарел — регулятор мини-игры переписан (v1.6), значение удалено.",
+    "log_cfg_drop": "⚙ Конфиг: ключ \"{key}\" устарел — значение удалено из конфига.",
     "hint_capture": "Что сделать: python -m pip install -U dxcam bettercam (и перезапусти). Если экран игры защищён от захвата или это RDP/виртуалка — бот сам возьмёт GDI-резерв; чтобы работать строго по DXGI, поставь в fishmod_config.json \"capture_backend\": \"dxcam\"",
     "log_stream": "🖥 Поток мини-игры: {backend}, {fps} fps, регион {rect}",
     "log_stream_stop": "🖥 Поток мини-игры остановлен",
@@ -464,6 +471,7 @@ STRINGS = {
     "toast_rec_done": "Macro saved: {d:.1f} s, {n} clicks",
     "toast_rec_empty": "No clicks recorded — macro not saved",
     "toast_rec_running": "Stop the bot first (F8)", "toast_rec_cancel": "⏹ Recording cancelled — nothing saved",
+    "toast_macro_play": "▸ Replaying macro…",
     "toast_macro_cleared": "Macro cleared",
     "toast_macro_need_inv": "Open the in-game inventory — then “▷ Test”",
     "log_macro_play": "▶ Cast macro: replaying the recording ({d:.1f} s, {n} events)",
@@ -581,6 +589,7 @@ STRINGS = {
     "toast_rec_done": "Макро збережено: {d:.1f} с, кліків {n}",
     "toast_rec_empty": "У записі немає кліків — макро не збережено",
     "toast_rec_running": "Спочатку зупини бота (F8)", "toast_rec_cancel": "⏹ Запис скасовано — нічого не збережено",
+    "toast_macro_play": "▸ Програю макро…",
     "toast_macro_cleared": "Макро стерто",
     "toast_macro_need_inv": "Відкрий інвентар у грі — потім «▷ Перевірити»",
     "log_macro_play": "▶ Макро закидання: повторюю запис ({d:.1f} с, {n} подій)",
@@ -2742,8 +2751,11 @@ def macro_record():
         повторе курсор гарантированно стартует оттуда же;
       * кнопки пишутся по переходам down/up (VK-поллинг 100 Гц), движения — шагом
         >= 2 px, время — от t0 записи (monotonic);
-      * координаты — в системе кадра захвата (те же, что у кликов бота), поэтому
-        повтор точно попадает в записанные точки даже на мультимониторе;
+      * ОТНОСИТЕЛЬНЫЕ дельты движения мыши [t, "m", dx, dy] — ровно то, что
+        получает игра; повтор не зависит от DPI/маппинга координат;
+      * на время записи ускорение курсора Windows («повышенная точность
+        указателя») ВЫКЛЮЧАЕТСЯ и восстанавливается после — дельты пишутся
+        ровно такие, какие ты делаешь рукой;
       * при работающем боте запись отклоняется с тостом (конфликт ввода).
     Все флаги сбрасываются в finally — запись не может «залипнуть»."""
     if MACRO_STATE["rec"]:                  # тумблер: повторное нажатие = стоп и сохранить
@@ -2760,6 +2772,7 @@ def macro_record():
         events = []
         clicks = 0
         cancelled = False
+        epp = None                            # пороги ускорения до записи
         try:
             for i in (3, 2, 1):
                 if MACRO_STATE["cancel"] or MACRO_STATE["stop"]:
@@ -2771,13 +2784,15 @@ def macro_record():
             if not MACRO_STATE["cancel"]:
                 notify("toast_rec_on", "ok")
                 log(t("toast_rec_on"))
+                epp = _epp_get()
+                _epp_set((0, 0, 0))          # пишем дельты без ускорения — 1:1
                 t0 = time.perf_counter()
                 prev = {"l": False, "r": False}
                 last_act = t0
                 last_pos = None
-                try:                        # СТАРТОВАЯ ТОЧКА записи
+                try:                        # СТАРТОВАЯ ТОЧКА записи (для перевода мыши)
                     p0 = cursor_pos()
-                    events.append([0.0, "move", int(p0[0]), int(p0[1])])
+                    events.append([0.0, "p", int(p0[0]), int(p0[1])])
                     last_pos = p0
                 except Exception:
                     pass
@@ -2795,8 +2810,12 @@ def macro_record():
                         pos = cursor_pos()
                     except Exception:
                         pos = None
-                    if pos is not None and pos != last_pos:   # ЛЮБОЕ движение — в запись
-                        events.append([round(now - t0, 3), "move", int(pos[0]), int(pos[1])])
+                    if pos is not None and last_pos is not None and pos != last_pos:
+                        # ОТНОСИТЕЛЬНАЯ дельта — ровно то, что получает игра от
+                        # физической мыши: повтор не зависит ни от DPI/маппинга
+                        # координат, ни от того, как игра трактует позицию курсора
+                        events.append([round(now - t0, 3), "m",
+                                       int(pos[0] - last_pos[0]), int(pos[1] - last_pos[1])])
                         last_pos = pos
                         last_act = now
                     if MACRO_STATE["cancel"] or MACRO_STATE["stop"]:
@@ -2814,6 +2833,7 @@ def macro_record():
             except Exception:
                 pass
         finally:
+            _epp_set(epp)                    # вернуть ускорение как было
             cancelled = bool(MACRO_STATE["cancel"])
             MACRO_STATE["rec"] = False
             MACRO_STATE["stop"] = False
@@ -2879,7 +2899,37 @@ def _glide(x, y, dur=0.22):
     mouse_move_abs(x, y)                        # финал — ровно в цель
 
 
-MACRO_TICK = 0.002                       # шаг интерполяции повтора (500 Гц)
+_SPI_GETMOUSE = 0x0003
+_SPI_SETMOUSE = 0x0004
+_SPIF = 0x03                             # SPIF_UPDATEINIFILE | SPIF_SENDCHANGE
+
+
+def _epp_get():
+    """Текущие пороги ускорения курсора Windows («Повышенная точность указателя»).
+    None — узнать не удалось (не Windows и т.п.): тогда при повторе ничего не меняем."""
+    try:
+        arr = (ctypes.c_uint * 3)()
+        if ctypes.windll.user32.SystemParametersInfoW(_SPI_GETMOUSE, 0,
+                                                      ctypes.byref(arr), 0):
+            return (int(arr[0]), int(arr[1]), int(arr[2]))
+    except Exception:
+        pass
+    return None
+
+
+def _epp_set(v):
+    """Временно выключить/вернуть ускорение курсора (v = кортеж порогов или (0,0,0)).
+    Нужно потому, что ОТНОСИТЕЛЬНЫЕ дельты через SendInput проходят через то же
+    ускорение, что и физическая мышь: записанные дельты уже содержат ускорение,
+    и повторное его применение разгоняло движение («быстрая сенса»)."""
+    if v is None:
+        return
+    try:
+        arr = (ctypes.c_uint * 3)(int(v[0]), int(v[1]), int(v[2]))
+        ctypes.windll.user32.SystemParametersInfoW(_SPI_SETMOUSE, 0,
+                                                   ctypes.byref(arr), _SPIF)
+    except Exception:
+        pass
 
 
 def _macro_fire(kind, btn):
@@ -2891,73 +2941,68 @@ def _macro_fire(kind, btn):
 
 
 def macro_run(ev):
-    """ТОЧНОЕ воспроизведение записи (v1.15 — без дёрганьев и «быстрой сенсы»):
+    """ТОЧНОЕ воспроизведение записи (v1.16 — так, как её сделала твоя рука):
       1) мышь переводится из фактического положения в точку начала записи (glide);
-      2) путь между записанными точками ИНТЕРПОЛИРУЕТСЯ шагом 2 мс: курсор едет по
-         записанной траектории с ЗАПИСАННОЙ скоростью, а не телепортируется между
-         сэмплами (телепорты и сжатие пауз выглядели как дёрганья);
-      3) темп держится по абсолютным часам от одного t0 — дрейф не накапливается,
-         догоняющих всплесков нет;
-      4) клики повторяются в свои записанные секунды; незакрытые нажатия закрывает
-         _macro_balance — ни одна кнопка не «залипнет».
-    True — доиграно; False — прервано записью; Stopped уходит в главный цикл."""
+      2) на время повтора ВЫКЛЮЧАЕТСЯ ускорение курсора Windows: записанные дельты
+         уже содержат ускорение, и повторное его применение разгоняло движение
+         («быстрая сенса», мышь уезжала дальше, чем вела рука);
+      3) записанные ОТНОСИТЕЛЬНЫЕ дельты подаются как MOUSEEVENTF_MOVE — ровно тот
+         же поток ввода, что от физической мыши: никакой пересчёт координат
+         (DPI/мониторы/масштаб) не может исказить путь — «уводы вниз-вверх» и
+         дёрганья от маппинга исчезают в принципе;
+      4) темп по абсолютным часам от одного t0 (дрейф не накапливается); если
+         система на миг подвела — события подаются сразу, БЕЗ ускорения мыши
+         (догоняющих рывков нет);
+      5) незакрытые нажатия закрывает _macro_balance — ни одна кнопка не «залипнет».
+    True — доиграно; False — прервано записью."""
     events = _macro_balance([list(e) for e in (ev or [])])
     if not events:
         return True
-    moves = [(float(e[0]), int(e[2]), int(e[3])) for e in events
-             if e[1] == "move" and len(e) == 4]
-    acts = [(float(e[0]), e[1], e[2]) for e in events if e[1] in ("down", "up")]
-    if moves:                            # точка начала записи: точный перевод мыши
+    start = next((e for e in events if e[1] == "p" and len(e) == 4), None)
+    body = [e for e in events if e[1] != "p"]
+    if start:                                # точный перевод в точку начала записи
         try:
-            _glide(moves[0][1], moves[0][2])
-        except Exception:                # без glide — хотя бы точный прыжок в цель
-            mouse_move_abs(moves[0][1], moves[0][2])
-    if not moves:                        # макро без движения: действия по таймингам
+            _glide(int(start[2]), int(start[3]))
+        except Exception:                    # без glide — хотя бы точный прыжок в цель
+            mouse_move_abs(int(start[2]), int(start[3]))
+    epp = _epp_get()
+    _epp_set((0, 0, 0))                      # дельты применяются 1:1, как записаны
+    home = None                              # куда вернуть мышь после повтора
+    try:
+        home = cursor_pos()
+    except Exception:
+        pass
+    ok = True
+    try:
         t0 = time.perf_counter()
-        for t_rel, kind, btn in acts:
-            left = t0 + t_rel - time.perf_counter()
+        for t_rel, kind, *args in body:
+            left = t0 + float(t_rel) - time.perf_counter()
             if left > 0:
-                nap(left)
-            _macro_fire(kind, btn)
+                nap(left)                    # записанная секунда события
+            if kind == "m":                  # ОТНОСИТЕЛЬНОЕ движение — как у мыши
+                _send_mouse(MOUSEEVENTF_MOVE, int(args[0]), int(args[1]))
+            elif kind in ("down", "up"):
+                _macro_fire(kind, args[0])
             if MACRO_STATE["rec"]:
-                return False
-        return True
-    dur = max(moves[-1][0], acts[-1][0] if acts else moves[-1][0])
-    t0 = time.perf_counter()
-    ai = 0
-    seg = 0
-    for k in range(1, int(dur / MACRO_TICK) + 2):
-        tau = min(k * MACRO_TICK, dur)
-        while seg + 1 < len(moves) and moves[seg + 1][0] <= tau:
-            seg += 1
-        t_a, x_a, y_a = moves[seg]
-        if seg + 1 < len(moves):         # интерполяция сегмента пути
-            t_b, x_b, y_b = moves[seg + 1]
-            u = min(max((tau - t_a) / max(t_b - t_a, 1e-6), 0.0), 1.0)
-            x, y = x_a + (x_b - x_a) * u, y_a + (y_b - y_a) * u
-        else:
-            x, y = x_a, y_a
-        mouse_move_abs(int(round(x)), int(round(y)))
-        while ai < len(acts) and acts[ai][0] <= tau:
-            _macro_fire(acts[ai][1], acts[ai][2])
-            ai += 1
-        if MACRO_STATE["rec"]:
-            return False
-        left = t0 + tau - time.perf_counter()
-        if left > 0:
-            nap(left)                    # точный темп + реакция на стоп (Stopped)
-    mouse_move_abs(moves[-1][1], moves[-1][2])   # финал — ровно последняя точка
-    for _, kind, btn in acts[ai:]:
-        _macro_fire(kind, btn)
-    return True
+                ok = False
+                break
+    finally:
+        _epp_set(epp)                        # вернуть ускорение как было
+        if home:                             # вернуть мышь, откуда начали повтор
+            try:
+                mouse_move_abs(int(home[0]), int(home[1]))
+            except Exception:
+                pass
+    return ok
 
 
 def macro_play():
-    """АВТО-ЗАКИД КАК ЗАПИСЬ (v1.12): ждёт открытый инвентарь (его открываешь ТЫ),
-    затем 1-в-1 повторяет записанный макро: ПКМ по удочке -> пауза -> «Использовать» —
-    ровно те же движения, паузы и точки, что ты показал при записи. Дальше обычный
-    цикл: заброс -> клёв -> мини-игра -> снова макро. Макро нет -> False (сессия
-    остановится с понятной причиной no_macro)."""
+    """АВТО-ЗАКИД КАК ЗАПИСЬ (v1.16): ждёт открытый инвентарь (его открываешь ТЫ),
+    затем точным повтором проигрывает записанный макро: ПКМ по удочке -> пауза ->
+    «Использовать» — те же относительные движения мыши, те же паузы и нажатия,
+    что при записи (ускорение курсора на время повтора отключается, мышь
+    возвращается на исходное место). Макро нет -> False (сессия остановится с
+    понятной причиной no_macro)."""
     ev = CFG.get("cast_macro")
     if not ev:
         notify("nt_macro_none", "warn")
@@ -2965,6 +3010,7 @@ def macro_play():
         return False
     wait_inventory_open()
     set_state("st_cast", "st_cast_d", "busy")
+    notify("toast_macro_play")
     log(t("log_macro_play", d=float(ev[-1][0]), n=len(ev)))
     if not macro_run(ev):
         return False
