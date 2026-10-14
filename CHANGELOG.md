@@ -5,6 +5,10 @@
 [`VERSION`](VERSION) и в константе `APP_VERSION` внутри `eternal_fishmod.py`
 (синхронизирует их `scripts/release.py`).
 
+## [1.4.0] - 2026-10-14
+
+/tmp/notes2.md
+
 ## [1.3.1] - 2026-10-13
 
 ### Fixed
