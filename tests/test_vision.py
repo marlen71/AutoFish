@@ -105,16 +105,26 @@ check("inv_header НЕ виден вне инвентаря", ef.find("inv_heade
 set_screen(shot("1791751385077-image.png"))
 check("rod не ложно-срабатывает на игровом экране", ef.best_score("rod") < ef.THR["rod"], f"{ef.best_score('rod'):.2f}")
 
-print("== 3. Контекстное меню: клик по ВЕРХНЕМУ пункту «Использовать» ==")
-set_screen(shot("1791751384528-image.png"))
-info = ef.context_menu_info(126, 255)
-check("меню распознано", info is not None, str(info))
-if info:
-    check("красная строка «Выбросить» найдена (y≈298)", abs(info["red_top"] - 298) <= 3, f"y={info['red_top']}")
-    check("клик выше красной строки", info["use_y"] < info["red_top"], f"use=({info['use_x']},{info['use_y']})")
-    check("центр пункта ≈ (203, 278)", abs(info["use_x"] - 203) <= 6 and abs(info["use_y"] - 278) <= 8)
-set_screen(shot("1791751383742-image.png"))
-check("без меню context_menu_open()=False", ef.context_menu_open(126, 255) is False)
+print("== 3. Авто-кликер заброса: фиксированные координаты и миграция старых конфигов ==")
+check("ПКМ по удочке = первый слот (126, 256)", ef.DEFAULT_CFG["rod_click_pos"] == [126, 256],
+      str(ef.DEFAULT_CFG["rod_click_pos"]))
+check("ЛКМ по «Использовать» = (205, 278)", ef.DEFAULT_CFG["use_click_pos"] == [205, 278],
+      str(ef.DEFAULT_CFG["use_click_pos"]))
+# клик «Использовать» (205, 278) измерен на скриншоте с меню: красная строка «Выбросить»
+# была на y=298, клик выше неё — верхний пункт меню
+check("клик «Использовать» выше красной строки «Выбросить» (y=298)", 278 < 298)
+import json as _json
+tmp3 = os.path.join(ROOT, "tests", "vision_cfg.json")
+ef.CFG_PATH = tmp3
+with open(tmp3, "w", encoding="utf-8") as f:
+    _json.dump({"rod_click_pos": None, "use_click_pos": [1], "lang": "ru", "cfg_version": 5}, f)
+ef.reset_cfg()
+ef.CFG_DROPPED.clear()
+ef.load_cfg()
+check("None/короткий список координат заменён стандартом первого слота",
+      ef.CFG["rod_click_pos"] == [126, 256] and ef.CFG["use_click_pos"] == [205, 278],
+      f"{ef.CFG['rod_click_pos']} / {ef.CFG['use_click_pos']}")
+os.remove(tmp3)
 
 print("== 4. relay_decide: реле с предсказанием останова, гистерезис ==")
 A_UP, G_DN, VMAX, LOOK, HYST = 1750.0, 800.0, 850.0, 0.17, 12.0

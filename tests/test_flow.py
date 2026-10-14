@@ -180,83 +180,58 @@ ef.inventory_open = _real_invopen
 screens["cur"] = GAME
 check("инвентарь закрыт -> None (пропуск, не ошибка)", ef.bait_check() is None)
 
-print("== 3. use_rod: одно ПКМ -> меню -> пауза -> одна ЛКМ по «Использовать» ==")
+print("== 3. use_rod: авто-кликер по фиксированным координатам (ПКМ -> пауза -> ЛКМ) ==")
 screens["cur"] = INV
 sent.clear()
-calls = {"menu": 0}
-ef.hud_present = lambda n: True
 
 
-def fake_menu_info(x, y):
-    calls["menu"] += 1
-    return {"red_top": 298, "red_cx": 205, "use_x": 205, "use_y": 278, "fallback": False, "dx_cfg": 76}
+def menu_must_not_be_called(x, y):
+    raise AssertionError("context_menu_info не должен вызываться: клики вслепую по фикс. точкам")
 
 
-ef.context_menu_info = fake_menu_info
+ef.context_menu_info = menu_must_not_be_called
 ef.use_rod()
 flags_seq = [k[1] for k in sent if k[0] == "mouse"]
-check("наведение на удочку (126, 256)", any(k == ("move", 126, 256) for k in sent))
+check("наведение на первый слот (126, 256)", any(k == ("move", 126, 256) for k in sent))
+check("наведение на «Использовать» (205, 278)", any(k == ("move", 205, 278) for k in sent))
 check("ровно одно ПКМ (одна пара RIGHTDOWN/RIGHTUP)",
       flags_seq.count(ef.MOUSEEVENTF_RIGHTDOWN) == 1 and flags_seq.count(ef.MOUSEEVENTF_RIGHTUP) == 1,
       str(flags_seq))
-check("ровно одна ЛКМ по «Использовать» выше красной строки",
-      flags_seq.count(ef.MOUSEEVENTF_LEFTDOWN) == 1 and flags_seq.count(ef.MOUSEEVENTF_LEFTUP) == 1
-      and any(k == ("move", 205, 278) for k in sent), str(flags_seq))
-check("меню искалось (не «вслепую»)", calls["menu"] >= 1)
-check("бот не трогал клавиатуру (TAB/ESC)", not [k for k in sent if k[0] in ("keydown", "keyup")])
+check("ровно одна ЛКМ (одна пара LEFTDOWN/LEFTUP)",
+      flags_seq.count(ef.MOUSEEVENTF_LEFTDOWN) == 1 and flags_seq.count(ef.MOUSEEVENTF_LEFTUP) == 1,
+      str(flags_seq))
 check("ПКМ строго раньше ЛКМ", flags_seq.index(ef.MOUSEEVENTF_RIGHTDOWN) < flags_seq.index(ef.MOUSEEVENTF_LEFTDOWN))
+check("бот не трогал клавиатуру (TAB/ESC)", not [k for k in sent if k[0] in ("keydown", "keyup")])
+check("меню не анализировалось (авто-кликер, зрение не нужно)", True)
 
-print("== 3b. use_rod: меню не появилось — попытка прервана без кликов вслепую ==")
+print("== 4. use_rod с координатами из конфига (📍/ручной ввод) ==")
+ef.CFG["rod_click_pos"] = [300, 400]
+ef.CFG["use_click_pos"] = [520, 330]
 sent.clear()
-calls["menu"] = 0
-ef.context_menu_info = lambda x, y: None
-check("use_rod() = False", ef.use_rod() is False)
-check("после ПКМ нажатий ЛКМ нет", [k[1] for k in sent if k[0] == "mouse"] ==
-      [ef.MOUSEEVENTF_RIGHTDOWN, ef.MOUSEEVENTF_RIGHTUP],
-      str([k[1] for k in sent if k[0] == "mouse"]))
-
-print("== 4. use_rod с ручными координатами (rod_click_pos/use_click_pos) ==")
-ef.CFG["rod_click_pos"] = [128, 250]
-ef.CFG["use_click_pos"] = [200, 270]
-sent.clear()
-calls["menu"] = 0
-ef.context_menu_info = fake_menu_info
 ef.use_rod()
-check("использованы ручные координаты удочки", any(k == ("move", 128, 250) for k in sent))
-check("использованы ручные координаты кнопки", any(k == ("move", 200, 270) for k in sent))
-check("поиск красной строки не выполнялся", calls["menu"] == 0)
-ef.CFG["rod_click_pos"] = None
-ef.CFG["use_click_pos"] = None
+check("ПКМ по координате удочки из конфига", any(k == ("move", 300, 400) for k in sent))
+check("ЛКМ по координате «Использовать» из конфига", any(k == ("move", 520, 330) for k in sent))
+ef.CFG["rod_click_pos"] = [126, 256]
+ef.CFG["use_click_pos"] = [205, 278]
 
-print("== 4b. equip_cycle: максимум 3 попытки с паузами, без спама ==")
+print("== 4b. equip_cycle: ожидание инвентаря + одна последовательность кликов ==")
 sent.clear()
-attempts = {"n": 0}
-_real_use_rod = ef.use_rod
+screens["cur"] = INV                                  # inventory_open() = True
+calls["n"] = 0
+_real_use = ef.use_rod
 
 
-def fake_use_rod():
-    attempts["n"] += 1
-    return attempts["n"] >= 3          # успех только с третьей
+def spy_use_rod():
+    calls["n"] += 1
+    return _real_use()
 
 
-ef.use_rod = fake_use_rod
-check("equip_cycle дожался до успеха на 3-й попытке", ef.equip_cycle() is True and attempts["n"] == 3)
-
-
-def fake_use_rod_fail():
-    attempts["n"] += 1
-    return False
-
-
-ef.use_rod = fake_use_rod_fail
-attempts["n"] = 0
-try:
-    ef.equip_cycle()
-    raised2 = False
-except ef.Fail:
-    raised2 = True
-ef.use_rod = _real_use_rod
-check("3 неудачи -> Fail с понятной причиной", raised2 and attempts["n"] == 3, f"attempts={attempts['n']}")
+ef.use_rod = spy_use_rod
+check("equip_cycle вернул True и вызвал use_rod один раз", ef.equip_cycle() is True and calls["n"] == 1)
+check("equip_cycle не спамит: ровно одно ПКМ и одна ЛКМ",
+      [k[1] for k in sent if k[0] == "mouse"].count(ef.MOUSEEVENTF_RIGHTDOWN) == 1
+      and [k[1] for k in sent if k[0] == "mouse"].count(ef.MOUSEEVENTF_LEFTDOWN) == 1)
+ef.use_rod = _real_use
 
 print("== 5. Заброс и отпускание ЛКМ ==")
 sent.clear()
@@ -296,20 +271,36 @@ ef.wait_for_minigame = fake_wait
 ef.play_minigame = fake_play
 
 print("== 6. Главный цикл: поймал рыбу -> стоп по наживке ==")
-ef.CFG.update({"auto_cast": True, "equip_on_start": True, "bait_check_every": 1, "bite_timeout": 1,
-               "no_bite_limit": 1, "post_catch_delay": 0.0, "cast_delay": 0.0})
+ef.CFG.update({"auto_cast": True, "equip_on_start": True, "bite_timeout": 1,
+               "no_bite_limit": 3, "post_catch_delay": 0.0, "cast_delay": 0.0})
 screens["cur"] = GAME
-ef.hud_present = lambda n: True
 ef.equip_cycle = lambda: sent.append(("equip",)) or True
 bites["n"] = 0
+
+
+def fake_wait2(timeout):
+    bites["n"] += 1
+    if bites["n"] >= 2:
+        raise ef.Stopped()                # второй цикл: прерываем сессию
+    return True
+
+
+ef.wait_for_minigame = fake_wait2
+ef.play_minigame = fake_play
+ef.bait_check = lambda: True
 ef.STATS.update({"catches": 0, "t0": time.time(), "t_end": None, "mg": [], "checks": 0})
-ef.bait_check = lambda: False
-res = ef.fishing_run()
-check("fishing_run вернул no_bait при пустом инвентаре", res == "no_bait", str(res))
+raised6 = False
+try:
+    ef.fishing_run()
+except ef.Stopped:
+    raised6 = True
+check("цикл прерван стопом на втором клёве", raised6)
 check("одна рыба засчитана", ef.STATS["catches"] == 1, str(ef.STATS["catches"]))
 check("время мини-игры записано в статистику", ef.STATS["mg"] == [3.5], str(ef.STATS["mg"]))
-check("ожидал мини-игру ровно один раз", bites["n"] == 1, str(bites["n"]))
+check("клёв ожидался дважды (после улова цикл продолжился)", bites["n"] == 2, str(bites["n"]))
 check("перед забросом удочка взята (equip_cycle вызван)", any(k[0] == "equip" for k in sent))
+check("наживка не останавливала сессию (только журнал)",
+      not [k for k in sent if k[0] == "stop_no_bait"])
 log_text = io.open(ef.LOG_PATH, encoding="utf-8").read() if os.path.exists(ef.LOG_PATH) else ""
 check("в журнале есть строка о пойманной рыбе (ru)", "Поймано #1" in log_text, log_text.strip()[-90:])
 
@@ -317,10 +308,12 @@ print("== 7. Локализация в потоке: журнал на выбр�
 for lang, needle in (("en", "Caught #1"), ("ua", "Спіймано #1")):
     ef.CFG["lang"] = lang
     open(ef.LOG_PATH, "w").close()
-    ef.STATS["catches"] = 0
+    ef.STATS.update({"catches": 0, "t0": time.time(), "t_end": None, "mg": [], "checks": 0})
     bites["n"] = 0
-    ef.bait_check = lambda: False
-    res = ef.fishing_run()
+    try:
+        ef.fishing_run()
+    except ef.Stopped:
+        pass
     txt = io.open(ef.LOG_PATH, encoding="utf-8").read()
     check(f"журнал на {lang}", needle in txt, txt.strip().splitlines()[-1][:70] if txt.strip() else "пусто")
 ef.CFG["lang"] = "ru"
