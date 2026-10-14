@@ -205,11 +205,11 @@ check("мышь ПЕРЕВЕДЕНА из фактического положе�
 mv3 = [k for k in sent if k[0] == "mouse" and k[1] == ef.MOUSEEVENTF_MOVE]
 check("движение — ОТНОСИТЕЛЬНАЯ дельта как у физической мыши: ровно один MOUSEEVENTF_MOVE(79, 30)",
       mv3 == [("mouse", ef.MOUSEEVENTF_MOVE, 79, 30)], str(mv3))
-check("телепортов абсолютными координатами нет (кроме возврата мыши домой)",
-      not [k for k in sent if k[0] == "move" and (k[1], k[2]) != (900, 540)],
+check("ЯКОРЯ КЛИКОВ: ПКМ (down+up) ровно в (126, 256), ЛКМ (down+up) — в (205, 286), финал — домой (900, 540)",
+      [k for k in sent if k[0] == "move"] == [("move", 126, 256), ("move", 126, 256),
+                                               ("move", 205, 286), ("move", 205, 286),
+                                               ("move", 900, 540)],
       str([k for k in sent if k[0] == "move"]))
-check("после повтора мышь ВОЗВРАЩЕНА в позицию до повтора (900, 540)",
-      sent and sent[-1] == ("move", 900, 540), str(sent[-1:]))
 flags3 = [k[1] for k in sent if k[0] == "mouse" and k[1] != ef.MOUSEEVENTF_MOVE]
 check("ровно одно ПКМ и одна ЛКМ — как в записи",
       flags3.count(ef.MOUSEEVENTF_RIGHTDOWN) == 1 and flags3.count(ef.MOUSEEVENTF_RIGHTUP) == 1
@@ -317,8 +317,11 @@ check("мышь переведена в точку старта записи (34
       f"glide={glides_d} flags={flags_d}")
 check("тело — относительная дельта (-135, -226) через MOUSEEVENTF_MOVE",
       mv_d == [("mouse", ef.MOUSEEVENTF_MOVE, -135, -226)], str(mv_d))
-check("мышь возвращена в позицию до повтора (60, 60)",
-      sent and sent[-1] == ("move", 60, 60), str(sent[-1:]))
+check("ЯКОРЯ КЛИКОВ: ПКМ (down+up) в старте (340, 512), ЛКМ (down+up) в (205, 286) = 340-135, 512-226; финал — домой (60, 60)",
+      [k for k in sent if k[0] == "move"] == [("move", 340, 512), ("move", 340, 512),
+                                               ("move", 205, 286), ("move", 205, 286),
+                                               ("move", 60, 60)],
+      str([k for k in sent if k[0] == "move"]))
 
 print("== 3e. Баланс кнопок: оборванная запись не оставляет зажатую кнопку ==")
 b1 = ef._macro_balance([[0.0, "down", "r"], [0.2, "move", 5, 5]])

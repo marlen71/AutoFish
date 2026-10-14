@@ -2753,9 +2753,10 @@ def macro_record():
         >= 2 px, время — от t0 записи (monotonic);
       * ОТНОСИТЕЛЬНЫЕ дельты движения мыши [t, "m", dx, dy] — ровно то, что
         получает игра; повтор не зависит от DPI/маппинга координат;
-      * на время записи ускорение курсора Windows («повышенная точность
-        указателя») ВЫКЛЮЧАЕТСЯ и восстанавливается после — дельты пишутся
-        ровно такие, какие ты делаешь рукой;
+      * на время записи баллистика курсора Windows выключается (ускорение
+        «повышенная точность указателя» off + скорость указателя 10 = 1:1)
+        и восстанавливается после — дельты пишутся ровно такие, какие ты
+        делаешь рукой;
       * при работающем боте запись отклоняется с тостом (конфликт ввода).
     Все флаги сбрасываются в finally — запись не может «залипнуть»."""
     if MACRO_STATE["rec"]:                  # тумблер: повторное нажатие = стоп и сохранить
@@ -2772,7 +2773,7 @@ def macro_record():
         events = []
         clicks = 0
         cancelled = False
-        epp = None                            # пороги ускорения до записи
+        bal = None                            # баллистика курсора до записи
         try:
             for i in (3, 2, 1):
                 if MACRO_STATE["cancel"] or MACRO_STATE["stop"]:
@@ -2784,8 +2785,8 @@ def macro_record():
             if not MACRO_STATE["cancel"]:
                 notify("toast_rec_on", "ok")
                 log(t("toast_rec_on"))
-                epp = _epp_get()
-                _epp_set((0, 0, 0))          # пишем дельты без ускорения — 1:1
+                bal = _ballistics_get()
+                _ballistics_set(_NO_ACCEL)   # пишем дельты 1:1: EPP off, скорость 10
                 t0 = time.perf_counter()
                 prev = {"l": False, "r": False}
                 last_act = t0
@@ -2833,7 +2834,7 @@ def macro_record():
             except Exception:
                 pass
         finally:
-            _epp_set(epp)                    # вернуть ускорение как было
+            _ballistics_set(bal)             # вернуть баллистику как была
             cancelled = bool(MACRO_STATE["cancel"])
             MACRO_STATE["rec"] = False
             MACRO_STATE["stop"] = False
@@ -2932,6 +2933,45 @@ def _epp_set(v):
         pass
 
 
+_SPI_GETMOUSESPEED = 0x0070
+_SPI_SETMOUSESPEED = 0x0071
+_NO_ACCEL = ((0, 0, 0), 10)              # EPP off + скорость 10 (= умножение ×1.0)
+
+
+def _mspeed_get():
+    """Скорость указателя Windows (ползунок 1-20; 10 = ×1.0). None — не удалось."""
+    try:
+        v = ctypes.c_uint(0)
+        if ctypes.windll.user32.SystemParametersInfoW(_SPI_GETMOUSESPEED, 0,
+                                                      ctypes.byref(v), 0):
+            return int(v.value)
+    except Exception:
+        pass
+    return None
+
+
+def _mspeed_set(speed):
+    if speed is None:
+        return
+    try:
+        ctypes.windll.user32.SystemParametersInfoW(_SPI_SETMOUSESPEED, 0,
+                                                   int(speed), _SPIF)
+    except Exception:
+        pass
+
+
+def _ballistics_get():
+    """Профиль баллистики курсора: (пороги EPP, скорость указателя)."""
+    return (_epp_get(), _mspeed_get())
+
+
+def _ballistics_set(st):
+    if not st:
+        return
+    _epp_set(st[0])
+    _mspeed_set(st[1])
+
+
 def _macro_fire(kind, btn):
     """Одно нажатие/отпускание записанной кнопки."""
     if kind == "down":
@@ -2941,19 +2981,24 @@ def _macro_fire(kind, btn):
 
 
 def macro_run(ev):
-    """ТОЧНОЕ воспроизведение записи (v1.16 — так, как её сделала твоя рука):
-      1) мышь переводится из фактического положения в точку начала записи (glide);
-      2) на время повтора ВЫКЛЮЧАЕТСЯ ускорение курсора Windows: записанные дельты
-         уже содержат ускорение, и повторное его применение разгоняло движение
-         («быстрая сенса», мышь уезжала дальше, чем вела рука);
+    """ТОЧНОЕ воспроизведение записи (v1.17 — так, как её сделала твоя рука):
+      1) мышь ставится в ТОЧКУ НАЧАЛА записи (плавный перевод + точная посадка) —
+         каждый повтор стартует с одного и того же места;
+      2) на время повтора ВЫКЛЮЧАЕТСЯ баллистика курсора Windows (ускорение
+         «повышенная точность указателя» + скорость 10 = ×1.0): записанные дельты
+         уже содержат реакцию системы на твою руку, повторное её применение
+         разгоняло движение («быстрая сенса»);
       3) записанные ОТНОСИТЕЛЬНЫЕ дельты подаются как MOUSEEVENTF_MOVE — ровно тот
-         же поток ввода, что от физической мыши: никакой пересчёт координат
-         (DPI/мониторы/масштаб) не может исказить путь — «уводы вниз-вверх» и
-         дёрганья от маппинга исчезают в принципе;
-      4) темп по абсолютным часам от одного t0 (дрейф не накапливается); если
-         система на миг подвела — события подаются сразу, БЕЗ ускорения мыши
-         (догоняющих рывков нет);
-      5) незакрытые нажатия закрывает _macro_balance — ни одна кнопка не «залипнет».
+         же поток ввода, что от физической мыши: никакого пересчёта координат
+         (DPI/мониторы/масштаб) — «уводы вниз-вверх» и дёрганья невозможны;
+      4) ПЕРЕД КАЖДЫМ кликом курсор ставится ровно в ЗАПИСАННУЮ точку клика
+         (якорь = точка старта + сумма дельт до клика): попадание 1-в-1 при
+         каждом закиде, даже если система/игра масштабировали относительные
+         движения, — дрейф от закида к закиду исключён в принципе;
+      5) темп по абсолютным часам от одного t0; догоняющих рывков нет;
+      6) незакрытые нажатия закрывает _macro_balance — ни одна кнопка не «залипнет»;
+      7) после повтора баллистика восстанавливается как была, мышь возвращается
+         туда, где была до повтора.
     True — доиграно; False — прервано записью."""
     events = _macro_balance([list(e) for e in (ev or [])])
     if not events:
@@ -2965,13 +3010,14 @@ def macro_run(ev):
             _glide(int(start[2]), int(start[3]))
         except Exception:                    # без glide — хотя бы точный прыжок в цель
             mouse_move_abs(int(start[2]), int(start[3]))
-    epp = _epp_get()
-    _epp_set((0, 0, 0))                      # дельты применяются 1:1, как записаны
+    bal = _ballistics_get()
+    _ballistics_set(_NO_ACCEL)               # дельты 1:1: EPP off, скорость 10
     home = None                              # куда вернуть мышь после повтора
     try:
         home = cursor_pos()
     except Exception:
         pass
+    px, py = (int(start[2]), int(start[3])) if start else (None, None)
     ok = True
     try:
         t0 = time.perf_counter()
@@ -2980,14 +3026,23 @@ def macro_run(ev):
             if left > 0:
                 nap(left)                    # записанная секунда события
             if kind == "m":                  # ОТНОСИТЕЛЬНОЕ движение — как у мыши
-                _send_mouse(MOUSEEVENTF_MOVE, int(args[0]), int(args[1]))
+                dx, dy = int(args[0]), int(args[1])
+                if px is not None:           # счётчик записанного пути (для якорей)
+                    px += dx
+                    py += dy
+                _send_mouse(MOUSEEVENTF_MOVE, dx, dy)
             elif kind in ("down", "up"):
+                if px is not None:           # ЯКОРЬ: клик ровно в записанной точке —
+                    try:                     # попадание не зависит от того, как
+                        mouse_move_abs(px, py)  # система масштабировала дельты
+                    except Exception:
+                        pass
                 _macro_fire(kind, args[0])
             if MACRO_STATE["rec"]:
                 ok = False
                 break
     finally:
-        _epp_set(epp)                        # вернуть ускорение как было
+        _ballistics_set(bal)                 # вернуть баллистику как была
         if home:                             # вернуть мышь, откуда начали повтор
             try:
                 mouse_move_abs(int(home[0]), int(home[1]))
