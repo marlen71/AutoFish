@@ -5,7 +5,7 @@ Eternal FishMod — launcher / обёртка приложения.
 
 Делает ровно то, что нужно перед запуском бота:
   [1/4] проверяет версию Python;
-  [2/4] проверяет зависимости (opencv-python, numpy, dxcam/bettercam, mss, pydirectinput,
+  [2/4] проверяет зависимости (opencv-python, numpy, dxcam/bettercam, pydirectinput,
         keyboard, tkinter) и при нехватке ставит их через pip (reqs из requirements.txt);
   [3/4] проверяет права администратора (SendInput/DXGI не работают поверх игры от админа)
         и умеет перезапустить себя через UAC («runas»);
@@ -125,6 +125,7 @@ LS = {
   "tk_hint": "tkinter не найден — переустанови Python с галочкой «tcl/tk and IDLE».",
   "capture_ok": "Захват DXGI доступен: {b}",
   "capture_no": "Ни dxcam, ни bettercam не импортируются — без DXGI-захвата бот работать не сможет; ставлю обе библиотеки сейчас.",
+  "capture_gdi": "бот сможет работать на встроенном резерве GDI (ctypes, без зависимостей) — он чуть медленнее и не видит защищённые от захвата окна. После установки DXGI-библиотек перезапусти бота.",
  },
  "en": {
   "step_py": "Checking Python…",
@@ -161,6 +162,7 @@ LS = {
   "tk_hint": "tkinter is missing — reinstall Python with the “tcl/tk and IDLE” component.",
   "capture_ok": "DXGI capture available: {b}",
   "capture_no": "Neither dxcam nor bettercam imports — without DXGI capture the bot cannot run; installing both libraries now.",
+  "capture_gdi": "the bot can run on its built-in GDI fallback (ctypes, no dependencies) — a bit slower, and it cannot see capture-protected windows. Restart the bot after installing the DXGI libraries.",
  },
  "ua": {
   "step_py": "Перевіряємо Python…",
@@ -197,6 +199,7 @@ LS = {
   "tk_hint": "tkinter не знайдено — перевстанови Python з компонентом «tcl/tk and IDLE».",
   "capture_ok": "Захват DXGI доступний: {b}",
   "capture_no": "Ні dxcam, ні bettercam не імпортується — без DXGI-захвата бот не працюватиме; ставлю обидві бібліотеки зараз.",
+  "capture_gdi": "бот зможе працювати на вбудованому резервi GDI (ctypes, без залежностей) — трішки повільніший і не бачить вікон, захищених від захоплення. Пiсля встановлення DXGI-бiблiотек перезапусти бота.",
  },
 }
 
@@ -279,12 +282,12 @@ def check_python():
 REQUIRED = [                                   # (имя в requirements, модуль для import, обязательно?)
     ("opencv-python", "cv2", True),
     ("numpy", "numpy", True),
-    ("mss", "mss", True),
     ("pydirectinput", "pydirectinput", True),
     ("keyboard", "keyboard", True),
     ("tkinter", "tkinter", False),             # обязателен по сути, но ставится не pip'ом
 ]
-OPTIONAL_CAPTURE = ["dxcam", "bettercam"]
+OPTIONAL_CAPTURE = ["dxcam", "bettercam"]     # резервный GDI-захват вшит
+                                               # в бота (ctypes): никаких pip-зависимостей
 
 
 def check_libs(auto_install, yes):

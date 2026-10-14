@@ -8,7 +8,9 @@ Eternal FishMod — полуавтомат рыбалки для Skyrim RP-се�
 Что нового в этой версии:
   * Захват экрана: DXGPU Desktop Duplication (dxcam / bettercam) как ОСНОВНОЙ метод
     для ВСЕХ путей (мини-игра, шаблоны, инвентарь, отладочный снимок, страница «Зрение»).
-    mss — только аварийный резерв, если DXGI недоступен (RDP, кривый драйвер).
+    Резерв без единой зависимости — собственный GDI-захват региона (ctypes, BitBlt).
+    Сторонний резервный пакет вырезан полностью: он пересоздавал контекст на каждый
+    кадр и конвертировал весь монитор -> ~12 мс за кадр, что ломало ШИМ мини-игры.
   * Мини-игра: ПИД-регулятор (Kp/Ki/Kd + анти-насыщение) с ШИМ (duty cycle) на бинарном
     входе (ЛКМ) вместо релаксационного «порог->зажать/отпустить», упреждение по
     скорости и ускорению рыбы, отдельный аварийный режим на «РЫБА СРЫВАЕТСЯ».
@@ -34,9 +36,7 @@ import wave
 import queue
 import base64
 import ctypes
-import datetime
 import threading
-import warnings
 import itertools
 import traceback
 import collections
@@ -49,10 +49,6 @@ try:
     import tkinter as tk
 except ImportError:
     tk = None
-try:
-    import mss
-except ImportError:
-    mss = None
 try:
     import pydirectinput
 except ImportError:
@@ -67,9 +63,12 @@ except ImportError:
     winsound = None
 
 # --- захват через дублирование DXGI: dxcam (основной) и bettercam (второй DXGI) ---
-# mss больше НЕ подставляется молча: «тихий» перевод на mss означает ~20 к/с вместо 120+,
-# из-за чего ПИД начинает «зажимать» ЛКМ. mss остаётся ЯВНЫМ аварийным режимом
-# (capture_backend="mss" в конфиге) — для RDP/VM без Desktop Duplication.
+# Прежний сторонний резервный захватчик вырезан из проекта целиком: он подключался
+# МОЛЧА и на ~20 к/с ломал ШИМ (ЛКМ «залипало», зона улетала наверх и не догоняла
+# рыбу). Вместо него — собственный GDI-путь (_GdiBackend на ctypes: user32.GetDC +
+# gdi32.BitBlt/GetDIBits, ноль зависимостей, берётся только регион, DC живёт в
+# потоке). Он третий в списке кандидатов и не подменяет DXGI незаметно: бэкенд и его
+# fps всегда видны в шапке, в журнале и на странице «Зрение».
 # Причина отказа импорта сохраняется: без неё пользователь видит «dxcam не установлен»,
 # хотя на самом деле пакет стоит и падает, например, из-за comtypes или защищённого окна.
 _CAP_IMPORT_ERR = {}
@@ -121,6 +120,11 @@ DEFAULT_CFG = {
     "bind_toggle": "f8", "bind_panic": "f10", "bind_gui": "insert", "bind_debug": "f9",
     "bar": [913, 471, 50, 529],          # область шкалы мини-игры (x, y, w, h) для 1920x1080
     "bar_pad": 22,                       # расширить кадр вокруг шкалы — нужен для красной рамки «РЫБА СРЫВАЕТСЯ»
+    "bar_refine": True,                  # каждое измерение сверяется с РЕАЛЬНОЙ шкалой на кадре
+                                         # (cfg-координаты = только подсказка): лечит «бот не
+                                         # видит рыбу» после смены разрешения/масштаба Windows
+    "bar_autofit": True,                 # если шкала вовсе вылезла из окна захвата — пересчитать
+                                         # CFG["bar"] по всему экрану и продолжить (с записью в конфиг)
     "equip_on_start": True,              # брать удочку из инвентаря, если её нет в руках
     "auto_cast": True,                   # автоматически закидывать удочку (если False - только мини-игра)
     "cast_after_catch": True,            # закидывать удочку после каждой рыбы
@@ -144,17 +148,43 @@ DEFAULT_CFG = {
     "hide_when_running": True,           # прятать окно, пока бот ловит (оверлей не мешает «зрению»)
     "ui_scale": 0.72,
     "win_pos": None,
-    # ---------------- ЗАХВАТ ЭКРАНА (dxcam/bettercam = основной, mss = только резерв) ----------------
-    "capture_backend": "auto",           # auto | dxcam | bettercam | mss
+    # ---------------- ЗАХВАТ ЭКРАНА (только DXGI; gdi = резерв без зависимостей) ----------------
+    "capture_backend": "auto",           # auto | dxcam | bettercam | gdi
     "capture_fps": 144,                  # target_fps потока мини-игры (видео-режим)
     "capture_monitor": 0,                # индекс монитора захвата (0 = основной)
     # ---------------- ПИД-РЕГУЛЯТОР МИНИ-ИГРЫ ----------------
     "pid_mode": "pwm",                   # pwm = ШИМ duty-cycle (рекомендуется) | hyst = порог с гистерезисом
-    "pid_kp": 3.00, "pid_ki": 1.00, "pid_kd": 0.06,   # нормальные коэффициенты (ошибка нормирована на высоту шкалы)
-    "pid_bias": 0.50,                    # дежурная скважность (баланс зоны, когда рыба по центру)
-    "pid_ilim": 0.35,                    # анти-windup: предел интеграла (в долях шкалы/с)
-    "pid_dband": 0.006,                  # мёртвая зона по ошибке (доля высоты шкалы) — убирает дребезг
-    "pid_em_kp": 8.00, "pid_em_ki": 2.00, "pid_em_kd": 0.12, "pid_em_bias": 0.70,  # аварийный режим (срыв)
+    "pid_kp": 1.80, "pid_ki": 1.40, "pid_kd": 0.10,  # нормальные коэффициенты (ошибка = скорость зоны /
+                                         # vel_max, НЕ доля высоты шкалы): Kp давит перегон, Ki находит
+                                         # равновесие «сколько держать, чтобы стоять», Kd гасит рывки
+    "pid_ilim": 0.45,                    # анти-windup: предел интеграла (в долях скорости)
+    "pid_dband": 0.015,                  # мёртвая зона по СКОРОСТНОЙ ошибке (доля vel_max)
+    "zone_margin": 18,                   # px от КРАЯ зелёной зоны: внутри этой полосы рыбу считать
+                                         # «пойманной» (иначе регулятор дёргается, не успевая опомниться)
+    "vel_gain": 5.0,                     # каскад: желаемая скорость зоны = vel_gain * ошибка, 1/с.
+                                         # В ЭТОЙ ИГРЕ ЛКМ управляет УСКОРЕНИЕМ зоны (зажал —
+                                         # разгоняется вверх, отпустил — вниз), поэтому прямым
+                                         # ПИД по положению зону не удержать: он проскакивает и
+                                         # качается. Внешний контур назначает СКОРОСТЬ, внутренний
+                                         # ПИД её отрабатывает, интегратор сам находит равновесие.
+    "vel_max": 720.0,                    # предел желаемой скорости зоны, px/с (эталон 1080p)
+    "stop_acc": 500.0,                   # px/с^2: запас на торможение. Скорость подхода к рыбе
+                                         # ограничивается v = sqrt(2*stop_acc*дистанция), иначе
+                                         # зона физически не успевает затормозить и ПРОСКАКИВАЕТ
+                                         # рыбу (тормозной путь при полном нажатии ~v^2/2200 px)
+    "hover_adapt": True,                 # автоматически подстроить pid_bias под точку равновесия
+                                         # зоны (в этой игре ЛКМ = усилие, «сколько держать, чтобы
+                                         # стоять» зависит от клиента: 0.27..0.6). Без этого бот
+                                         # СИСТЕМАТИЧЕСКИ держит зону выше или ниже рыбы.
+    "hover_ref": 1500.0,                 # px/с^2: масштаб ускорения зоны при «полностью
+                                         # отпущено»/«полностью зажато» (у игры ~1500..2500).
+                                         # Нужен, чтобы шаг подстройки не зависел от разрешения
+    "hover_k": 0.10,                     # скорость подстройки (доля замера)
+    "hover_span": 0.28,                  # на сколько hover имеет право уйти от pid_bias
+    "pid_bias": 0.50,                    # дежурная скважность = стартовая оценка равновесия
+                                         # («сколько держать, чтобы зона стояла»); интегратор
+                                         # каскада сам доуточняет её за ~1 с мини-игры
+    "pid_em_kp": 2.60, "pid_em_ki": 2.40, "pid_em_kd": 0.10, "pid_em_bias": 0.75,  # аварийный режим (срыв)
     "pwm_hz": 45.0,                      # частота ШИМ-цикла, Гц (период ~22 мс; 2 события на цикл максимум)
     "lead_time": 0.075,                  # упреждение по скорости/ускорению, с
     "lead_max": 38.0,                    # предел упреждения, px (эталон 1920x1080)
@@ -187,13 +217,14 @@ TEMPLATE_LABEL_KEYS = {"rod": "tpl_rod", "bait": "tpl_bait", "inv_header": "tpl_
 LOWER_GREEN = np.array([30, 80, 80]);   UPPER_GREEN = np.array([85, 255, 255])
 LOWER_GOLD = np.array([8, 40, 90]);     UPPER_GOLD = np.array([30, 255, 255])
 LOWER_CYAN = np.array([78, 80, 100]);   UPPER_CYAN = np.array([105, 255, 255])
+LOWER_BLUE = np.array([92, 35, 35]);     UPPER_BLUE = np.array([140, 255, 255])
 LOWER_RED = np.array([0, 60, 90]);      UPPER_RED = np.array([8, 255, 255])
 LOWER_RED2 = np.array([172, 60, 90]);   UPPER_RED2 = np.array([180, 255, 255])
 MIN_ZONE_AREA, MIN_FISH_AREA, MIN_FISH_HEIGHT = 150, 10, 6
 MAX_VEL = 1200.0
 KERNEL = np.ones((7, 7), np.uint8)
 ZONE_KERNEL = np.ones((5, 5), np.uint8)
-LOOP_DELAY = 0.004                        # только для резервного пути (mss), когда нет потока
+LOOP_DELAY = 0.004                        # только для резервного пути (GDI), когда нет потока
 RESYNC = 0.20
 MIN_SWITCH, FORCED_RELEASE = 0.030, 0.12  # легаси-константы; рабочие значения берутся из CFG
 
@@ -208,6 +239,13 @@ def load_cfg():
                 raise ValueError("config is not an object")
             known = {k: v for k, v in data.items() if k in DEFAULT_CFG}
             CFG.update(known)
+            # устаревшие ЗНАЧЕНИЯ мигрируем явно (CFG_VERSION не меняем — ключ-то на месте).
+            # mss из проекта вырезан, а конфиги версий 1.2-1.3 успели записать
+            # "capture_backend": "mss" при тихом откате — иначе пользователь навсегда
+            # остался бы на резервном захвате, сам того не подозревая.
+            if str(CFG.get("capture_backend", "")).lower().strip() in ("mss", "no", "dxgpu-dxs"):
+                CFG["capture_backend"] = DEFAULT_CFG["capture_backend"]
+                CFG_MIGRATED.append("capture_backend")
             if int(data.get("cfg_version", 1) or 1) < CFG_VERSION:
                 # аддитивная миграция: ничего не выбрасываем, только добавляем недостающие ключи
                 CFG.update({k: v for k, v in DEFAULT_CFG.items() if k not in known})
@@ -216,6 +254,9 @@ def load_cfg():
         except Exception as e:
             print("Config is not readable / конфиг не прочитан:", e)
     return False
+
+
+CFG_MIGRATED = []                         # что починили в load_cfg; печатается в журнал при старте
 
 
 def save_cfg():
@@ -262,7 +303,7 @@ STRINGS = {
     "v_zone": "зона", "v_fish": "рыба", "v_slip": "срыв", "v_err": "ошибка", "v_duty": "скважность",
     "v_mode": "режим", "v_mode_norm": "норма", "v_mode_emerg": "АВАРИЯ", "v_lost": "потеря", "v_ms": "кадр/мс",
     "v_none": "—", "v_no_file": "нет файла", "v_fps": "FPS", "v_latency": "задержка",
-    "v_fallback": "⚠ Резервный режим (mss) — точность и скорость ниже",
+    "v_fallback": "⚠ Резервный захват GDI — чуть медленнее DXGI (DXGI не поднялся)",
     "v_primary": "основной захват DXGI", "v_stream_off": "поток выключен", "v_stream_on": "поток {fps} fps",
     "tpl_rod": "Удочка (инвентарь)", "tpl_bait": "Наживка (инвентарь)", "tpl_inv": "Окно инвентаря",
     "tpl_hud_fish": "Значок удочки (HUD)", "tpl_hud_bait": "Значок наживки (HUD)", "tpl_hud_shield": "HUD виден",
@@ -318,13 +359,24 @@ STRINGS = {
     "log_slip": "⚠ Рыба срывается — аварийное удержание", "log_mini_done": "✔ Мини-игра: {dur:.1f} с, срывов {slip}, пик duty {duty:.2f}",
     "log_debug": "📷 debug_screen.png, debug_bar.png сохранены. {parts} | zone={zone} fish={fish}",
     "log_debug_fail": "❌ debug: {e}", "log_tpl_none": "нет файла",
-    "log_capture": "🖥 Захват: {backend} ({detail})", "log_capture_fallback": "⚠️ DXGI-захват недоступен ({err}) — работаю через mss (резерв)",
+    "log_capture": "🖥 Захват: {backend} ({detail})", "log_capture_fallback": "⚠️ DXGI-захват недоступен ({err}) — работаю через GDI (резерв без зависимостей)",
     "log_capture_skipped": "🖥 {reason}",
-    "hint_capture": "Что сделать: python -m pip install -U dxcam bettercam (и перезапусти). Если экран игры защищён от захвата или это RDP/виртуалка — включи аварийный режим: в fishmod_config.json поставь \"capture_backend\": \"mss\"",
+    "log_cfg_migrate": "⚙ Конфиг: значение \"{key}\": \"mss\" устарело (mss вырезан) — включено {to}.",
+    "hint_capture": "Что сделать: python -m pip install -U dxcam bettercam (и перезапусти). Если экран игры защищён от захвата или это RDP/виртуалка — бот сам возьмёт GDI-резерв; чтобы работать строго по DXGI, поставь в fishmod_config.json \"capture_backend\": \"dxcam\"",
     "log_stream": "🖥 Поток мини-игры: {backend}, {fps} fps, регион {rect}",
     "log_stream_stop": "🖥 Поток мини-игры остановлен",
     "log_stream_fail": "❌ Поток не запустился: {err}", "log_capture_error": "⚠ Захват: ошибка {err}",
-    "log_fallback_now": "⚠ Весь захват перешёл на mss (резервный режим)",
+    "log_fallback_now": "⚠ Весь захват перешёл на GDI (резервный режим)",
+    "log_bar_fit": "📐 Шкала уехала: калибровка обновлена {old} -> {new} (совпадение {cov}), причина: {why}",
+    "log_bar_fit_off": "📐 Шкала уехала, но bar_autofit выключен — проверь CFG[\"bar\"] вручную",
+    "nt_bar_fit": "Пересчитана область шкалы — проверь страницу «Зрение»",
+    "m_zonemargin": "Запас внутри зоны, px",
+    "m_velgain": "Скорость слежения (1/с)", "m_velmax": "Предел скорости зоны, px/с",
+    "m_stopacc": "Торможение (запас), px/с²",
+    "m_barfit": "Самокалибровка шкалы", "m_barref": "Измерять по реальной шкале",
+    "v_scale_lab": "шкала", "v_bar_edge": "шкала обрезана краем кадра",
+    "log_hover": "⚖ Точка равновесия зоны: {v:.2f} (замеров {n}) — можно вписать в pid_bias",
+    "m_hover": "Автоподстройка равновесия", "m_hoverspan": "Разброс равновесия, %",
     "log_ready": "{app}: готов. {toggle} — старт/стоп, {panic} — аварийный стоп",
     "fail_rod": "удочка не найдена в инвентаре", "fail_inv": "не удалось открыть инвентарь (TAB). Окно игры должно быть активным",
     "fail_inv2": "не удалось открыть инвентарь (TAB)",
@@ -356,7 +408,7 @@ STRINGS = {
     "v_zone": "zone", "v_fish": "fish", "v_slip": "slip", "v_err": "error", "v_duty": "duty",
     "v_mode": "mode", "v_mode_norm": "normal", "v_mode_emerg": "EMERGENCY", "v_lost": "lost", "v_ms": "frame/ms",
     "v_none": "—", "v_no_file": "no file", "v_fps": "FPS", "v_latency": "latency",
-    "v_fallback": "⚠ Fallback mode (mss) — lower accuracy and speed",
+    "v_fallback": "⚠ GDI fallback capture — a bit slower than DXGI (DXGI did not start)",
     "v_primary": "primary DXGI capture", "v_stream_off": "stream off", "v_stream_on": "stream {fps} fps",
     "tpl_rod": "Rod (inventory)", "tpl_bait": "Bait (inventory)", "tpl_inv": "Inventory window",
     "tpl_hud_fish": "Rod icon (HUD)", "tpl_hud_bait": "Bait icon (HUD)", "tpl_hud_shield": "HUD visible",
@@ -412,13 +464,24 @@ STRINGS = {
     "log_slip": "⚠ Fish is slipping — emergency hold", "log_mini_done": "✔ Minigame: {dur:.1f} s, slips {slip}, peak duty {duty:.2f}",
     "log_debug": "📷 debug_screen.png, debug_bar.png saved. {parts} | zone={zone} fish={fish}",
     "log_debug_fail": "❌ debug: {e}", "log_tpl_none": "no file",
-    "log_capture": "🖥 Capture: {backend} ({detail})", "log_capture_fallback": "⚠️ DXGI capture unavailable ({err}) — using mss (fallback)",
+    "log_capture": "🖥 Capture: {backend} ({detail})", "log_capture_fallback": "⚠️ DXGI capture unavailable ({err}) — using GDI (fallback, no extra deps)",
     "log_capture_skipped": "🖥 {reason}",
-    "hint_capture": "What to do: python -m pip install -U dxcam bettercam (then restart). If the game window is capture-protected or you are on RDP/VM, turn on the emergency mode: set \"capture_backend\": \"mss\" in fishmod_config.json",
+    "log_cfg_migrate": "⚙ Config: value \"{key}\": \"mss\" is obsolete (mss removed) — switched to {to}.",
+    "hint_capture": "What to do: python -m pip install -U dxcam bettercam (then restart). If the game window is capture-protected or you are on RDP/VM, the bot takes the GDI fallback on its own; to force DXGI only, set \"capture_backend\": \"dxcam\" in fishmod_config.json",
     "log_stream": "🖥 Minigame stream: {backend}, {fps} fps, region {rect}",
     "log_stream_stop": "🖥 Minigame stream stopped",
     "log_stream_fail": "❌ Stream failed to start: {err}", "log_capture_error": "⚠ Capture error: {err}",
-    "log_fallback_now": "⚠ All capture switched to mss (fallback mode)",
+    "log_fallback_now": "⚠ All capture switched to GDI (fallback mode)",
+    "log_bar_fit": "📐 The scale moved: calibration updated {old} -> {new} (match {cov}), reason: {why}",
+    "log_bar_fit_off": "📐 The scale moved but bar_autofit is off — fix CFG[\"bar\"] manually",
+    "nt_bar_fit": "Scale area recalculated — check the Vision page",
+    "m_zonemargin": "Zone margin, px",
+    "m_velgain": "Tracking rate (1/s)", "m_velmax": "Zone speed limit, px/s",
+    "m_stopacc": "Braking reserve, px/s²",
+    "m_barfit": "Scale auto-calibration", "m_barref": "Measure the real scale",
+    "v_scale_lab": "scale", "v_bar_edge": "scale is cut by the frame edge",
+    "log_hover": "⚖ Zone equilibrium point: {v:.2f} ({n} samples) — you can put it into pid_bias",
+    "m_hover": "Auto-trim equilibrium", "m_hoverspan": "Equilibrium span, %",
     "log_ready": "{app}: ready. {toggle} — start/stop, {panic} — panic stop",
     "fail_rod": "rod not found in the inventory", "fail_inv": "cannot open the inventory (TAB). The game window must be active",
     "fail_inv2": "cannot open the inventory (TAB)",
@@ -450,7 +513,7 @@ STRINGS = {
     "v_zone": "зона", "v_fish": "риба", "v_slip": "зрив", "v_err": "помилка", "v_duty": "заповнення",
     "v_mode": "режим", "v_mode_norm": "норма", "v_mode_emerg": "АВАРІЯ", "v_lost": "втрата", "v_ms": "кадр/мс",
     "v_none": "—", "v_no_file": "немає файла", "v_fps": "FPS", "v_latency": "затримка",
-    "v_fallback": "⚠ Резервний режим (mss) — точність і швидкість нижчі",
+    "v_fallback": "⚠ Резервне захоплення GDI — трішки повільніше за DXGI (DXGI не стартував)",
     "v_primary": "основний захват DXGI", "v_stream_off": "потік вимкнено", "v_stream_on": "потік {fps} fps",
     "tpl_rod": "Вудка (інвентар)", "tpl_bait": "Наживка (інвентар)", "tpl_inv": "Вікно інвентарю",
     "tpl_hud_fish": "Значок вудки (HUD)", "tpl_hud_bait": "Значок наживки (HUD)", "tpl_hud_shield": "HUD видно",
@@ -506,13 +569,24 @@ STRINGS = {
     "log_slip": "⚠ Риба зривається — аварійне утримання", "log_mini_done": "✔ Міні-гра: {dur:.1f} с, зривів {slip}, пік заповнення {duty:.2f}",
     "log_debug": "📷 debug_screen.png, debug_bar.png збережено. {parts} | zone={zone} fish={fish}",
     "log_debug_fail": "❌ debug: {e}", "log_tpl_none": "немає файла",
-    "log_capture": "🖥 Захват: {backend} ({detail})", "log_capture_fallback": "⚠️ DXGI-захват недоступний ({err}) — працюю через mss (резерв)",
+    "log_capture": "🖥 Захват: {backend} ({detail})", "log_capture_fallback": "⚠️ DXGI-захват недоступний ({err}) — працюю через GDI (резерв без залежностей)",
     "log_capture_skipped": "🖥 {reason}",
-    "hint_capture": "Що робити: python -m pip install -U dxcam bettercam (і перезапусти). Якщо вікно гри захищене від захоплення або це RDP/віртуалка — увімкни аварійний режим: у fishmod_config.json постав \"capture_backend\": \"mss\"",
+    "log_cfg_migrate": "⚙ Конфіг: значення \"{key}\": \"mss\" застаріле (mss вирізано) — увімкнено {to}.",
+    "hint_capture": "Що робити: python -m pip install -U dxcam bettercam (і перезапусти). Якщо DXGI недоступний (RDP, віртуалка, вікно захищене від захоплення) — бот сам візьме GDI-резерв; щоб працювати суто за DXGI, поставь у fishmod_config.json \"capture_backend\": \"dxcam\"",
     "log_stream": "🖥 Потік міні-гри: {backend}, {fps} fps, регіон {rect}",
     "log_stream_stop": "🖥 Потік міні-гри зупинено",
     "log_stream_fail": "❌ Потік не запустився: {err}", "log_capture_error": "⚠ Захват: помилка {err}",
-    "log_fallback_now": "⚠ Весь захват перейшов на mss (резервний режим)",
+    "log_fallback_now": "⚠ Весь захват перейшов на GDI (резервний режим)",
+    "log_bar_fit": "📐 Шкала з'їхала: калібрування оновлено {old} -> {new} (збіг {cov}), причина: {why}",
+    "log_bar_fit_off": "📐 Шкала з'їхала, але bar_autofit вимкнено — поправ CFG[\"bar\"] вручну",
+    "nt_bar_fit": "Перераховано область шкали — глянь сторінку «Зір»",
+    "m_zonemargin": "Запас у зоні, px",
+    "m_velgain": "Швидкість стеження (1/с)", "m_velmax": "Границя швидкості зони, px/с",
+    "m_stopacc": "Гальмування (запас), px/с²",
+    "m_barfit": "Самокалібрування шкали", "m_barref": "Міряти справжню шкалу",
+    "v_scale_lab": "шкала", "v_bar_edge": "шкалу обрізано краєм кадру",
+    "log_hover": "⚖ Точка рівноваги зони: {v:.2f} (вимірів {n}) — можна вписати в pid_bias",
+    "m_hover": "Автопідстройка рівноваги", "m_hoverspan": "Розкид рівноваги, %",
     "log_ready": "{app}: готово. {toggle} — старт/стоп, {panic} — аварійний стоп",
     "fail_rod": "вудку не знайдено в інвентарі", "fail_inv": "не вдалося відкрити інвентар (TAB). Вікно гри має бути активним",
     "fail_inv2": "не вдалося відкрити інвентар (TAB)",
@@ -568,9 +642,15 @@ STATS = {"catches": 0, "t0": None, "t_end": None, "mg": [], "checks": 0}
 TOTAL = {"catches": 0, "sessions": 0, "best": 0, "last_reason_key": "", "last_reason_detail": ""}
 # Живая телеметрия ПИД/захвата для страницы «Зрение» (пишет воркер, читает GUI)
 PID_VIEW = {"err": 0.0, "duty": 0.0, "mode": "norm", "lost": 0, "slip": 0, "p": 0.0, "i": 0.0, "d": 0.0,
-            "zone": None, "fish": None, "fps": 0.0, "frame_ms": 0.0, "hist": []}
+            "zone": None, "fish": None, "fps": 0.0, "frame_ms": 0.0, "hist": [],
+            "zone_v": 0.0, "half": 0.0, "clamp": "", "cov": 0.0, "detected": False, "hover": 0.5}
 worker = None
 GAME_TITLE = ""
+# Точка равновесия зоны, измеренная ботом (сколько надо держать ЛКМ, чтобы зона стояла).
+# Физика мини-игры в разных клиентах разная, а между забросами она НЕ меняется — поэтому
+# значение живёт всю сессию и подсказывается в журнале, чтобы его можно было вписать в
+# pid_bias и не ждать подстройки каждый запуск.
+HOVER = {"v": 0.0, "n": 0}
 held_keys = set()
 mouse_down = False
 last_switch = last_up_sent = hold_since = 0.0
@@ -684,69 +764,166 @@ def play(name):
 
 
 # ==========================================================================
-# 4. ЗАХВАТ ЭКРАНА — ЕДИНАЯ ТОЧКА ВХОДА (DXGI: dxcam/bettercam, резерв — mss)
+# 4. ЗАХВАТ ЭКРАНА — ЕДИНАЯ ТОЧКА ВХОДА (DXGI: dxcam/bettercam, резерв — GDI)
 # ==========================================================================
-# ВАЖНО: это ЕДИНСТВЕННЫЙ путь захвата во всём приложении. Никаких прямых вызовов
-# mss.sct.grab() больше нет нигде, кроме внутренней реализации резервного режима
-# (ScreenCapture._MssBackend). Все функции типа grab()/grab_px()/tpl()/find() работают
-# через CAP.
+# ВАЖНО: это ЕДИНСТВЕННЫЙ путь захвата во всём приложении. Все функции типа
+# grab()/grab_px()/tpl()/find() работают через CAP; у бэкенда общий интерфейс
+# (grab/can_stream/start/stop/close), поэтому «кто сейчас активен» не влияет ни на что
+# выше. Прежний сторонний резерв удалён: вместо него — _GdiBackend на чистом ctypes.
 #
 # Почему один камера-объект: DXGI Desktop Duplication разрешает только ОДНУ активную
 # дупликацию на выход, поэтому для потока мини-игры тот же camera.start(region=...),
 # а разовые захват-вызовы во время потока обслуживаются последним кадром потока
 # (или CAP.paused() — короткая остановка потока, захват, восстановление).
 
-def _mss_new():
-    """mss.mss() устарел и печатает DeprecationWarning прямо в консоль запуска;
-    в mss 9+/10+ есть mss.MSS(). Берём новый API, при отсутствии — старый без шума."""
-    cls = getattr(mss, "MSS", None)
-    if cls is not None:
-        return cls()
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        return mss.mss()
+def _frame_ok(frame):
+    """Кадр пригоден, только если это ndarray разумного размера и он НЕ полностью чёрный.
+
+    Проверяется у каждого кандидата: «create() прошёл» ничего не значит, если буфер пуст
+    или окно защищено от захвата — тогда приходят чёрные картинки, и бот вместо игры
+    ловит тёмный фон (именно так выглядит «бот ничего не видит и зажимает ЛКМ»).
+    """
+    try:
+        if frame is None or not hasattr(frame, "shape") or frame.ndim < 2:
+            return False, "кадр не пришёл"
+        h, w = frame.shape[:2]
+        if w < 64 or h < 64:
+            return False, "кадр %dx%d — подозрительно маленький" % (w, h)
+        if int(np.max(frame)) <= 6:
+            return False, "кадр полностью чёрный (экран защищён от захвата?)"
+        return True, "%dx%d" % (w, h)
+    except Exception as e:
+        return False, "%s: %s" % (type(e).__name__, e)
 
 
-class _MssBackend:
-    """Аварийный захват (mss). НЕ включается сам: только явно, capture_backend="mss"."""
-    name = "mss"
+# ------------------------------------------------------------------ резерв без зависимостей: GDI
+class _BITMAPINFOHEADER(ctypes.Structure):
+    _fields_ = [("biSize", ctypes.c_uint32), ("biWidth", ctypes.c_int32),
+                ("biHeight", ctypes.c_int32), ("biPlanes", ctypes.c_uint16),
+                ("biBitCount", ctypes.c_uint16), ("biCompression", ctypes.c_uint32),
+                ("biSizeImage", ctypes.c_uint32), ("biXPelsPerMeter", ctypes.c_int32),
+                ("biYPelsPerMeter", ctypes.c_int32), ("biClrUsed", ctypes.c_uint32),
+                ("biClrImportant", ctypes.c_uint32)]
 
-    def __init__(self):
-        if mss is None:
-            raise RuntimeError("mss is not installed")
+
+class _BITMAPINFO(ctypes.Structure):
+    _fields_ = [("bmiHeader", _BITMAPINFOHEADER), ("bmiColors", ctypes.c_uint32 * 3)]
+
+
+class _GdiBackend:
+    """Аварийный захват региона средствами GDI (user32/gdi32 через ctypes), 0 зависимостей.
+
+    Нужен там, где DXGI не поднимается в принципе: RDP, виртуалка без 3D, «защищённое»
+    окно, кривой драйвер. Это НЕ молчаливая подмена: бэкенд подписан в шапке, в журнале
+    и на странице «Зрение», а первый кадр проверяется через _frame_ok так же строго,
+    как у dxcam/bettercam.
+
+    Почему своим кодом, а не сторонним пакетом (вырезан): тот на каждый захват заново создавал
+    контекст и конвертировал ВЕСЬ монитор (на машине пользователя — 12 мс на кадр одной
+    шкалы). При таком шаге цикла ШИМ-окно оказывается длиннее цикла регулятора, и ЛКМ
+    «залипает». Здесь DC и bitmap переиспользуются в потоке, забирается только регион,
+    выгрузка — один GetDIBits (32bpp, top-down) в переиспользуемый буфер.
+    """
+    name = "gdi"
+    SRCCOPY = 0x00CC0020
+    HORZRES, VERTRES, LOGPIXELSX = 8, 10, 88
+
+    def __init__(self, monitor_idx=0):
         self._tls = threading.local()
-        self.mon = None
-        m = _mss_new()
+        self._stop = None
+        self._th = None
+        if os.name != "nt" or not hasattr(ctypes, "windll"):
+            raise RuntimeError("GDI-захват доступен только в Windows")
+        usr, gdi = ctypes.windll.user32, ctypes.windll.gdi32
+        hdc = usr.GetDC(None)
+        if not hdc:
+            raise RuntimeError("GDI: GetDC(NULL) вернул 0")
         try:
-            self.mon = dict(m.monitors[1 if len(m.monitors) > 1 else 0])
+            w = int(gdi.GetDeviceCaps(hdc, self.HORZRES) or 0)
+            h = int(gdi.GetDeviceCaps(hdc, self.VERTRES) or 0)
+            dpi = int(gdi.GetDeviceCaps(hdc, self.LOGPIXELSX) or 96)
         finally:
-            try:
-                m.close()
-            except Exception:
-                pass
-        if not self.mon:
-            raise RuntimeError("mss: no monitor")
+            usr.ReleaseDC(None, hdc)
+        if w < 160 or h < 120:                     # вдруг DC пустой (headless/RDP-сессия)
+            w, h = int(usr.GetSystemMetrics(0) or 0), int(usr.GetSystemMetrics(1) or 0)
+        if w < 160 or h < 120:
+            raise RuntimeError("GDI: разрешение экрана %dx%d — непонятно, что захватывать" % (w, h))
+        self.mon = {"left": 0, "top": 0, "width": int(w), "height": int(h)}
+        self.note = "GDI %dx%d" % (w, h) + ("" if dpi in (0, 96) else " @%ddpi" % dpi)
+        try:
+            probe = self.grab(0, 0, min(w, 320), min(h, 240))
+        except Exception as e:
+            self.close()
+            raise RuntimeError("GDI: %s: %s" % (type(e).__name__, str(e).strip()[:120]))
+        ok, why = _frame_ok(probe)
+        self.close()                               #_DC на время проверки держать незачем
+        if not ok:
+            raise RuntimeError("GDI: " + why)
+        self.note = "кадр %s (GDI)" % why
 
-    @property
-    def sct(self):
-        s = getattr(self._tls, "sct", None)
-        if s is None:
-            s = _mss_new()
-            self._tls.sct = s
-        return s
+    # ------------------------------------------------------------------ контекст GDI (на поток)
+    def _ctx(self, w, h):
+        c = getattr(self._tls, "c", None)
+        if c is not None and c["w"] == w and c["h"] == h:
+            return c
+        if c is not None:
+            self._free(c)
+        usr, gdi = ctypes.windll.user32, ctypes.windll.gdi32
+        hdc = usr.GetDC(None)
+        if not hdc:
+            raise RuntimeError("GDI: GetDC(NULL) вернул 0")
+        mem = gdi.CreateCompatibleDC(hdc)
+        bmp = gdi.CreateCompatibleBitmap(hdc, w, h) if mem else 0
+        if not mem or not bmp:
+            self._free({"hdc": hdc, "mem": mem, "bmp": bmp, "w": 0, "h": 0})
+            raise RuntimeError("GDI: не удалось создать bitmap %dx%d (GDI-лимиты?)" % (w, h))
+        gdi.SelectObject(mem, bmp)
+        c = {"hdc": hdc, "mem": mem, "bmp": bmp, "w": w, "h": h,
+             "buf": (ctypes.c_uint8 * (w * h * 4))()}
+        self._tls.c = c
+        return c
 
+    @staticmethod
+    def _free(c):
+        try:
+            usr, gdi = ctypes.windll.user32, ctypes.windll.gdi32
+            if c.get("bmp"):
+                gdi.DeleteObject(c["bmp"])
+            if c.get("mem"):
+                gdi.DeleteDC(c["mem"])
+            if c.get("hdc"):
+                usr.ReleaseDC(None, c["hdc"])
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------ захват
     def grab(self, left, top, width, height):
-        box = {"left": int(left), "top": int(top), "width": max(1, int(width)), "height": max(1, int(height))}
-        return np.ascontiguousarray(np.array(self.sct.grab(box))[:, :, :3])
+        x, y = int(left), int(top)
+        w, h = max(1, int(width)), max(1, int(height))
+        c = self._ctx(w, h)
+        gdi = ctypes.windll.gdi32
+        if not gdi.BitBlt(c["mem"], 0, 0, w, h, c["hdc"], x, y, self.SRCCOPY):
+            raise RuntimeError("BitBlt не выполнен (окно защищено от захвата?)")
+        bmi = _BITMAPINFO()
+        bmi.bmiHeader.biSize = ctypes.sizeof(_BITMAPINFOHEADER)
+        bmi.bmiHeader.biWidth = w
+        bmi.bmiHeader.biHeight = -h                # отрицательная высота = top-down
+        bmi.bmiHeader.biPlanes = 1
+        bmi.bmiHeader.biBitCount = 32
+        if not gdi.GetDIBits(c["mem"], c["bmp"], 0, h, c["buf"], ctypes.byref(bmi), 0):
+            raise RuntimeError("GetDIBits вернул 0 (экран не отрисован?)")
+        arr = np.frombuffer(c["buf"], dtype=np.uint8, count=w * h * 4).reshape(h, w, 4)
+        return np.ascontiguousarray(arr[:, :, :3])   # BGRA -> BGR, как у dxcam с output_color=BGR
 
+    # ------------------------------------------------------------------ «поток» (pump-поток)
     def can_stream(self):
         return True
 
     def start(self, left, top, width, height, fps, on_frame):
-        self.stop()                     # на всякий случай: не допускаем двух потоков
+        self.stop()
         self._stop = threading.Event()
-        self._th = threading.Thread(target=self._loop, args=(left, top, width, height, fps, on_frame, self._stop),
-                                    daemon=True)
+        self._th = threading.Thread(target=self._loop, daemon=True,
+                                    args=(left, top, width, height, fps, on_frame, self._stop))
         self._th.start()
 
     def _loop(self, left, top, width, height, fps, on_frame, stop):
@@ -756,7 +933,9 @@ class _MssBackend:
             try:
                 on_frame(self.grab(left, top, width, height), time.perf_counter())
             except Exception:
-                pass
+                if stop.is_set():
+                    break
+                time.sleep(0.004)
             nxt += period
             delay = nxt - time.perf_counter()
             if delay > 0:
@@ -770,19 +949,21 @@ class _MssBackend:
             ev.set()
             th = getattr(self, "_th", None)
             if th is not None:
-                th.join(timeout=0.5)
+                try:
+                    th.join(timeout=0.5)
+                except Exception:
+                    pass
             self._stop = None
             self._th = None
 
     def close(self):
         self.stop()
-        s = getattr(self._tls, "sct", None)
-        if s is not None:
-            try:
-                s.close()
-            except Exception:
-                pass
-            self._tls.sct = None
+        tls = getattr(self, "_tls", None)
+        if tls is not None:
+            c = getattr(tls, "c", None)
+            if c is not None:
+                self._free(c)
+                tls.c = None
 
 
 # ------------------------------------------------------------------ DXGI-поток (dxcam / bettercam)
@@ -794,8 +975,8 @@ class _DxgiStream:
     у dxcam 0.3.x его принимает сам start(region=...), а get_latest_frame() там вообще без
     timeout; у bettercam 1.0.0 нет callback-а, только get_latest_frame(). Поэтому вместо
     «угадывания версии» тут короткий список кандидатов create()/start() и обязательная
-    ПРОВЕРКА, что кадр действительно приходит: молчаливый откат на mss стоил пользователю
-    рабочего режима (20 к/с вместо 120+, ПИД «зажимает» ЛКМ).
+    ПРОВЕРКА, что кадр действительно приходит: молчаливый откат на медленный путь стоил
+    пользователю рабочего режима (20 к/с вместо 120+, ПИД «зажимает» ЛКМ).
     """
 
     name = "dxgi"
@@ -806,20 +987,7 @@ class _DxgiStream:
         raise NotImplementedError
 
     # ------------------------------------------------------------------ создание
-    @staticmethod
-    def _frame_ok(frame):
-        """Кадр пригоден: это ndarray разумного размера и он не полностью чёрный."""
-        try:
-            if frame is None or not hasattr(frame, "shape") or frame.ndim < 2:
-                return False, "кадр не пришёл"
-            h, w = frame.shape[:2]
-            if w < 64 or h < 64:
-                return False, "кадр %dx%d — подозрительно маленький" % (w, h)
-            if int(np.max(frame)) <= 6:
-                return False, "кадр полностью чёрный (экран защищён от захвата?)"
-            return True, "%dx%d" % (w, h)
-        except Exception as e:
-            return False, "%s: %s" % (type(e).__name__, e)
+    _frame_ok = staticmethod(_frame_ok)      # общая проверка кадра — на уровне модуля (см. выше)
 
     def _grab_probe(self):
         """Первый кадр: новыми вариантами API, с короткими повторами (буфер мог быть пуст)."""
@@ -1074,14 +1242,18 @@ class ScreenCapture:
     """
     Единая обёртка над захватом экрана.
 
-    * "dxcam" -> "bettercam" — DXGI Desktop Duplication, ЕДИНСТВЕННЫЙ основной режим:
-      region-capture (не весь экран с кропом) + video_mode c target_fps для мини-игры
-      (минимальная задержка, ~120-144 к/с).
-    * "mss" — ТОЛЬКО по явному запросу (capture_backend="mss"): RDP/VM без Desktop
-      Duplication. Сам он не подключается: молчаливый перевод на ~20 к/с ломает ПИД.
+    * "dxcam" -> "bettercam" — DXGI Desktop Duplication, основной режим: region-capture
+      (не весь экран с кропом) + video_mode с target_fps для мини-игры (минимальная
+      задержка, ~120-144 к/с).
+    * "gdi" — резерв БЕЗ зависимостей (ctypes, BitBlt по экрану) для случаев, где DXGI
+      не поднимается вовсе: RDP, виртуалка без 3D, защищённое от захвата окно. Он всегда
+      подписан в интерфейсе и в журнале, «незаметной» подмены не бывает.
     * fallback_reason — список причин, по которым каждый из DXGI-бэкендов не подошёл
       (его печатает журнал и страница «Зрение»); is_fallback — режим не-DXGI.
     """
+
+    CANDIDATES = {"auto": ("dxcam", "bettercam", "gdi"), "dxcam": ("dxcam",),
+                  "bettercam": ("bettercam",), "gdi": ("gdi",)}
 
     def __init__(self, want="auto", monitor_idx=0):
         self.frame = None                 # последний кадр потока (BGR) для превью
@@ -1101,10 +1273,9 @@ class ScreenCapture:
         self._bg = None                       # иначе «ни один бэкенд не подошёл» падало
         self.backend = ""                      # AttributeError вместо внятного Fail-сообщения
         self.cam_note = ""
-        order = {"auto": ("dxcam", "bettercam"), "dxcam": ("dxcam",),
-                 "bettercam": ("bettercam",), "mss": ("mss",)}.get(str(want or "auto").lower())
-        if order is None:
-            order = ("dxcam", "bettercam")
+        order = self.CANDIDATES.get(str(want or "auto").lower().strip())
+        if order is None:                       # любое неизвестное значение = auto
+            order = self.CANDIDATES["auto"]
         reasons = []
         for name in order:
             try:
@@ -1112,8 +1283,8 @@ class ScreenCapture:
                     bg = _DxcamBackend(monitor_idx)
                 elif name == "bettercam":
                     bg = _BettercamBackend(monitor_idx)
-                elif name == "mss":
-                    bg = _MssBackend()
+                elif name == "gdi":
+                    bg = _GdiBackend(monitor_idx)
                 else:
                     continue
                 self.backend, self._bg = name, bg
@@ -1126,7 +1297,7 @@ class ScreenCapture:
         if self._bg is None:
             raise Fail(t("fail_capture") + " — " + (self.fallback_reason or "—")
                        + "\n" + t("hint_capture"))
-        self.is_fallback = self.backend == "mss"
+        self.is_fallback = self.backend == "gdi"
         m = getattr(self._bg, "mon", None) or {"left": 0, "top": 0, "width": REF_W, "height": REF_H}
         self.mon = {"left": int(m.get("left", 0)), "top": int(m.get("top", 0)),
                     "width": max(1, int(m.get("width", REF_W))), "height": max(1, int(m.get("height", REF_H)))}
@@ -1182,7 +1353,11 @@ class ScreenCapture:
                 self.errors += 1
                 if not self.is_fallback:
                     log(t("log_capture_error", err=f"{type(e).__name__}: {e}"))
-                    self._degrade_to_mss()
+                    try:
+                        self._degrade_to_gdi()
+                    except Exception as ed:
+                        log(t("log_stream_fail", err=f"gdi: {type(ed).__name__}: {ed}"))
+                        raise
                 return self._raw(left, top, width, height)
             finally:
                 self._maybe_resume()
@@ -1216,10 +1391,10 @@ class ScreenCapture:
                 log(t("log_capture_error", err=f"{type(e).__name__}: {e}"))
                 if not self.is_fallback:
                     try:
-                        self._degrade_to_mss()          # mss может быть не установлен (он больше
-                    except Exception as ed:             # не обязательный) — ронять мини-игру нельзя
+                        self._degrade_to_gdi()          # GDI может быть недоступен (не Windows,
+                    except Exception as ed:              # чёрный экран) — ронять мини-игру нельзя
                         self.errors += 1
-                        log(t("log_stream_fail", err=f"mss: {type(ed).__name__}: {ed}"))
+                        log(t("log_stream_fail", err=f"gdi: {type(ed).__name__}: {ed}"))
                         self.stream_rect = None
                         return False
                     try:
@@ -1247,7 +1422,7 @@ class ScreenCapture:
 
     def _maybe_resume(self):
         r = getattr(self, "_restart_after", None)
-        if r and self.streaming:          # бэкенд уже сам поднял поток (например, после _degrade_to_mss)
+        if r and self.streaming:          # бэкенд уже сам поднял поток (например, после _degrade_to_gdi)
             self._restart_after = None
             return
         if r:
@@ -1271,8 +1446,8 @@ class ScreenCapture:
                 self._new.set()
                 log(t("log_stream_stop"))
 
-    def _degrade_to_mss(self):
-        """DXGI сломался в полёте — единообразно переходим на mss (весь захват)."""
+    def _degrade_to_gdi(self):
+        """DXGI сломался в полёте — единообразно переходим на GDI (весь захват, без зависимостей)."""
         was, rect = self.streaming, self.stream_rect
         try:
             self._bg.close()
@@ -1280,8 +1455,8 @@ class ScreenCapture:
             pass
         self.streaming = False
         self.stream_rect = None
-        self._bg = _MssBackend()
-        self.backend, self.is_fallback = "mss", True
+        self._bg = _GdiBackend()
+        self.backend, self.is_fallback = "gdi", True
         self.fallback_reason = "DXGI failed at runtime"
         m = self._bg.mon
         self.mon = {"left": int(m["left"]), "top": int(m["top"]), "width": int(m["width"]), "height": int(m["height"])}
@@ -1311,10 +1486,16 @@ CAP = None
 
 
 def init_capture():
-    """Создаёт единственный экземпляр захвата. Вызывается один раз из main()/launcher."""
+    """Создаёт единственный экземпляр захвата. Вызывается один раз из main()/launcher.
+
+    В журнал всегда попадает и ИМЯ бэкенда, и каждая причина, по которой DXGI-кандидат
+    не подошёл: «тихой» деградации больше нет ни здесь, ни в мини-игре.
+    """
     global CAP
     if CAP is not None:
         return CAP
+    for k in CFG_MIGRATED:
+        log(t("log_cfg_migrate", key=k, to=DEFAULT_CFG["capture_backend"]))
     CAP = ScreenCapture(CFG.get("capture_backend", "auto"), int(CFG.get("capture_monitor", 0) or 0))
     detail = getattr(CAP, "cam_note", "") or t("v_primary" if not CAP.is_fallback else "v_fallback")
     log(t("log_capture", backend=CAP.backend, detail=detail))
@@ -1805,6 +1986,135 @@ def bar_rects():
     return rect, inner
 
 
+def _runs(flag, lo_frac=0.0):
+    """Список непрерывных отрезков True в булевом массиве: [(start, end_incl), ...]."""
+    out, start = [], None
+    for i, v in enumerate(flag):
+        if v and start is None:
+            start = i
+        elif not v and start is not None:
+            out.append((start, i - 1)); start = None
+    if start is not None:
+        out.append((start, len(flag) - 1))
+    return out
+
+
+def _scale_sanity(sc, img, hint):
+    """Стоит ли верить найденной рамке шкалы.
+
+    Кадр мини-игры маленький (шкала + bar_pad), и на однотонном фоне (сине-серая вода,
+    небо, тёмный интерфейс) маска закрывает всё сразу: такая «шкала» равна всему кадру, и
+    лучше не измерять ничего, чем верить ей — иначе измерения становятся хуже, чем просто
+    доверие CFG["bar"]. Поэтому отказ, если найдено ~всё (структуры нет) или рамка сильно
+    БОЛЬШЕ подсказки.
+    """
+    x0, y0, x1, y1, cov = sc
+    H, W = img.shape[:2]
+    w, h = x1 - x0, y1 - y0
+    if w < 8 or h < 40 or h < 1.6 * w:
+        return None
+    if w >= 0.85 * W and h >= 0.85 * H:
+        return None                                  # «шкала» = весь кадр: структуры нет
+    if hint is not None and (w > 1.8 * hint[2] or h > 1.5 * hint[3]):
+        return None                                  # сильно больше подсказки = не шкала
+    return sc
+
+
+def _runs_merge(runs, gap):
+    """Соседние отрезки с разрывом <= gap склеиваем: рыба, антиалиасинг края зоны и
+    тёмная полоска-разделитель делают в «столбце шкалы» дырки в 1-6 пикселей, и без
+    склейки вертикальный отрезок шкалы рвётся ровно посередине (проверено на синтетике
+    tests/test_bar_detect.py)."""
+    out = []
+    for a, b in runs:
+        if out and a - out[-1][1] <= gap:
+            out[-1] = (out[-1][0], b)
+        else:
+            out.append((a, b))
+    return out
+
+
+def scale_rect(img, hint=None):
+    """Где на кадре НА САМОМ ДЕЛЕ шкала мини-игры: (x0, y0, x1, y1, cov) или None.
+
+    CFG["bar"] — только ПОДСКАЗКА. При смене разрешения, масштаба Windows, другого монитора
+    или просто неточной калибровки окно захвата уезжает, и бот начинает измерять «зону» и
+    «рыбу» в несуществующих координатах: он «зажимает ЛКМ» и «не ведёт за рыбой» ровно тогда,
+    когда смотрит не туда. Поэтому границы шкалы каждый кадр берутся из самой картинки.
+
+    Порядок поиска: зелёная зона — самый различимый элемент, и она ВСЕГДА внутри шкалы,
+    поэтому колонку находим по ней (а по голубому градиенту — только верх/низ шкалы).
+    Если зоны в кадре нет (ушла за край, только что появилась) — ищем просто голубую
+    вертикальную полосу. hint = (x, y, w, h) помогает не перепрыгнуть на чужую полоску UI.
+    """
+    H, W = img.shape[:2]
+    if H < 40 or W < 8:
+        return None
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    green = cv2.inRange(hsv, LOWER_GREEN, UPPER_GREEN)
+    bonly = cv2.inRange(hsv, np.array([95, 70, 55]), np.array([135, 255, 255]))
+    both = cv2.bitwise_or(bonly, green)
+    gcol = (green > 0).sum(axis=0)
+    gcols = _runs(gcol >= max(6, 0.4 * int(gcol.max()))) if gcol.max() else []
+    gcols = [r for r in gcols if (r[1] - r[0] + 1) >= 8]
+    if gcols:
+        gcols.sort(key=lambda r: -int(gcol[r[0]:r[1] + 1].sum()))
+        gx0, gx1 = gcols[0]
+        grow = _runs((green[:, gx0:gx1 + 1] > 0).sum(axis=1) >= max(2, 0.35 * (gx1 - gx0 + 1)))
+        if not grow:
+            return None
+        grow.sort(key=lambda r: -(r[1] - r[0]))
+        gy0, gy1 = grow[0]
+        cy = (gy0 + gy1) / 2.0
+        if hint is not None and abs(cy - (hint[1] + hint[3] / 2.0)) > max(hint[3], 60) * 1.2:
+            return None                              # «зона» слишком далеко от шкалы — это не она
+        # ширина шкалы: зелёная зона задаёт середину, а края добираем по голубым столбцам
+        bcol = (bonly > 0).sum(axis=0)
+        ref = max(1, int(bcol[gx0:gx1 + 1].max()) if gx1 > gx0 else 1)
+        thr_b = 0.45 * max(int(bcol.max()), ref)
+        x0, x1 = gx0, gx1
+        while x0 > 0 and bcol[x0 - 1] >= thr_b:
+            x0 -= 1
+        while x1 < W - 1 and bcol[x1 + 1] >= thr_b:
+            x1 += 1
+        w = x1 - x0 + 1
+        rcol = (both[:, x0:x1 + 1] > 0).sum(axis=1)
+        rows = _runs_merge(_runs(rcol >= 0.30 * w), max(6, w // 4))
+        if not rows:
+            return int(x0), int(gy0), int(x1) + 1, int(gy1) + 1, 0.9
+        mid = (gy0 + gy1) // 2                       # берём отрезок, в котором лежит зона
+        pick = next((r for r in rows if r[0] <= mid <= r[1]), None)
+        if pick is None:
+            pick = max(rows, key=lambda r: r[1] - r[0])
+        y0, y1 = pick
+        cov = float(rcol[y0:y1 + 1].mean() / w) if y1 > y0 else 0.0
+        return _scale_sanity((int(x0), int(y0), int(x1) + 1, int(y1) + 1, round(cov, 3)), img, hint)
+    colcnt = (both > 0).sum(axis=0).astype(np.float64)
+    if colcnt.max() < 0.35 * H:
+        return None
+    cand = [r for r in _runs(colcnt >= 0.5 * colcnt.max())
+            if (r[1] - r[0] + 1) >= 8 and (r[1] - r[0] + 1) <= max(12, int(W * 0.7))]
+    if not cand:
+        return None
+    if hint is not None:
+        hx, hy, hw, hh = hint
+        cx = hx + hw / 2.0
+        cand.sort(key=lambda r: abs((r[0] + r[1] + 1) / 2.0 - cx))
+    x0, x1 = cand[0]
+    w = x1 - x0 + 1
+    rowcnt = (both[:, x0:x1 + 1] > 0).sum(axis=1).astype(np.float64)
+    rr = [r for r in _runs_merge(_runs(rowcnt >= 0.30 * w), max(6, w // 4))
+          if (r[1] - r[0] + 1) >= max(40, int(1.8 * w))]
+    if not rr:
+        return None
+    rr.sort(key=lambda r: -(r[1] - r[0]))
+    y0, y1 = rr[0]
+    cov = float(rowcnt[y0:y1 + 1].mean() / w)
+    if cov < 0.5 or (y1 - y0 + 1) < 0.2 * H:
+        return None
+    return _scale_sanity((int(x0), int(y0), int(x1) + 1, int(y1) + 1, round(cov, 3)), img, hint)
+
+
 def _red_frame_mask(bgr):
     """Красный «на светлом фоне»: канал R заметно больше обоих остальных (рамка свечения)."""
     a = bgr.astype(np.int16)
@@ -1826,7 +2136,7 @@ def slip_score(img, box):
     return best
 
 
-def analyze(bgr, inner=None):
+def analyze(bgr, inner=None, refine=True):
     """
     Разбор кадра мини-игры.
       bgr  — кадр (можно расширенный на CFG["bar_pad"] вокруг шкалы)
@@ -1843,6 +2153,18 @@ def analyze(bgr, inner=None):
         y0 = max(0, min(H - 6, int(iy)))
         x1 = max(x0 + 6, min(W, x0 + int(iw)))
         y1 = max(y0 + 6, min(H, y0 + int(ih)))
+    clipped, moved, cov, detected = False, (0, 0, 0, 0), 0.0, False
+    if refine and CFG.get("bar_refine", True):
+        # доверяем картинке, а не конфигу: шкала могла уехать (разрешение, масштаб Windows)
+        # или конфиг мог быть просто «на глаз». ih и положение зоны/рыбы считаем по НЕЙ.
+        sc = scale_rect(bgr, hint=(x0, y0, x1 - x0, y1 - y0))
+        if sc is not None:
+            sx0, sy0, sx1, sy1, cov = sc
+            if (sy1 - sy0) >= 40 and (sx1 - sx0) >= 8:
+                moved = (sx0 - x0, sy0 - y0, sx1 - x1, sy1 - y1)
+                detected = True
+                x0, y0, x1, y1 = sx0, sy0, sx1, sy1
+                clipped = (x0 <= 0 and y0 <= 0) or (x1 >= W) or (y1 >= H)
     bar = np.ascontiguousarray(bgr[y0:y1, x0:x1])
     h, w = bar.shape[:2]
     hsv = cv2.cvtColor(bar, cv2.COLOR_BGR2HSV)
@@ -1890,7 +2212,62 @@ def analyze(bgr, inner=None):
     return {"zone": zone, "fish": fish_y,
             "slip": slip_score(bgr, (x0, y0, x1, y1)) if inner is not None else 0.0,
             "green": green, "fishmask": fmask, "ih": max(1, h), "area": best_area,
-            "box": (x0, y0, x1, y1)}
+            "box": (x0, y0, x1, y1), "scale": (x0, y0, x1, y1), "cov": cov,
+            "moved": moved, "clipped": clipped, "detected": detected}
+
+
+def autofit_bar(search=None, why=""):
+    """Находит шкалу по всему экрану и ПОПРАВЛЯЕТ CFG["bar"]: калибровка могла уехать.
+
+    Причина «бот зажимает ЛКМ и не ведёт за рыбой» часто вообще не в регуляторе, а в том,
+    что окно захвата смотрит не на шкалу (сменилось разрешение/масштаб Windows, игра
+    переехала на другой монитор, конфиг когда-то подогнали «на глаз»). Тогда зона и рыба
+    измеряются в несуществующих координатах, и никаких коэффициентов ПИД не хватит.
+
+    Возвращает True, если CFG["bar"] изменили (вызывающему надо пересобрать rect/inner).
+    """
+    if CAP is None:
+        init_capture()
+    m, sx, sy = CAP.mon, CAP.sx, CAP.sy
+    frame = search if search is not None else None
+    if frame is None:
+        try:
+            frame = CAP.grab_full()
+        except Exception:
+            return False
+    if frame is None or frame.ndim < 2 or frame.shape[0] < 120:
+        return False
+    sc = scale_rect(frame)
+    if sc is None:
+        return False
+    x0, y0, x1, y1, cov = sc
+    w, h = x1 - x0, y1 - y0
+    if w < 8 or h < 120 or h < 2.2 * w:            # чужая голубая полоска интерфейса
+        return False
+    # самопроверка: внутри найденной рамки зона должна читаться
+    pad = max(6, int(CFG["bar_pad"]))
+    crop = frame[max(0, y0 - pad):min(frame.shape[0], y1 + pad),
+                 max(0, x0 - pad):min(frame.shape[1], x1 + pad)]
+    if crop.shape[0] < 60 or crop.shape[1] < 12:
+        return False
+    in2 = (pad, pad, w, h)
+    if analyze(crop, in2, refine=False)["zone"] is None:
+        return False
+    new = [int(round((x0 - m["left"]) / sx)), int(round((y0 - m["top"]) / sy)),
+           int(round(w / sx)), int(round(h / sy))]
+    if new == list(CFG["bar"]):
+        return False
+    old = list(CFG["bar"])
+    CFG["bar"] = new
+    log(t("log_bar_fit", old=old, new=new, cov=cov, why=why or "—"))
+    if CFG.get("bar_autofit", True):
+        save_cfg()
+    else:
+        CFG["bar"] = old
+        log(t("log_bar_fit_off"))
+        return False
+    notify("nt_bar_fit", "warn")
+    return True
 
 
 def ensure_bar_stream(rect):
@@ -1906,7 +2283,7 @@ def ensure_bar_stream(rect):
 
 
 def bar_frame(rect, inner):
-    """Один кадр мини-игры: из потока (если идёт) или разовым DXGI/mss-захватом."""
+    """Один кадр мини-игры: из потока (если идёт) или разовым DXGI/GDI-захватом."""
     if CAP is not None and CAP.streaming:
         fr, _ts = CAP.wait_frame(0.25)
         if fr is not None:
@@ -1922,6 +2299,7 @@ def wait_for_minigame(timeout):
     seen = 0
     t0 = time.perf_counter()
     last_upd = 0.0
+    next_fit = 0.0
     rect, inner = bar_rects()
     ensure_bar_stream(rect)
     while time.perf_counter() < end:
@@ -1939,6 +2317,11 @@ def wait_for_minigame(timeout):
         if seen >= 3:
             set_state("st_mini", "st_mini_d", "run")
             return True
+        if CFG.get("bar_autofit", True) and zone is None and now - t0 > 2.0 and now > next_fit:
+            next_fit = now + 2.5                       # возможно смотрим не туда — ищем шкалу
+            if autofit_bar(why="wait"):                # по всему экрану (см. autofit_bar)
+                rect, inner = bar_rects()
+                ensure_bar_stream(rect)
         if CAP is not None and not CAP.streaming:
             time.sleep(LOOP_DELAY)
     if CAP is not None:
@@ -1959,7 +2342,10 @@ def play_minigame():
     mode = str(CFG.get("pid_mode", "pwm"))
     ctrl = PIDController(CFG["pid_kp"], CFG["pid_ki"], CFG["pid_kd"], CFG["pid_bias"],
                          CFG["pid_ilim"], CFG["pid_dband"])
-    em_gains = (CFG["pid_em_kp"], CFG["pid_em_ki"], CFG["pid_em_kd"], CFG["pid_em_bias"])
+    # В аварии bias = «равновесие + надбавка», а не абсолютное число: иначе переход
+    # в аварийный режим сам по себе уводит зону вверх (это и был «зажим ЛКМ на полке»).
+    em_gains = (CFG["pid_em_kp"], CFG["pid_em_ki"], CFG["pid_em_kd"],
+                CFG["pid_bias"] + max(0.0, CFG["pid_em_bias"] - CFG["pid_bias"]))
     norm_gains = (CFG["pid_kp"], CFG["pid_ki"], CFG["pid_kd"], CFG["pid_bias"])
     lead = max(0.0, float(CFG["lead_time"]))
     lead_max = float(CFG["lead_max"]) * scale()[0]
@@ -1981,8 +2367,28 @@ def play_minigame():
     last_zone_t = time.perf_counter()
     prev_fish = prev_fish_t = None
     fish_v = fish_a = prev_raw_v = 0.0
+    prev_zone = None
+    prev_zone_t = 0.0
+    zone_v = 0.0
     err_f = 0.0
     duty = CFG["pid_bias"]
+    hover = (HOVER["v"] if (CFG.get("hover_adapt", True) and HOVER["n"] > 4)
+             else float(CFG["pid_bias"]))      # равновесие с прошлого заброса (физика та же)
+    em_off = max(0.0, float(CFG["pid_em_bias"]) - float(CFG["pid_bias"]))
+    # --- измеритель ТОЧКИ РАВНОВЕСИЯ зоны ---
+    # ЛКМ здесь — усилие: d(v)/dt = G*(1-duty) + A_UP*duty. Равновесный duty тот, где
+    # ускорение нулевое; у каждого клиента он свой (зависит от G/A клиента). Мерим так:
+    # каждые EQ_SPAN секунд имеем пару (средний duty за окно, среднее ускорение), а по
+    # ДВУМ таким парам с разными duty прямая a(duty) пересекает ноль — это и есть
+    # равновесие. Два окна по полсекунды — и bias стоит точно, вместо секундного дрейфа
+    # интеграла (именно дрейф и выглядел как «зона сама уползает вверх и стоит там»).
+    EQ_SPAN = 0.5
+    eq_t0 = time.perf_counter()
+    eq_v0 = None
+    eq_ddt = 0.0                             # интеграл duty по времени за окно
+    eq_ok = True                             # окно без упора в края/аварии/клэмпов
+    eq_last = None                           # предыдущий замер (duty_avg, acc)
+    hover_n = 0
     cycle_start = time.perf_counter()
     slip = False
     prev_now, prev_err_f = None, 0.0
@@ -1993,6 +2399,7 @@ def play_minigame():
     lost = 0
     hist = PID_VIEW["hist"]
     hist.clear()
+    next_fit = 0.0                           # «найти шкалу заново» не чаще раза в 2.5 с
 
     def press(state, now):
         """Явная смена состояния ЛКМ с защитой от дребезга и принудительным отпуском."""
@@ -2022,6 +2429,20 @@ def play_minigame():
             r = analyze(frame, inner)
             zone, fish_y = r["zone"], r["fish"]
             ih = float(r["ih"]) or 1.0
+
+            # ---------- шкала уехала из окна захвата? лечим калибровку на лету ----------
+            # Пока бот смотрит «мимо» шкалы, любой ПИД бесполезен: зона и рыба измеряются
+            # в координатах, которых не существует. Признаки: шкала вообще не найдена,
+            # упёрлась в край кадра (обрезана) или сместилась больше чем на треть высоты.
+            if CFG.get("bar_autofit", True) and now > next_fit and (
+                    not r["detected"] or r["clipped"]
+                    or max(abs(int(v)) for v in r["moved"]) > 0.35 * ih):
+                next_fit = now + 2.5
+                if autofit_bar(why="mini-game"):
+                    rect, inner = bar_rects()
+                    ensure_bar_stream(rect)
+                    lost = 0
+                    continue
 
             # ---------- состояние «РЫБА СРЫВАЕТСЯ» (красная рамка) ----------
             if r["slip"] >= float(CFG["slip_thr"]):
@@ -2066,67 +2487,141 @@ def play_minigame():
                     prev_raw_v = raw_v
                 prev_fish, prev_fish_t = fish_y, now
             fish_lost = prev_fish is None or (now - (prev_fish_t or 0.0)) > float(CFG["fish_timeout"])
+            fish_now = None if fish_lost else (fish_y if fish_y is not None else prev_fish)
 
-            # ---------- ошибка + ПИД ----------
-            if fish_lost:
-                target = zone_c
+            # ---------- ошибка: рыба ВНУТРИ зоны, а не «центр в центр» ----------
+            # Прежний закон целился центром зелёной зоны точно в рыбу. Зона в этой игре —
+            # ~110 px из 529, и «рыба на 40 px выше центра» при Kp=3 уже давала duty~1:
+            # зона взлетала ВЫШЕ рыбы и падать обратно не хотела (её прижимало к верху
+            # шкалы, где удержание вообще ни на что не влияет). Теперь есть «свободная»
+            # полоса: пока рыба внутри зоны с запасом zone_margin — регулятор молчит,
+            # ошибка считается от КРАЯ этой полосы.
+            half_free = max(2.0, (zone[1] - zone[0]) * 0.5 - float(CFG["zone_margin"]))
+            if fish_now is None:
+                target, err_px = zone_c, 0.0
             else:
-                pred = prev_fish + fish_v * lead + 0.5 * fish_a * lead * lead
-                pred += max(-lead_max, min(lead_max, pred - prev_fish))
-                target = pred
-            err_px = zone_c - target                        # >0 => зона ниже рыбы => поднимать
-            err = err_px / ih
+                pred = fish_now + fish_v * lead + 0.5 * fish_a * lead * lead
+                pred += max(-lead_max, min(lead_max, pred - fish_now))
+                target = min(max(pred, 0.0), ih - 1.0)      # предсказание не уходит за край шкалы
+                err_px = zone_c - target                        # >0 => зона НИЖЕ рыбы => поднимать
+            e_abs = abs(err_px) - half_free
+            err = (0.0 if e_abs <= 0.0 else (e_abs if err_px > 0 else -e_abs)) / ih
             dt = 1.0 / max(30.0, (CAP.fps if CAP else 120.0)) if prev_now is None \
-                else max(1e-4, now - prev_now)      # dt по реальным кадрам потока
-            # Период ШИМ никогда не должен быть короче шага цикла: при 20 к/с (просадка
-            # захвата) окно в 22 мс «помещается» в одну итерацию, решение всегда
-            # принимается в начале окна -> want=True при ЛЮБОМ duty>0 -> «бессрочный
-            # зажим ЛКМ». Поэтому окно растягиваем минимум на ~2.5 кадра, но не больше
-            # 150 мс (иначе регулятор станет вязким).
+                else max(1e-4, now - prev_now)                  # dt по реальным кадрам потока
+            # Период ШИМ никогда не должен быть короче шага цикла: при 20 к/с окно в 22 мс
+            # «помещается» в одну итерацию, решение всегда принимается в начале окна ->
+            # want=True при ЛЮБОМ duty>0 -> «бессрочный зажим ЛКМ». Окно растягиваем
+            # минимум на ~2.5 кадра, но не больше 150 мс (иначе регулятор станет вязким).
             dt_ema = dt_ema * 0.7 + dt * 0.3
             cycle = min(0.150, max(cycle_min, 2.5 * dt_ema))
-            err_f = err_f * 0.6 + err * 0.4                 # сглаживание для производной
+
+            # ---------- скорость СОБСТВЕННО зоны ----------
+            if prev_zone is not None and now > prev_zone_t:
+                zv = (zone_c - prev_zone) / max(1e-4, now - prev_zone_t)
+                zone_v = zone_v * (1 - float(CFG["vel_alpha"])) + zv * float(CFG["vel_alpha"])
+            prev_zone, prev_zone_t = zone_c, now
+
+            # ---------- КАСКАД: положение -> желаемая скорость -> ПИД -> ШИМ ----------
+            # ЛКМ в этой мини-игре — это УСКОРЕНИЕ зоны: зажал — зона разгоняется вверх,
+            # отпустил — разгоняется вниз (гравитация). Прямой ПИД по ПОЛОЖЕНИЮ на таком
+            # объекте фундаментально не держит: в контуре нет демпфирования, регулятор
+            # проскакивает рыбу в обе стороны, «висит» на насыщении и уезжает к краю —
+            # ровно то, что было на скриншотах. Развязываем контуры: внешний назначает
+            # ЖЕЛАЕМУЮ СКОРОСТЬ зоны (0 — стоять на рыбе; пропорционально ошибке —
+            # догонять), внутренний ПИД отрабатывает её по ИЗМЕРЕННОЙ скорости зоны.
+            # Интегратор сам находит равновесие «сколько держать, чтобы зона не падала»,
+            # а D впервые реально гасит разгон (раньше D дифференцировал шум положения).
+            v_lim = max(120.0, float(CFG["vel_max"]))
+            if fish_now is None:
+                v_des = 0.0
+            else:
+                # профиль подхода: далеко — до vel_max, рядом — скорость по тормозному
+                # пути sqrt(2*a*s), чтобы зона ВЬЕХАЛА в рыбу, а не проскочила её
+                dist = max(0.0, abs(err_px) - half_free * 0.6)
+                v_cap = min(v_lim, math.sqrt(2.0 * max(120.0, float(CFG["stop_acc"])) * dist))
+                v_des = max(-v_cap, min(v_cap, -float(CFG["vel_gain"]) * err_px))
+            err2 = (zone_v - v_des) / v_lim                 # >0: зона едет вниз быстрее цели => жать
+            if abs(err_px) < half_free and abs(zone_v) < 0.16 * v_lim:
+                err2 *= 0.2                                  # уже на рыбе и почти стоим — не дёргаться
+            err_f = err_f * 0.6 + err2 * 0.4                 # сглаживание для производной
             d_err = (err_f - prev_err_f) / dt if prev_now else 0.0
             prev_err_f, prev_now = err_f, now
+            ctrl.bias = hover + (em_off if slip else 0.0)
             out = ctrl.update(err_f, d_err, dt)
+            force = None
 
-            # ---------- упёрлась в край шкалы: не пихать зону дальше ----------
-            # Зона прижата к ВЕРХУ, а рыба под ней => удержание физически бессмысленно
-            # (выше некуда), и именно оно и держало зону «улетевшей» наверху: с bias=0.5
-            # выход оставался ~0.3..0.5, зона не падала на рыбу, а красная рамка
-            # «РЫБА СРЫВАЕТСЯ!» только добавляла удержания. Тут — принудительный 0 (или 1
-            # для дна), чтобы гравигация сама вернула зону на рыбу.
-            at_top, at_bottom = zone[0] <= 1.0, zone[1] >= ih - 2.0
+            # ---------- упёрлась в край шкалы: держим/бросаем по смыслу, а не по ошибке ----------
+            # На «полке» (зона прижата к ВЕРХУ шкалы) удержание физически бессмысленно,
+            # если рыба под зоной: единственный способ вернуться к ней — отпустить. Из-за
+            # bias=0.5 выход не падал в 0, зона и стояла наверху всю мини-игру.
+            at_top = zone[0] <= max(1.0, 0.02 * ih)
+            at_bottom = zone[1] >= ih - max(2.0, 0.02 * ih)
             clamp = None
-            if at_top and err < 0:
-                out, clamp = 0.0, "top"
-            elif at_bottom and err > 0:
-                out, clamp = 1.0, "bottom"
+            if at_top and (fish_now is None or fish_now >= zone[1] - half_free):
+                out, force, clamp = 0.0, 0.0, "top"
+            elif at_bottom and (fish_now is None or fish_now <= zone[0] + half_free):
+                out, force, clamp = 1.0, 1.0, "bottom"
+
+            # ---------- срыв: догоняем рыбу, а НЕ «держим вечно» ----------
+            # Красная рамка «РЫБА СРЫВАЕТСЯ!» раньше означала «duty=1», даже когда рыба
+            # была НИЖЕ зоны: ЛКМ зажат, зона наверху, рыба уходит за нижний край.
+            if slip and fish_now is not None and clamp is None:
+                if fish_now < zone[0]:
+                    # рыба выше: жмём, НО если зона уже летит вверх с большой скоростью —
+                    # не разгоняем её дальше (догонит по инерции, иначе проскочим снова)
+                    out = max(out, 0.9)
+                    force = 0.0 if zone_v < -0.45 * v_lim else 1.0
+                elif fish_now > zone[1]:
+                    out = min(out, 0.1)
+                    force = 1.0 if zone_v > 0.45 * v_lim else 0.0
+            if force is not None:
+                out = force
+            peak_duty = max(peak_duty, out)
+
+            # ---------- равновесие: (средний duty, среднее ускорение) за окно ----------
+            eq_ddt += duty * dt
+            eq_ok = eq_ok and clamp is None and not slip and zone[0] > 3.0 and zone[1] < ih - 3.0
+            if now - eq_t0 >= EQ_SPAN:
+                span = max(1e-3, now - eq_t0)
+                duty_avg = min(1.0, max(0.0, eq_ddt / span))
+                acc = (zone_v - (eq_v0 if eq_v0 is not None else zone_v)) / span
+                if eq_ok and eq_v0 is not None and eq_last is not None \
+                        and abs(acc - eq_last[1]) > 80.0:
+                    d1, a1 = eq_last
+                    d2, a2 = duty_avg, acc
+                    est = d1 - a1 * (d2 - d1) / (a2 - a1)      # duty, при котором a = 0
+                    if -0.2 < est < 1.2:
+                        span_lim = max(0.05, float(CFG["hover_span"]))
+                        lo = float(CFG["pid_bias"]) - span_lim
+                        hi = min(0.95, float(CFG["pid_bias"]) + span_lim)
+                        hk = min(0.9, max(0.05, float(CFG["hover_k"])) * 3.0)
+                        hover = min(hi, max(lo, hover * (1 - hk) + est * hk))
+                        hover_n += 1
+                        HOVER["v"], HOVER["n"] = hover, HOVER["n"] + 1
+                if eq_ok and eq_v0 is not None:
+                    eq_last = (duty_avg, acc)
+                eq_t0, eq_v0, eq_ddt, eq_ok = now, zone_v, 0.0, True
+            elif eq_v0 is None:
+                eq_v0 = zone_v
 
             # ---------- ШИМ: кто сколько держит внутри короткого окна ----------
             if mode == "pwm":
-                if now - cycle_start >= cycle:
-                    cycle_start = now
-                    duty = out
-                    if slip and err > 0 and clamp is None:  # рыба уходит — держим на максимум
-                        duty = 1.0
-                    peak_duty = max(peak_duty, duty)
-                want = (now - cycle_start) < duty * cycle
+                if abs(out - duty) >= 0.5 or now - cycle_start >= cycle:
+                    duty, cycle_start = out, now        # крупная смена команды действует сразу
+                want = duty > 0.0 and (now - cycle_start) < duty * cycle
             else:
                 # альтернатива: гистерезис по выходу ПИД (вкл выше 0.55, выкл ниже 0.45)
-                dz = float(CFG["deadzone"]) / ih            # та же «мёртвая зона» в долях шкалы
+                dz = float(CFG["deadzone"]) / ih        # та же «мёртвая зона» в долях шкалы
                 on_thr, off_thr = (0.38, 0.30) if slip else (0.5 + dz, 0.5 - dz)
                 want = out > (off_thr if pressed else on_thr)
                 duty = out
-            if fish_lost:
+            if fish_now is None:
                 want = False
-            if slip and not fish_lost and err > 0 and clamp is None:
-                want = True
+                duty = 0.0
             if clamp == "top":
                 want = False
             elif clamp == "bottom":
                 want = True
-
             # ---------- защита от залипания ----------
             if want and not pressed and now < forced_until:
                 want = False
@@ -2137,8 +2632,10 @@ def play_minigame():
 
             # ---------- телеметрия для страницы «Зрение» ----------
             PID_VIEW.update(err=err, duty=duty, mode="emerg" if slip else "norm", lost=lost,
+                            hover=hover,
                             slip=slip_cnt, p=ctrl.p, i=ctrl.i, d=ctrl.d, zone=zone_c, fish=fish_y,
-                            fps=CAP.fps if CAP else 0.0, frame_ms=CAP.avg_ms if CAP else 0.0)
+                            fps=CAP.fps if CAP else 0.0, frame_ms=CAP.avg_ms if CAP else 0.0,
+                            zone_v=zone_v, half=half_free, clamp=clamp or "")
             hist.append((err, duty))
             if len(hist) > 160:
                 del hist[0]
@@ -2152,6 +2649,8 @@ def play_minigame():
         PID_VIEW.update(mode="norm", duty=0.0, err=0.0, lost=0, slip=0)
     dur = time.perf_counter() - t_start
     log(t("log_mini_done", dur=dur, slip=slip_events, duty=peak_duty))
+    if CFG.get("hover_adapt", True) and HOVER["n"] > 25:
+        log(t("log_hover", v=HOVER["v"], n=HOVER["n"]))
     return dur
 
 
@@ -3149,7 +3648,13 @@ class App:
                 ("m_snd_end", "t", "sound_end"), ("m_snd_catch", "t", "sound_catch"),
                 ("m_maxhold", "s", ("max_hold", 0.5, 8, 0.25, "{:.2f}")),
                 ("m_lostms", "s", ("lost_ms", 40, 900, 20, "{:g}")),
-                ("m_fishthr", "s", ("fish_thr", 6, 90, 2, "{:g}"))]
+                ("m_fishthr", "s", ("fish_thr", 6, 90, 2, "{:g}")),
+                ("m_zonemargin", "s", ("zone_margin", 0, 60, 2, "{:g}")),
+                ("m_velgain", "s", ("vel_gain", 1.0, 12.0, 0.5, "{:g}")),
+                ("m_velmax", "s", ("vel_max", 150.0, 900.0, 20.0, "{:g}")),
+                ("m_stopacc", "s", ("stop_acc", 200.0, 2500.0, 50.0, "{:g}")),
+                ("m_barref", "t", "bar_refine"), ("m_barfit", "t", "bar_autofit"),
+                ("m_hover", "t", "hover_adapt")]
         right = [("m_pid_mode", "c", ("pid_mode", ("pwm", "hyst"), 110, 26)),
                  ("m_kp", "s", ("pid_kp", 0.0, 12.0, 0.1, "{:.2f}")),
                  ("m_ki", "s", ("pid_ki", 0.0, 6.0, 0.05, "{:.2f}")),
@@ -3470,7 +3975,14 @@ class App:
             m_ = monitor()
             self.cv.itemconfig(d["cap2"], text=f"mon {m_['width']}x{m_['height']} | scale {CAP.sx:.3f}x{CAP.sy:.3f}" if CAP else "")
             self.cv.itemconfig(d["cap3"], text=t("v_fallback") if (CAP and CAP.is_fallback) else t("v_primary"))
-            self.cv.itemconfig(d["cap4"], text=f"bar {CFG['bar']} pad {CFG['bar_pad']} | {t('v_mode')}: {CFG['pid_mode']}")
+            det = ""
+            if isinstance(r, dict):
+                det = "%s %s" % (t("v_scale_lab"), list(r["scale"])) if r.get("detected") else "%s: ?" % t("v_scale_lab")
+                if r.get("clipped"):
+                    det += " | " + t("v_bar_edge")
+            self.cv.itemconfig(d["cap4"], text=(
+                f"bar {CFG['bar']} pad {CFG['bar_pad']} | {t('v_mode')}: {CFG['pid_mode']}"
+                + (("\n" + det) if det else "")))
             self.cv.itemconfig(d["cap5"], text=t("v_pid_hint") if not run else "")
         elif p == 4 and "game" in d:
             self.cv.itemconfig(d["game"], text=t("s_game", title=GAME_TITLE) if GAME_TITLE else t("s_game_none"))
@@ -3569,8 +4081,8 @@ def shutdown():
 def main():
     missing = [n for n, m in (("opencv-python", cv2), ("numpy", np), ("pydirectinput", pydirectinput),
                              ("keyboard", keyboard), ("tkinter", tk)) if m is None]
-    if dxcam is None and bettercam is None and mss is None:
-        missing.append("dxcam (или хотя бы mss)")
+    if dxcam is None and bettercam is None:
+        missing.append("dxcam (или bettercam)")
     if missing:
         print("Missing packages / не установлено:", ", ".join(missing))
         print("pip install -r requirements.txt")

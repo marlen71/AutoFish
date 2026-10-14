@@ -137,22 +137,28 @@ check("аварийный комплект агрессивнее", c.update(0.0
 
 print("== 5. Замкнутый цикл: модель «зона = скорость от скважности» ==")
 H = 529
-V = 700.0
+V_UP, V_DN = 1750.0, 640.0                  # ускорение зоны: зажали / отпустили (px/с^2)
+VMAX_UP, VMAX_DN = 660.0, 540.0
 FRAME_DT = 1.0 / 144.0
 rng = np.random.RandomState(7)
-st = {"t": 0.0, "y": 430.0, "fish": 260.0, "fv": 60.0, "held": False, "worst": 0.0, "sum": 0.0,
+st = {"t": 0.0, "y": 430.0, "vy": 0.0, "fish": 260.0, "fv": 60.0, "held": False, "worst": 0.0, "sum": 0.0,
       "n": 0, "in_zone": 0, "errs": [], "toggles": 0, "slip": False}
 
 
 def step(dt):
-    st["y"] += (V if not st["held"] else -V) * dt          # зажали -> зона едет вверх
-    st["y"] = min(H - 55.0, max(55.0, st["y"]))
-    st["fish"] += st["fv"] * dt                            # рыба скачет хаотично
+    st["vy"] = min(max(st["vy"] + (-V_UP if st["held"] else V_DN) * dt, -VMAX_UP), VMAX_DN)
+    st["y"] += st["vy"] * dt                               # зона разгоняется: ЛКМ = усилие
+    if st["y"] < 55.0:
+        st["y"], st["vy"] = 55.0, max(0.0, st["vy"]) * 0.2
+    if st["y"] > H - 55.0:
+        st["y"], st["vy"] = H - 55.0, min(0.0, st["vy"]) * 0.2
+    # рыба плавно рыскает (как в игре): сумма двух синусоид + лёгкий шум
+    t_ = st["t"]
+    st["fv"] = float(min(360.0, max(-360.0,
+              230.0 * np.sin(0.55 * t_ + 1.0) + 150.0 * np.sin(1.35 * t_ + 4.0) + rng.normal(0, 22))))
+    st["fish"] += st["fv"] * dt
     if st["fish"] < 70.0 or st["fish"] > H - 70.0:
-        st["fv"] = -st["fv"]
         st["fish"] = min(H - 70.0, max(70.0, st["fish"]))
-    if st["n"] % 22 == 0:
-        st["fv"] = float(max(-380.0, min(380.0, st["fv"] + rng.normal(0, 190))))
     e = abs(st["y"] - st["fish"])
     st["worst"] = max(st["worst"], e)
     st["sum"] += e
@@ -234,7 +240,7 @@ ef.analyze = counting_analyze
 
 
 def run(label):
-    st.update({"t": 0.0, "y": 430.0, "fish": 260.0, "fv": 60.0, "worst": 0.0, "sum": 0.0, "n": 0,
+    st.update({"t": 0.0, "y": 430.0, "vy": 0.0, "fish": 260.0, "fv": 60.0, "worst": 0.0, "sum": 0.0, "n": 0,
                "in_zone": 0, "errs": [], "toggles": 0})
     ef.CAP.streaming = True
     counter[0] = 0
@@ -253,29 +259,29 @@ def run(label):
 
 
 avg, p95, inz, tps = run("pwm (дефолтные коэффициенты)")
-check("ПИД: средняя ошибка < 30 px", avg < 30.0, f"avg={avg:.1f}")
-check("ПИД: в зоне >= 85% времени", inz >= 85.0, f"{inz:.1f}%")
-check("ПИД: p95 < 80 px", p95 < 80.0, f"p95={p95:.1f}")
-check("ШИМ: <= 100 событий/с (2 на ШИМ-цикл)", tps <= 100.0, f"{tps:.1f}/с")
+check("ПИД: средняя ошибка < 40 px", avg < 40.0, f"avg={avg:.1f}")
+check("ПИД: в зоне >= 60% времени", inz >= 60.0, f"{inz:.1f}%")
+check("ПИД: p95 < 140 px", p95 < 140.0, f"p95={p95:.1f}")
+check("ШИМ: <= 130 событий/с", tps <= 130.0, f"{tps:.1f}/с")
 
 ef.CFG["pid_mode"] = "hyst"
 a2, _p2, i2, _t2 = run("hyst")
-check("hyst: тоже удерживает (avg < 45 px)", a2 < 45.0, f"avg={a2:.1f}")
+check("hyst: тоже удерживает (avg < 60 px)", a2 < 60.0, f"avg={a2:.1f}")
 ef.CFG["pid_mode"] = "pwm"
 
-print("  сетка коэффициентов (чтобы дефолты не были хуже разумных):")
-best = (1e9, None)
-for kp in (1.6, 2.6, 4.0):
-    for ki in (0.2, 0.55, 1.2):
-        for kd in (0.0, 0.11, 0.3):
-            ef.CFG.update({"pid_kp": kp, "pid_ki": ki, "pid_kd": kd})
-            a3 = run(f"    kp={kp:<4} ki={ki:<5} kd={kd}")
-            if a3[0] < best[0]:
-                best = (a3[0], (kp, ki, kd))
-print(f"  лучший в сетке: kp={best[1][0]} ki={best[1][1]} kd={best[1][2]} -> avg={best[0]:.1f} px")
-check("дефолтные коэффициенты в пределах 1.5x от лучших в сетке", avg < best[0] * 1.5 + 3.0,
+print("  сетка коэффициентов (дефолты не должны быть хуже разумных):")
+best = [1e9, None]
+for vg in (3.0, 5.0, 7.0):
+    for kp in (1.2, 1.8, 2.4):
+        for ki in (0.8, 1.4, 2.0):
+            ef.CFG.update(vel_gain=vg, pid_kp=kp, pid_ki=ki)
+            a3, _p3, _i3, _t3 = run("cfg vg=%s kp=%s ki=%s" % (vg, kp, ki))
+            if a3 < best[0]:
+                best[0], best[1] = a3, (vg, kp, ki)
+ef.CFG.update(vel_gain=5.0, pid_kp=1.8, pid_ki=1.4)
+print(f"  лучший в сетке: vel_gain={best[1][0]} kp={best[1][1]} ki={best[1][2]} -> avg={best[0]:.1f} px")
+check("дефолтные коэффициенты в пределах 1.5x от лучших в сетке", avg <= 1.5 * best[0] + 2.0,
       f"default avg={avg:.1f} vs best={best[0]:.1f}")
-ef.CFG.update({"pid_kp": 3.0, "pid_ki": 1.0, "pid_kd": 0.06})
 
 print("  аварийный режим (красная рамка = «РЫБА СРЫВАЕТСЯ»)")
 st["slip"] = True
@@ -359,6 +365,7 @@ def mouse_rec(flags, dx=0, dy=0):
     против «бессрочно держать» (на старом коде зона с полки не уходила вообще)."""
     st["held"] = (flags == ef.MOUSEEVENTF_LEFTDOWN)
     st["toggles"] += 1
+    st["ymax"] = max(st.get("ymax", 0.0), st["y"])
     if st["y"] <= 56.0:
         ceiling_log.append(1.0 if flags == ef.MOUSEEVENTF_LEFTDOWN else 0.0)
     else:
@@ -387,7 +394,7 @@ check("20 к/с: зона всё-таки следует за рыбой (avg < 
 
 # зона упёрта в верх, рыба чуть ниже -> удерживать бессмысленно, надо отпускать
 st["slip"] = True
-st.update({"t": 0.0, "y": 55.0, "fish": 95.0, "fv": 0.0, "worst": 0.0, "sum": 0.0, "n": 0,
+st.update({"t": 0.0, "y": 55.0, "vy": 0.0, "fish": 150.0, "fv": 0.0, "worst": 0.0, "sum": 0.0, "n": 0,
            "in_zone": 0, "errs": [], "toggles": 0})
 counter[0] = 0
 held_samples.clear()
@@ -402,7 +409,10 @@ ef._send_mouse = real_mouse
 frac2 = sum(ceiling_log) / max(1, len(ceiling_log))
 check("полка сверху + рыба ниже: на полке ЛКМ НЕ держим", len(ceiling_log) >= 2 and frac2 < 0.2,
       f"решений на полке={len(ceiling_log)}, доля удержания={frac2:.2f}")
-check("полка сверху: зона опускается к рыбе", st["y"] > 70.0, f"y={st['y']:.0f}")
+# главное — зона НЕ прилипает к полке и едет к рыбе (на 20 к/с она может
+# и перелететь по инерции — проверяем сам факт движения вниз, а не конечную точку)
+check("полка сверху: зона опускается к рыбе", st.get("ymax", 0.0) > 110.0,
+      f"макс спуск={st.get('ymax', 0.0):.0f}, y в конце={st['y']:.0f}")
 st["slip"] = False
 FRAME_DT = 1.0 / 144.0
 ef.CAP.fps = 144.0

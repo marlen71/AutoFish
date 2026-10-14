@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Проверка бэкендов захвата на подставных dxcam / bettercam / mss.
+"""
+Проверка бэкендов захвата на подставных dxcam / bettercam / GDI.
 
-Зачем: на Windows-машине пользователя бот молча уехал в резервный mss (~20 к/с), и
-это же утащило за собой мини-игру (ШИМ при 20 к/с превращался в «держать ЛКМ всегда»).
-Причины были три, и все три проверяются здесь:
-  1) dxcam 0.3.x поменял API (нет output_idxs()/output_dims()/set_region(), у
-     start() появился region=, а get_latest_frame() не принимает timeout) — код
-     обязан работать с ОБАМИ поколениями;
-  2) ошибка импорта/создания камеры обязана быть ВИДНА (иначе «dxcam is not
-     installed» вместо настоящих comtypes/DXGI_ERROR_*);
-  3) mss больше не подключается сам — только явно (capture_backend="mss").
+Зачем: на машине пользователя бот молча уезжал в медленный путь (~12 мс/кадр), и
+это ломало мини-игру (ШИМ превращался в «держать ЛКМ всегда»). Здесь проверяется:
+  1) dxcam 0.3.x и 0.0.x (два поколения API) и bettercam работают;
+  2) ошибка импорта/создания камеры ВИДНА в тексте Fail (настоящие
+     comtypes/DXGI_ERROR_* вместо «dxcam is not installed»);
+  3) mss в проекте ВЫРЕЗАН: ни авто-подключений, ни явного режима, ни импорта;
+     резерв теперь — собственный GDI-бэкенд (ctypes), тоже с явной причиной
+     отказа и подписью в журнале/интерфейсе.
 
 Запуск: python tests/test_capture_backends.py
 """
@@ -210,17 +210,17 @@ check("поток bettercam даёт кадры (callback в 1.0.0 нет)", len
 b3.close()
 
 # ------------------------------------------------------------------ 4. причины отказа
-print("== 4. сломанный DXGI: причину видно, mss сам не подключается ==")
-mss_calls = []
+print("== 4. сломанный DXGI: причину видно, GDI вызывается, mss не существует ==")
+gdi_calls = []
 
 
-class NoMss(ef._MssBackend):
-    def __init__(self):
-        mss_calls.append(1)
-        raise AssertionError("mss нельзя подключать автоматически")
+class NoGdi(ef._GdiBackend):
+    def __init__(self, *a):
+        gdi_calls.append(1)
+        raise RuntimeError("gdi: нет экрана (подстава в тесте)")
 
 
-real_mss_cls, ef._MssBackend = ef._MssBackend, NoMss
+real_gdi_cls, ef._GdiBackend = ef._GdiBackend, NoGdi
 
 # 4a. dxcam не импортирован — в тексте должна быть НАСТОЯЩАЯ причина
 ef._DxcamBackend.module = None
@@ -239,20 +239,22 @@ try:
 except Exception as e:
     check("чёрный кадр отбракован и объяснён", "чёрн" in str(e).lower(), str(e)[:120])
 
-# 4c. create() кидает DXGI_ERROR -> текст ошибки доходит до пользователя
+# 4c. create() кидает DXGI_ERROR -> текст ошибки доходит до пользователя;
+# GDI-кандидат при этом ОБЯЗАН быть попробован (он третий в очереди)
 boom = make_module("modern", None, [], fail=RuntimeError("DXGI_ERROR_ACCESS_LOST"))
 ef._DxcamBackend.module = boom
 ef._BettercamBackend.module = make_module("bettercam", None, [], fail=RuntimeError("no output"))
 try:
     cap = ef.ScreenCapture("auto", 0)
-    check("без DXGI захват НЕ создаётся", False, str(getattr(cap, "backend", "?")))
+    check("без DXGI и GDI захват НЕ создаётся", False, str(getattr(cap, "backend", "?")))
 except ef.Fail as e:
     msg = str(e)
-    check("Fail содержит обе причины", "DXGI_ERROR_ACCESS_LOST" in msg and "no output" in msg, msg[:150])
+    check("Fail содержит обе DXGI-причины", "DXGI_ERROR_ACCESS_LOST" in msg and "no output" in msg, msg[:150])
+    check("Fail содержит причину GDI-кандидата", "нет экрана" in msg, msg[:200])
     check("Fail содержит подсказку по починке", "pip install" in msg, msg[-120:])
-    check("mss автоматически НЕ подключался", not mss_calls)
+check("GDI-кандидат был опрошен автоматически (он часть очереди auto)", len(gdi_calls) == 1)
 
-# 4d. dxcam сломан, bettercam жив -> auto выбирает bettercam, а не mss
+# 4d. dxcam сломан, bettercam жив -> auto выбирает bettercam, а не резерв
 ef._DxcamBackend.module = boom
 good = CamBettercam(1920, 1080)
 ef._BettercamBackend.module = make_module("bettercam", good, [])
@@ -263,76 +265,99 @@ check("в fallback_reason осталась причина отказа dxcam", "
       cap.fallback_reason[:100])
 cap.close()
 
-# ------------------------------------------------------------------ 5. явный mss
-print("== 5. mss — только явно, и без DeprecationWarning в консоли ==")
+# ------------------------------------------------------------------ 5. явный gdi + деградация в полёте
+print("== 5. capture_backend=gdi работает; при поломке DXGI в полёте — деградация на GDI ==")
 
 
-class FakeMSS:
-    ctor = None
-    monitors = [{}, {"left": 0, "top": 0, "width": 1920, "height": 1080}]
+class FakeGdi:
+    """Подстава вместо ctypes-реализации: интерфейс тот же."""
 
-    def __init__(self):
-        FakeMSS.ctor = "MSS"
+    def __init__(self, monitor_idx=0):
+        self.mon = {"left": 0, "top": 0, "width": 1920, "height": 1080}
+        self.note = "кадр 320x240 (GDI)"
+        self.started = []
+        self.streaming = False
+
+    def grab(self, left, top, width, height):
+        return good_frame(height, width)
+
+    def can_stream(self):
+        return True
+
+    def start(self, left, top, width, height, fps, on_frame):
+        self.started.append((left, top, width, height, fps))
+        self.streaming = True
+
+    def stop(self):
+        self.streaming = False
 
     def close(self):
-        pass
+        self.streaming = False
 
 
-class OldMss(FakeMSS):
-    def __init__(self):
-        warnings.warn("mss.mss is deprecated and will be removed in a future release; "
-                      "use mss.MSS instead", DeprecationWarning, stacklevel=2)
-        FakeMSS.ctor = "mss()"
+class BoomGdi(FakeGdi):
+    def __init__(self, *a):
+        raise RuntimeError("gdi сломан в тесте")
 
 
-def make_mss_mod(new_api=True):
-    m = types.ModuleType("fake_mss")
-    m.monitors = FakeMSS.monitors
-    if new_api:
-        m.MSS = FakeMSS
-    else:
-        m.MSS = None
-
-        def legacy():
-            return OldMss()
-        m.mss = legacy
-    return m
-
-
-ef.mss = make_mss_mod(new_api=True)
-ef._MssBackend = real_mss_cls
-cap = ef.ScreenCapture("mss", 0)
-check("capture_backend=\"mss\" по-прежнему работает (RDP/VM)", cap.backend == "mss" and cap.is_fallback,
-      cap.backend)
-check("используется новый API mss.MSS()", FakeMSS.ctor == "MSS", str(FakeMSS.ctor))
+ef._GdiBackend = FakeGdi
+cap = ef.ScreenCapture("gdi", 0)
+check("capture_backend=\"gdi\" работает", cap.backend == "gdi" and cap.is_fallback, cap.backend)
+fr = []
+cap.start_stream([900, 400, 120, 200], 30)
+cap.wait_frame(0.3)
+check("GDI-поток запускается по региону шкалы", cap.streaming and len(cap._bg.started) == 1,
+      str(cap._bg.started[:1]))
 cap.close()
 
-FakeMSS.ctor = None
-ef.mss = make_mss_mod(new_api=False)
-with warnings.catch_warnings(record=True) as w:
-    warnings.simplefilter("always")
-    bg = ef._MssBackend()
-    dep = [x for x in w if issubclass(x.category, DeprecationWarning)]
-    check("на старом mss DeprecationWarning в консоль не лезет", not dep,
-          "; ".join(str(x.message)[:60] for x in dep))
-    bg.close()
-check("mss-бэкенд умеет хватать монитор", bg.mon["width"] == 1920, str(bg.mon))
+# деградация в полёте: DXGI-бэкенд умирает на grab() -> ScreenCapture переходит на GDI
+class DyingCam(CamModern):
+    def grab(self, region=None, **k):
+        raise RuntimeError("device removed")
 
-# ------------------------------------------------------------------ 6. порядок кандидатов
-print("== 6. политика выбора: auto = только DXGI ==")
+
+ef._GdiBackend = FakeGdi
+ef._DxcamBackend.module = make_module("modern", None, [], fail=RuntimeError("x"))
+ef._BettercamBackend.module = make_module("bettercam", DyingCam(1920, 1080), [])
+cap = ef.ScreenCapture("auto", 0)
+check("стартуем на bettercam", cap.backend == "bettercam" and not cap.is_fallback, cap.backend)
+cap.start_stream([900, 400, 120, 200], 60)
+cap.grab_region(900, 400, 60, 60)            # DyingCam.grab кидает -> должна сработать деградация
+check("поломка DXGI в полёте -> GDI, и это ПОДПИСАНО", cap.backend == "gdi" and cap.is_fallback,
+      "%s / %s" % (cap.backend, cap.fallback_reason[:60]))
+check("поток поднят заново на GDI", cap.streaming and cap._bg.started, str(cap._bg.started[-1:]))
+cap.close()
+
+# на не-Windows настоящий ctypes-GDI обязан отказываться с внятной формулировкой
+ef._GdiBackend = real_gdi_cls
+if os.name != "nt":
+    try:
+        ef._GdiBackend(0)
+        check("GDI на не-Windows не создаётся", False)
+    except Exception as e:
+        check("GDI на не-Windows отказывается внятно", "Windows" in str(e), str(e)[:80])
+
+# ------------------------------------------------------------------ 6. политика выбора
+print("== 6. политика выбора: auto = dxcam -> bettercam -> gdi, mss вырезан полностью ==")
 src = open(os.path.join(ROOT, "eternal_fishmod.py"), encoding="utf-8").read()
-i0 = src.index("order = {")
-i1 = src.index("\n", src.index("}", i0))
+i0 = src.index("CANDIDATES = {")
+i1 = src.index("}", i0)
 block = src[i0:i1]
-check("auto = (dxcam, bettercam) — без mss", '"auto": ("dxcam", "bettercam")' in block, block.strip()[:120])
-check("mss доступен только явным значением", '"mss": ("mss",)' in block)
-check("никакого «тихого» mss в конце очереди нет", '"dxcam", "mss"' not in src and '"bettercam", "mss"' not in src)
-bad_calls = [l.strip() for l in src.splitlines()
-             if re.search(r"(?<!return )mss\.mss\(\)", l) and not l.strip().startswith(("#", '"'))]
-check("deprecation-шума нет: прямой mss.mss() остался лишь в хелпере _mss_new()",
-      not bad_calls, str(bad_calls[:2]))
+check("auto = (dxcam, bettercam, gdi)", '"auto": ("dxcam", "bettercam", "gdi")' in block, block.strip()[:120])
+check("явный \"gdi\" = только GDI", '"gdi": ("gdi",)' in block)
+check("из кода захвата mss исчез целиком (осталась только миграция старого конфига)",
+      all(t not in src for t in ("import mss", "_MssBackend", "_mss_new", "mss.mss()", "_degrade_to_mss"))
+      and src.count("mss") <= 12, "упоминаний: %d" % src.count("mss"))
+check("старое значение capture_backend=\"mss\" мигрирует на auto", '"mss", "no", "dxgpu-dxs"' in src)
+check("import mss удалён", "import mss" not in src)
+req = open(os.path.join(ROOT, "requirements.txt"), encoding="utf-8").read()
+check("в requirements.txt нет упоминаний mss", "mss" not in req.lower())
+check("в requirements.txt нет dxcam-дублей у bettercam",
+      req.count("dxcam>=") == 1 and req.count("bettercam>=") == 1)
+launch = open(os.path.join(ROOT, "launch.py"), encoding="utf-8").read()
+check("в launch.py mss больше не обязателен", '("mss", "mss", True)' not in launch)
 
-ef._MssBackend = real_mss_cls
+ef._GdiBackend = real_gdi_cls
 print()
 if fails:
     print("FAILED:", len(fails))

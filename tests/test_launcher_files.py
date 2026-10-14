@@ -212,9 +212,11 @@ check("launch.py под Windows ищет администратора и дел�
       "ShellExecuteW" in lp and "runas" in lp)
 check("launch.py печатает версию приложения", "__version__" in lp or "APP_VERSION" in lp)
 reqs = text("requirements.txt")
-for pkg in ("dxcam", "mss", "opencv", "numpy", "pydirectinput", "keyboard"):
+for pkg in ("dxcam", "opencv", "numpy", "pydirectinput", "keyboard"):
     check("requirements.txt: %s" % pkg, pkg in reqs)
 check("requirements.txt: bettercam упомянут как альтернатива dxcam", "bettercam" in reqs)
+check("requirements.txt: сторонний резервный захватчик вырезан", "mss" not in reqs.lower())
+check("launch.py: mss больше не обязателен", '("mss", "mss", True)' not in lp)
 
 # ------------------------------------------------------------------ 6. README документирует правило
 print("== 6. README объясняет, почему .bat только ASCII ==")
