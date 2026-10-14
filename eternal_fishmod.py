@@ -204,14 +204,15 @@ REMOVED_CFG_KEYS = ("pid_mode", "pid_kp", "pid_ki", "pid_kd", "pid_ilim", "pid_d
                     "cast_macro", "macro_click_window", "bind_macro")
 CFG = dict(DEFAULT_CFG)
 
-THR = {"rod": 0.90, "bait": 0.90, "inv_header": 0.80,
+THR = {"rod": 0.90, "rod2": 0.90, "bait": 0.90, "inv_header": 0.80,
        "hud_fish": 0.85, "hud_bait": 0.85, "hud_shield": 0.85}
 REGIONS = {
-    "rod": [80, 215, 500, 785], "bait": [80, 215, 500, 785], "inv_header": [60, 20, 300, 110],
+    "rod": [80, 215, 500, 785], "rod2": [80, 215, 500, 785],
+    "bait": [80, 215, 500, 785], "inv_header": [60, 20, 300, 110],
     "hud_fish": [0, 872, 420, 66], "hud_bait": [0, 872, 420, 66], "hud_shield": [0, 872, 420, 66],
 }
-TEMPLATE_NAMES = ["rod", "bait", "inv_header", "hud_fish", "hud_bait", "hud_shield"]
-TEMPLATE_LABEL_KEYS = {"rod": "tpl_rod", "bait": "tpl_bait", "inv_header": "tpl_inv",
+TEMPLATE_NAMES = ["rod", "rod2", "bait", "inv_header", "hud_fish", "hud_bait", "hud_shield"]
+TEMPLATE_LABEL_KEYS = {"rod": "tpl_rod", "rod2": "tpl_rod2", "bait": "tpl_bait", "inv_header": "tpl_inv",
                        "hud_fish": "tpl_hud_fish", "hud_bait": "tpl_hud_bait", "hud_shield": "tpl_hud_shield"}
 
 # мини-игра (HSV — только как дополнительный/резервный детектор рыбы, CFG["fish_detect"]="hsv"/"both")
@@ -314,7 +315,7 @@ STRINGS = {
     "v_none": "—", "v_no_file": "нет файла", "v_fps": "FPS", "v_latency": "задержка",
     "v_fallback": "⚠ Резервный захват GDI — чуть медленнее DXGI (DXGI не поднялся)",
     "v_primary": "основной захват DXGI", "v_stream_off": "поток выключен", "v_stream_on": "поток {fps} fps",
-    "tpl_rod": "Удочка (инвентарь)", "tpl_bait": "Наживка (инвентарь)", "tpl_inv": "Окно инвентаря",
+    "tpl_rod": "Удочка (инвентарь)", "tpl_rod2": "Удочка №2 (второй эталон)", "tpl_bait": "Наживка (инвентарь)", "tpl_inv": "Окно инвентаря",
     "tpl_hud_fish": "Значок удочки (HUD)", "tpl_hud_bait": "Значок наживки (HUD)", "tpl_hud_shield": "HUD виден",
     "m_card_fish": "РЫБАЛКА И ЗВУКИ", "m_card_pid": "РЕГУЛЯТОР И РАСПОЗНАВАНИЕ",
     "m_equip": "Брать удочку при старте", "m_autocast": "Авто-закидывание удочки",
@@ -342,6 +343,7 @@ STRINGS = {
     "log_equip_win": "🖱 Клики — прямо в окно интерфейса игры, курсор Windows не двигается",
     "log_equip_cur": "🖱 Окно интерфейса не найдено — кликаю курсором",
     "log_use_nofind": "❌ Меню предмета не открылось (красная строка не найдена)",
+    "log_equip_miss": "Кадр момента промаха сохранён: miss_rod.png — пришли его, если промах повторится",
     "reason_no_macro": "удочка не найдена в инвентаре",
     "log_rod_skip": "🎣 equip_on_start выключен — начинаю с заброса (удочка уже в руках)",
     "st_stopped": "ОСТАНОВЛЕНО", "st_idle_d": "Нажми СТАРТ или F8",
@@ -425,7 +427,7 @@ STRINGS = {
     "v_none": "—", "v_no_file": "no file", "v_fps": "FPS", "v_latency": "latency",
     "v_fallback": "⚠ GDI fallback capture — a bit slower than DXGI (DXGI did not start)",
     "v_primary": "primary DXGI capture", "v_stream_off": "stream off", "v_stream_on": "stream {fps} fps",
-    "tpl_rod": "Rod (inventory)", "tpl_bait": "Bait (inventory)", "tpl_inv": "Inventory window",
+    "tpl_rod": "Rod (inventory)", "tpl_rod2": "Rod #2 (second reference)", "tpl_bait": "Bait (inventory)", "tpl_inv": "Inventory window",
     "tpl_hud_fish": "Rod icon (HUD)", "tpl_hud_bait": "Bait icon (HUD)", "tpl_hud_shield": "HUD visible",
     "m_card_fish": "FISHING AND SOUNDS", "m_card_pid": "CONTROLLER AND DETECTION",
     "m_equip": "Take the rod on start", "m_autocast": "Auto-cast the rod",
@@ -453,6 +455,7 @@ STRINGS = {
     "log_equip_win": "🖱 Clicks go straight into the game UI window; the Windows cursor never moves",
     "log_equip_cur": "🖱 UI window not found — clicking via cursor",
     "log_use_nofind": "❌ Item menu did not open (red row not found)",
+    "log_equip_miss": "Frame of the miss saved: miss_rod.png — send it if the miss repeats",
     "reason_no_macro": "rod not found in the inventory",
     "log_rod_skip": "🎣 equip_on_start is off — starting with the cast (rod already in hands)",
     "st_stopped": "STOPPED", "st_idle_d": "Press START or F8",
@@ -536,7 +539,7 @@ STRINGS = {
     "v_none": "—", "v_no_file": "немає файла", "v_fps": "FPS", "v_latency": "затримка",
     "v_fallback": "⚠ Резервне захоплення GDI — трішки повільніше за DXGI (DXGI не стартував)",
     "v_primary": "основний захват DXGI", "v_stream_off": "потік вимкнено", "v_stream_on": "потік {fps} fps",
-    "tpl_rod": "Вудка (інвентар)", "tpl_bait": "Наживка (інвентар)", "tpl_inv": "Вікно інвентарю",
+    "tpl_rod": "Вудка (інвентар)", "tpl_rod2": "Вудка №2 (другий еталон)", "tpl_bait": "Наживка (інвентар)", "tpl_inv": "Вікно інвентарю",
     "tpl_hud_fish": "Значок вудки (HUD)", "tpl_hud_bait": "Значок наживки (HUD)", "tpl_hud_shield": "HUD видно",
     "m_card_fish": "РИБОЛОВЛЯ ТА ЗВУКИ", "m_card_pid": "ПІД ТА РОЗПІЗНАВАННЯ",
     "m_equip": "Брати вудку на старті", "m_autocast": "Авто-закидання вудки",
@@ -564,6 +567,7 @@ STRINGS = {
     "log_equip_win": "🖱 Кліки — прямо у вікно інтерфейсу гри, курсор Windows не рухається",
     "log_equip_cur": "🖱 Вікно інтерфейсу не знайдено — клікаю курсором",
     "log_use_nofind": "❌ Меню предмета не відкрилося (червоний рядок не знайдено)",
+    "log_equip_miss": "Кадр моменту промаху збережено: miss_rod.png — надішли його, якщо промах повториться",
     "reason_no_macro": "вудку не знайдено в інвентарі",
     "log_rod_skip": "🎣 equip_on_start вимкнено — починаю з закидання (вудку вже в руках)",
     "st_stopped": "ЗУПИНЕНО", "st_idle_d": "Натисни СТАРТ або F8",
@@ -2785,6 +2789,51 @@ def _red_menu_row(frame):
     return (int((int(xs[0]) + int(xs[-1])) // 2), y)
 
 
+_CLAHE = None
+
+
+def _sobel(g):
+    """Карта градиентов (краёв): инвариантна к ровному сдвигу яркости — тёмная
+    сцена/низкая гамма монитора не меняют края, поэтому матч по краям находит
+    удочку там, где прямое сравнение проваливается (v1.22)."""
+    try:
+        gx = cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3)
+        gy = cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3)
+        m = cv2.magnitude(gx, gy)
+        cv2.normalize(m, m, 0, 255, cv2.NORM_MINMAX)
+        return m.astype(np.uint8)
+    except Exception:
+        return g
+
+
+def _norm_gray(g):
+    """Нормализация освещения (CLAHE по яркости): ночь/гамма монитора/подсветка слота
+    под курсором перестают влиять на сравнение с шаблоном — «бедный ИИ», который
+    делает матч инвариантным к условиям съёмки (v1.22)."""
+    global _CLAHE
+    try:
+        if _CLAHE is None:
+            _CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        return _CLAHE.apply(g)
+    except Exception:
+        return g
+
+
+_ROD_TPL_CACHE = []
+
+
+def _rod_templates():
+    """Эталоны удочки [rod, rod2] (обрезанные, сырые; кэшируются). rod2 — второй
+    эталон (другая подсветка/скин); его можно переснять на «Зрении»
+    («Шаблон: rod2»), как и основной."""
+    if not _ROD_TPL_CACHE:
+        for n in ("rod", "rod2"):
+            t_ = _tpl_trimmed(n)
+            if t_ is not None:
+                _ROD_TPL_CACHE.append((n, t_))
+    return _ROD_TPL_CACHE
+
+
 def vision_equip():
     """ЗРИТЕЛЬНАЯ ЭКИПИРОВКА БЕЗ ЗАПИСИ (v1.21): в ОТКРЫТОМ инвентаре бот сам находит
     удочку (шаблон rod.png, мульти-масштабный поиск), делает ПКМ по ней, ждёт меню
@@ -2795,8 +2844,8 @@ def vision_equip():
     if not inventory_open():
         log(t("nt_equip_need_inv"))
         return False
-    t_ = _tpl_trimmed("rod")
-    if t_ is None:
+    tpls = _rod_templates()
+    if not tpls:
         log(t("log_bait_notpl"))             # тот же смысл: нет шаблона в templates/
         return False
     frame = grab()
@@ -2804,13 +2853,28 @@ def vision_equip():
         log(t("log_equip_rod_nofind"))
         return False
     thr = float(CFG.get("rod_thr", 0.80))
-    s_, pt, _f = _match_scales(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), t_,
-                               max_n=1, thr=thr)
-    if not pt or float(s_ or 0) < thr:
+    g = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    best = (0.0, None)                       # (скор, точка) из каскада ниже
+    for mk, gi in ((None, g),                # 1) прямое сравнение (обычный свет)
+                   (_sobel, _sobel(g)),      # 2) края (тьма/гамма — инвариант)
+                   (_norm_gray, _norm_gray(g))):  # 3) выравнивание контраста
+        for _n, t_ in tpls:
+            s_, pt, _f = _match_scales(gi, t_ if mk is None else mk(t_),
+                                       max_n=1, thr=0.0)
+            if pt and float(s_ or 0) > best[0]:
+                best = (float(s_), pt)
+        if best[0] >= thr:                   # нашли — дальнейшие режимы не нужны
+            break
+    if best[1] is None or best[0] < thr:
         log(t("log_equip_rod_nofind"))
+        try:                                 # кадр момента промаха — для разбора
+            cv2.imwrite(os.path.join(BASE_DIR, "miss_rod.png"), frame)
+            log(t("log_equip_miss"))
+        except Exception:
+            pass
         return False
-    rx, ry = int(pt[0]), int(pt[1])
-    log(t("log_equip_rod", x=rx, y=ry, s=float(s_)))
+    rx, ry = int(best[1][0]), int(best[1][1])
+    log(t("log_equip_rod", x=rx, y=ry, s=best[0]))
     how = _ui_click(rx, ry, "r", True)
     _ui_click(rx, ry, "r", False)
     log(t("log_equip_win") if how == "win" else t("log_equip_cur"))

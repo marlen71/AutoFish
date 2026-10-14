@@ -230,21 +230,42 @@ ok3b = ef.vision_equip()
 ef.inventory_open, ef._cef_render_hwnd, ef._cef_click_at = _real_inv3, _real_hwnd3, _real_uiclk3
 check("инвентарь закрыт -> False и ноль кликов", ok3b is False and clicks3b == [] and not sent)
 
-print("== 3c. Удочки на кадре нет: False, кликов нет, строка в журнале ==")
+print("== 3c. Удочки на кадре нет: False, кликов нет, кадр промаха сохранён ==")
 sent.clear()
 screens["cur"] = np.zeros((600, 800, 3), np.uint8)
 clicks3c = []
 ef._cef_render_hwnd = lambda: 7777
 ef._cef_click_at = lambda *a: clicks3c.append(a) or True
 ef.inventory_open = lambda: True
-_real_nap3c = ef.nap
+_real_nap3c, _real_imw3c = ef.nap, ef.cv2.imwrite
+saved3c = []
+ef.cv2.imwrite = lambda path, img: saved3c.append(path) or True
 ef.nap = lambda sec: None
 ok3c = ef.vision_equip()
-ef.nap, ef.inventory_open = _real_nap3c, _real_inv3
+ef.cv2.imwrite, ef.nap, ef.inventory_open = _real_imw3c, _real_nap3c, _real_inv3
 ef._cef_render_hwnd, ef._cef_click_at = _real_hwnd3, _real_uiclk3
-check("удочки нет -> False и ноль кликов", ok3c is False and clicks3c == [] and not sent)
+check("удочки нет -> False, ноль кликов, кадр промаха сохранён (miss_rod.png)",
+      ok3c is False and clicks3c == [] and not sent
+      and saved3c and saved3c[-1].endswith("miss_rod.png"), str(saved3c))
 log3c = io.open(ef.LOG_PATH, encoding="utf-8").read() if os.path.exists(ef.LOG_PATH) else ""
 check("в журнале: удочка не найдена", "не найдена" in log3c.lower(), log3c.strip()[-70:])
+
+print("== 3c2. Тёмный кадр (ночь/гамма): CLAHE-нормализация находит удочку ==")
+_dark = np.clip(_frame3.astype(np.int16) - 70, 0, 255).astype(np.uint8)   # тот же кадр, темнее
+screens["cur"] = _dark
+clicks3c2 = []
+ef._cef_render_hwnd = lambda: 7777
+ef._cef_click_at = lambda *a: clicks3c2.append(a) or True
+ef.inventory_open = lambda: True
+_real_nap3c2, _real_imw3c2 = ef.nap, ef.cv2.imwrite
+ef.cv2.imwrite = lambda path, img: True
+ef.nap = lambda sec: None
+ok3c2 = ef.vision_equip()
+ef.cv2.imwrite, ef.nap, ef.inventory_open = _real_imw3c2, _real_nap3c2, _real_inv3
+ef._cef_render_hwnd, ef._cef_click_at = _real_hwnd3, _real_uiclk3
+check("кадр темнее на 70: удочка найдена, ПКМ по ней (нормализация работает)",
+      ok3c2 is True and len(clicks3c2) >= 2 and abs(clicks3c2[0][1] - (_rx3 + _w3 // 2)) <= 8
+      and abs(clicks3c2[0][2] - (_ry3 + _h3 // 2)) <= 8, str(clicks3c2[:2]))
 
 print("== 3d. Удочка есть, меню не открылось: только ПКМ, False ==")
 sent.clear()
