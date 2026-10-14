@@ -19,14 +19,16 @@ Eternal FishMod — полуавтомат рыбалки для Skyrim RP-се�
   * Распознавание рыбы не зависит от её цвета (контраст по горизонтали внутри шкалы),
     поэтому подходит для любых видов рыб.
   * Полная локализация интерфейса: RU / EN / UA, переключение на лету (страница «Настройки»).
-  * Авто-закидывание — ВИЗУАЛЬНОЕ НАВЕДЕНИЕ (v1.9), тот же конвейер, что у мини-игры
-    (полный DXGI-кадр -> OpenCV): бот сам находит иконку удочки на ВСЁМ экране
-    (мульти-масштабный шаблон rod.png), плавно ПЕРЕТАСКИВАЕТ курсор к ней, одно ПКМ,
-    затем по красной строке «Выбросить» находит пункт «Использовать» и ведёт курсор
-    туда, одна ЛКМ -> заброс; то же после каждой рыбы. Никаких жёстких координат —
-    работает при любом положении и масштабе инвентаря. 📍 на «Настройках» — своя
-    точка + мгновенный снимок шаблона; пусто = автопоиск. Инвентарь открывает
-    человек (TAB бот не жмёт). «Только мини-игра» = инвентарь и забросы отключены.
+  * Авто-закидывание — ВИЗУАЛЬНОЕ НАВЕДЕНИЕ (v1.10), тот же конвейер, что у мини-игры
+    (полный DXGI-кадр -> OpenCV): бот сканирует ВЕСЬ экран — иконка удочки ищется
+    мульти-масштабным шаблоном (грубая лестница на полукадре + точный подбор масштаба),
+    кривой шаблон обрезается от полей и после подтверждённого клика САМ обновляется
+    с экрана; курсор плавно ПЕРЕТАСКИВАЕТСЯ к цели, одно ПКМ, затем по красной строке
+    «Выбросить» находит пункт «Использовать» и ведёт курсор туда, одна ЛКМ -> заброс;
+    то же после каждой рыбы. Никаких жёстких координат — работает при любом положении,
+    разрешении и масштабе инвентаря. 📍 на «Настройках» — своя точка + мгновенный
+    снимок шаблона; пусто = автопоиск. Инвентарь открывает человек (TAB бот не жмёт).
+    «Только мини-игра» = инвентарь и забросы отключены.
   * Лаунчер launch.py / start.bat, файл VERSION + scripts/release.py (релизы на GitHub).
 
 Установка:  python launch.py   (сам поставит зависимости)   или   pip install -r requirements.txt
@@ -102,7 +104,7 @@ CFG_PATH = os.path.join(BASE_DIR, "fishmod_config.json")
 STATS_PATH = os.path.join(BASE_DIR, "fishmod_stats.json")
 LOG_PATH = os.path.join(BASE_DIR, "fishmod.log")
 VERSION_PATH = os.path.join(BASE_DIR, "VERSION")
-CFG_VERSION = 6                  # формат конфига: меняем только при НЕсовместимых правках
+CFG_VERSION = 7                  # формат конфига: меняем только при НЕсовместимых правках
 REF_W, REF_H = 1920, 1080
 
 
@@ -154,6 +156,9 @@ DEFAULT_CFG = {
     "rod_match_min": 0.70,               # порог совпадения шаблона удочки на полном кадре
     "move_time": 0.30,                   # сколько секунд курсор плавно едет к цели
     "rod_retry_delay": 3.0,              # пауза между попытками найти удочку/меню
+    "tpl_selflearn": True,               # нашла цель с высоким совпадением -> шаблон
+                                         # обновляется с экрана (самообучение: кривой
+                                         # кроп/чужое разрешение чинятся сами)
     "sound_start": True, "sound_end": True, "sound_catch": False, "volume": 60,
     "hide_when_running": True,           # прятать окно, пока бот ловит (оверлей не мешает «зрению»)
     "ui_scale": 0.72,
@@ -381,6 +386,8 @@ STRINGS = {
     "fail_rod_score": "❌ Удочка не найдена на экране: лучшее совпадение {s:.2f} < порога {min:.2f} — пересними шаблон или задай 📍",
     "nt_rod_fail": "Удочку не нашёл — пересними шаблон или задай 📍",
     "nt_rod_tpl": "Нет шаблона rod.png — сними его на странице «Зрение»",
+    "log_self_learn": "🧠 Шаблон {name}.png обновлён с экрана (совпадение {s:.2f}) — поиск станет точнее",
+    "log_bait_notpl": "Нет шаблона bait.png — наживка не проверяется («Зрение» → «Шаблон: наживка»)",
     "log_rod_skip": "🎣 equip_on_start выключен — начинаю с заброса (удочка уже в руках)", "log_bait": "🪱 Наживка: {state} (стаков на экране: {n})",
     "bait_yes": "есть", "bait_no": "НЕТ", "log_rod_missing": "🎣 Удочки нет в руках — беру",
     "log_bait_icon": "🪱 Значок наживки пропал — проверяю инвентарь",
@@ -389,7 +396,7 @@ STRINGS = {
     "nt_inv_wait": "Открой инвентарь в игре",
     "log_bait_skip": "Проверка наживки пропущена — инвентарь закрыт",
     "st_inv_wait": "ОТКРОЙ ИНВЕНТАРЬ", "st_inv_wait_d": "Открой инвентарь — бот ждёт…",
-    "m_menudelay": "Пауза ПКМ→«Использовать», с", "m_rodmatch": "Порог шаблона удочки",
+    "m_menudelay": "Пауза ПКМ→«Использовать», с", "m_rodmatch": "Порог шаблона удочки", "m_selflearn": "Обновлять шаблоны с экрана",
     "log_cast": "🪝 Заброс удочки…", "log_cast_done": "🪝 Заброс выполнен — жду клёва",
     "log_slip": "⚠ Рыба срывается — аварийное удержание", "log_mini_done": "✔ Мини-игра: {dur:.1f} с, срывов {slip}, ЛКМ {sw:.1f} перекл/с",
     "log_debug": "📷 debug_screen.png, debug_bar.png сохранены. {parts} | zone={zone} fish={fish}",
@@ -495,6 +502,8 @@ STRINGS = {
     "fail_rod_score": "❌ Rod not found on screen: best match {s:.2f} < threshold {min:.2f} — recapture the template or set 📍",
     "nt_rod_fail": "Rod not found — recapture the template or set 📍",
     "nt_rod_tpl": "No rod.png template — capture it on the Vision page",
+    "log_self_learn": "🧠 Template {name}.png updated from screen (match {s:.2f}) — detection gets sharper",
+    "log_bait_notpl": "No bait.png template — bait not checked (Vision → “Bait template”)",
     "log_rod_skip": "🎣 equip_on_start is off — starting with the cast (rod already in hands)", "log_bait": "🪱 Bait: {state} (stacks on screen: {n})",
     "bait_yes": "yes", "bait_no": "NONE", "log_rod_missing": "🎣 Rod not in hands — taking it",
     "log_bait_icon": "🪱 Bait icon disappeared — checking the inventory",
@@ -503,7 +512,7 @@ STRINGS = {
     "nt_inv_wait": "Open the inventory in game",
     "log_bait_skip": "Bait check skipped — inventory is closed",
     "st_inv_wait": "OPEN INVENTORY", "st_inv_wait_d": "Open the inventory — the bot is waiting…",
-    "m_menudelay": "RMB→“Use” pause, s", "m_rodmatch": "Rod template threshold",
+    "m_menudelay": "RMB→“Use” pause, s", "m_rodmatch": "Rod template threshold", "m_selflearn": "Auto-refresh templates from screen",
     "log_cast": "🪝 Casting…", "log_cast_done": "🪝 Cast done — waiting for a bite",
     "log_slip": "⚠ Fish is slipping — emergency hold", "log_mini_done": "✔ Minigame: {dur:.1f} s, slips {slip}, LMB {sw:.1f} switches/s",
     "log_debug": "📷 debug_screen.png, debug_bar.png saved. {parts} | zone={zone} fish={fish}",
@@ -609,6 +618,8 @@ STRINGS = {
     "fail_rod_score": "❌ Вудку не знайдено на екрані: найкращий збіг {s:.2f} < порогу {min:.2f} — пересніми шаблон або задай 📍",
     "nt_rod_fail": "Вудку не знайшов — пересними шаблон або задай 📍",
     "nt_rod_tpl": "Немає шаблону rod.png — зніми його на сторінці «Зір»",
+    "log_self_learn": "🧠 Шаблон {name}.png оновлено з екрана (збіг {s:.2f}) — пошук стане точнішим",
+    "log_bait_notpl": "Немає шаблону bait.png — наживку не перевірено («Зір» → «Шаблон: наживка»)",
     "log_rod_skip": "🎣 equip_on_start вимкнено — починаю з закидання (вудка вже в руках)", "log_bait": "🪱 Наживка: {state} (стеків на екрані: {n})",
     "bait_yes": "є", "bait_no": "НЕМАЄ", "log_rod_missing": "🎣 Вудки немає в руках — беру",
     "log_bait_icon": "🪱 Значок наживки зник — перевіряю інвентар",
@@ -617,7 +628,7 @@ STRINGS = {
     "nt_inv_wait": "Відкрий інвентар у грі",
     "log_bait_skip": "Перевірку наживки пропущено — інвентар закрито",
     "st_inv_wait": "ВІДКРИЙ ІНВЕНТАР", "st_inv_wait_d": "Відкрий інвентар — бот чекає…",
-    "m_menudelay": "Пауза ПКМ→«Використати», с", "m_rodmatch": "Поріг шаблона вудки",
+    "m_menudelay": "Пауза ПКМ→«Використати», с", "m_rodmatch": "Поріг шаблона вудки", "m_selflearn": "Оновлювати шаблони з екрана",
     "log_cast": "🪝 Закидання вудки…", "log_cast_done": "🪝 Закидання виконано — чекаю клювання",
     "log_slip": "⚠ Риба зривається — аварійне утримання", "log_mini_done": "✔ Міні-гра: {dur:.1f} с, зривів {slip}, ЛКМ {sw:.1f} перемик/с",
     "log_debug": "📷 debug_screen.png, debug_bar.png збережено. {parts} | zone={zone} fish={fish}",
@@ -707,6 +718,7 @@ mouse_down = False
 last_switch = last_up_sent = hold_since = 0.0
 _tls = threading.local()
 _tpl_cache = {}
+_tpl_trim_cache = {}                   # шаблоны после обрезки тёмных полей (см. _tpl_trimmed)
 _pause_logged = False
 
 
@@ -2622,37 +2634,151 @@ def smooth_move(x, y):
     mouse_move_abs(int(x), int(y))
 
 
-def rod_on_screen():
-    """ИЩЕТ иконку удочки на ПОЛНОМ кадре экрана (как мини-игра ищет шкалу): шаблон
-    rod.png прогоняется matchTemplate-ом по всему кадру в нескольких масштабах (запас
-    на DPI/масштаб интерфейса игры). Возвращает (x, y, score) — центр лучшего
-    совпадения в физических пикселях; (None, None, score), если порог не достигнут;
-    (None, None, None), если шаблона rod.png нет вовсе."""
-    t_ = tpl("rod")
+def _tpl_trimmed(name):
+    """Шаблон с обрезанными тёмными полями: кривой ручной кроп (снят с запасом фона или
+    чужого разрешения) после обрезки совпадает с иконкой 1-в-1. Кэшируется по объекту."""
+    t_ = tpl(name)
     if t_ is None:
-        return None, None, None
-    frame = grab()                               # полный кадр, физические пиксели
-    if frame is None or frame.size == 0:
-        return None, None, 0.0
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        return None
+    hit = _tpl_trim_cache.get(name)
+    if hit is not None and hit[0] is t_:
+        return hit[1]
+    ys, xs = np.where(t_ > 45)
+    t2 = t_[ys.min():ys.max() + 1, xs.min():xs.max() + 1] if xs.size else t_
+    if min(t2.shape) < 10:                     # обрезали слишком много — оставить как было
+        t2 = t_
+    _tpl_trim_cache[name] = (t_, t2)
+    return t2
+
+
+def _self_learn(name, frame, x, y, fw, fh, score):
+    """САМООБУЧЕНИЕ: цель найдена с высоким совпадением — сохраняем её текущий вид
+    с экрана как новый шаблон. Лечит кривые/чужие шаблоны: после первого же успеха
+    предмет ищется по свежему снимку 1-в-1."""
+    m = monitor()
+    x0 = max(m["left"], int(x - fw // 2))
+    y0 = max(m["top"], int(y - fh // 2))
+    x1 = min(m["left"] + m["width"], x0 + fw)
+    y1 = min(m["top"] + m["height"], y0 + fh)
+    if x1 - x0 < 12 or y1 - y0 < 12:
+        return
+    try:
+        os.makedirs(TPL_DIR, exist_ok=True)
+        cv2.imwrite(os.path.join(TPL_DIR, name + ".png"), frame[y0:y1, x0:x1])
+        _tpl_cache.pop(name, None)
+        _tpl_trim_cache.pop(name, None)
+        log(t("log_self_learn", name=name, s=score))
+    except Exception:
+        pass                                    # шаблон — не критично, не роняем поиск
+
+
+def _match_scales(gray, t_, max_n=1, thr=0.60, with_f=False):
+    """МУЛЬТИ-МАСШТАБНЫЙ ПОИСК шаблона по кадру — «вижу весь экран»:
+      1) ГРУБАЯ лестница масштабов 0.40-2.0 (шаг ~12%) на ПОЛУКАДРЕ (пирамида) —
+         дёшево покрывает любое разрешение/DPI/масштаб интерфейса;
+      2) ТОЧНЫЙ подбор масштаба (шаг ~3%) вокруг двух лучших кандидатов на полном
+         кадре — итоговая точность масштаба ~1.5%, position ±1 px.
+    Поэтому шаблон не обязан быть идеального размера: обрезка полей + точная стадия
+    компенсируют кривой кроп. max_n=1 -> (score, (x, y), f); max_n>1 -> список
+    [(score, x, y), ...] (NMS, score >= thr) — столько, сколько целей на экране."""
+    H, W = gray.shape
     th, tw = t_.shape
-    if gray.shape[0] <= th or gray.shape[1] <= tw:
-        return None, None, 0.0
-    best = (0.0, None, None)
-    for f in (0.55, 0.70, 0.85, 1.0, 1.15, 1.3, 1.45):
-        fh, fw = max(8, int(th * f)), max(8, int(tw * f))
-        if fh >= gray.shape[0] or fw >= gray.shape[1]:
-            continue
-        tm = t_ if f == 1.0 else cv2.resize(t_, (fw, fh), interpolation=cv2.INTER_AREA)
-        r = cv2.matchTemplate(gray, tm, cv2.TM_CCOEFF_NORMED)
-        r = np.nan_to_num(r, nan=0.0, posinf=0.0, neginf=0.0)
-        _, mv, _, ml = cv2.minMaxLoc(r)
-        if mv > best[0]:
-            best = (float(mv), ml[0] + fw // 2, ml[1] + fh // 2)
-    score = best[0]
-    if best[1] is None or score < float(CFG.get("rod_match_min", 0.70)):
-        return None, None, score               # порог не достигнут — цели нет
-    return best[1], best[2], score
+    if min(th, tw) < 8 or H <= th or W <= tw:
+        return (0.0, None, None) if max_n == 1 else []
+    if with_f and max_n == 1:
+        raise ValueError("with_f используется только с max_n>1")
+    small = cv2.resize(gray, (max(1, W // 2), max(1, H // 2)), interpolation=cv2.INTER_AREA)
+    coarse = []
+    f = 0.40
+    while f <= 2.0:
+        fh, fw = int(th * f / 2), int(tw * f / 2)
+        if 8 <= fh < small.shape[0] and 8 <= fw < small.shape[1]:
+            t2 = cv2.resize(t_, (fw, fh), interpolation=cv2.INTER_AREA)
+            r = np.nan_to_num(cv2.matchTemplate(small, t2, cv2.TM_CCOEFF_NORMED))
+            _, mv, _, ml = cv2.minMaxLoc(r)
+            coarse.append((float(mv), ml, f))
+        f *= 1.12
+    if not coarse:
+        return (0.0, None, None) if max_n == 1 else []
+    coarse.sort(key=lambda z: -z[0])
+
+    def fine(entry):
+        """Точная стадия вокруг одного грубого попадания: лучший (score, topleft, f)."""
+        _, ml0, f0 = entry
+        best = (0.0, None, f0)
+        seen = set()
+        for df in (0.88, 0.91, 0.94, 0.97, 1.0, 1.03, 1.06, 1.09, 1.12):
+            ff = f0 * df
+            k = round(ff, 3)
+            if k in seen:
+                continue
+            seen.add(k)
+            fh, fw = int(th * ff), int(tw * ff)
+            if not (12 <= fh < H and 12 <= fw < W):
+                continue
+            t2 = cv2.resize(t_, (fw, fh), interpolation=cv2.INTER_AREA)
+            cx, cy = ml0[0] * 2, ml0[1] * 2
+            x0, y0 = max(0, cx - 48), max(0, cy - 48)
+            x1, y1 = min(W, cx + fw + 48), min(H, cy + fh + 48)
+            roi = gray[y0:y1, x0:x1]
+            if roi.shape[0] < fh or roi.shape[1] < fw:
+                continue
+            r = np.nan_to_num(cv2.matchTemplate(roi, t2, cv2.TM_CCOEFF_NORMED))
+            _, mv, _, ml = cv2.minMaxLoc(r)
+            if mv > best[0]:
+                best = (float(mv), (x0 + ml[0], y0 + ml[1]), ff)
+        return best
+
+    if max_n == 1:
+        best = (0.0, None, None)
+        for entry in coarse[:2]:
+            s_, tl, ff = fine(entry)
+            if tl is not None and s_ > best[0]:
+                best = (s_, (tl[0] + int(tw * ff) // 2, tl[1] + int(th * ff) // 2), ff)
+        return best
+    # --- несколько целей: точный масштаб по лучшему, затем NMS на полной карте ---
+    _, _, fbest = fine(coarse[0])
+    fh, fw = int(th * fbest), int(tw * fbest)
+    if fh >= H or fw >= W or fh < 12 or fw < 12:
+        return []
+    t2 = cv2.resize(t_, (fw, fh), interpolation=cv2.INTER_AREA)
+    r = np.nan_to_num(cv2.matchTemplate(gray, t2, cv2.TM_CCOEFF_NORMED))
+    ys, xs = np.where(r >= thr)
+    pts = sorted(zip(r[ys, xs].tolist(), xs.tolist(), ys.tolist()), reverse=True)[:300]
+    min_dist = max(40, int(max(fw, fh) * 0.6))
+    out = []
+    for s_, x, y in pts:
+        if all((x - a) ** 2 + (y - b) ** 2 > min_dist ** 2 for _, a, b, *r in out):
+            out.append((float(s_), x + fw // 2, y + fh // 2) + ((fbest,) if with_f else ()))
+            if len(out) >= max_n:
+                break
+    return out
+
+
+def _rod_locate(frame):
+    """ИЩЕТ иконку удочки на ПРИСЛАННОМ кадре (как мини-игра ищет шкалу):
+    мульти-масштабный _match_scales + шаблон с обрезанными полями.
+    Возвращает (x, y, score, f, t_): центр лучшего совпадения в физических
+    пикселях, его масштаб и шаблон; x=None, если порог rod_match_min не
+    достигнут или шаблона нет (тогда t_=None)."""
+    t_ = _tpl_trimmed("rod")
+    if t_ is None:
+        return None, None, None, None, None
+    if frame is None or frame.size == 0:
+        return None, None, 0.0, None, t_
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    score, pos, f = _match_scales(gray, t_)
+    if pos is None or score < float(CFG.get("rod_match_min", 0.70)):
+        return None, None, float(score), None, t_
+    return pos[0], pos[1], float(score), f, t_
+
+
+def rod_on_screen():
+    """ИЩЕТ иконку удочки на ПОЛНОМ кадре экрана. Возвращает (x, y, score);
+    (None, None, score), если порог не достигнут; (None, None, None), если нет
+    шаблона rod.png."""
+    rx, ry, score, _f, _t = _rod_locate(grab())
+    return rx, ry, score
 
 
 def _red_mask(bgr):
@@ -2720,13 +2846,15 @@ def use_rod():
     wait_inventory_open()
     set_state("st_rod_find", "st_rod_find_d", "busy")
     # --- где удочка: ручная точка (📍) или автопоиск по всему экрану ---
+    hit = None                                  # (frame, f, t_, score) — для самообучения
     if CFG.get("rod_click_pos"):
         rx, ry = int(CFG["rod_click_pos"][0]), int(CFG["rod_click_pos"][1])
         log(t("log_rod_manual", x=rx, y=ry))
     else:
-        rx, ry, score = rod_on_screen()
+        frame = grab()                          # один кадр на попытку: поиск и самообучение
+        rx, ry, score, f, t_ = _rod_locate(frame)
         if rx is None:
-            if score is None:
+            if t_ is None:                     # шаблона нет вовсе
                 notify("nt_rod_tpl", "warn")
                 log(t("fail_rod_tpl"))
             else:
@@ -2734,6 +2862,7 @@ def use_rod():
             set_state("st_rod_fail", "st_rod_fail_d", "busy")
             return False
         log(t("log_rod_found", x=rx, y=ry, s=score))
+        hit = (frame, f, t_, score)
     # --- шаг 1: плавно к удочке, одно ПКМ ---
     log(t("log_step1"))
     smooth_move(rx, ry)
@@ -2757,6 +2886,15 @@ def use_rod():
                 return False                     # меню не открылось — кликать наугад нельзя
             ux, uy = int(info[0]), int(info[1])
             log(t("log_use_found", ux=ux, uy=uy))
+            # меню появилось -> игра ПОДТВЕРДИЛА: клик был по удочке. Теперь можно
+            # учиться: mediocre-шаблон (0.70-0.93) заменяется свежим снимком иконки
+            # с кадра этой же попытки (до ПКМ, без меню в кадре). Мусорный шаблон,
+            # совпавший не с удочкой, меню не подтвердит — и шаблон не испортится.
+            if hit is not None and attempt == 1 and hit[3] < 0.93 \
+                    and CFG.get("tpl_selflearn", True):
+                hframe, hf, ht_, hscore = hit
+                _self_learn("rod", hframe, rx, ry,
+                            max(8, int(ht_.shape[1] * hf)), max(8, int(ht_.shape[0] * hf)), hscore)
         # --- шаг 3: плавно на «Использовать», одна ЛКМ ---
         smooth_move(ux, uy)
         nap(0.35)                                # курсор встал на пункт меню
@@ -2793,17 +2931,33 @@ def equip_cycle():
 
 
 def bait_check():
-    """Пассивная проверка наживки: только если инвентарь СЕЙЧАС открыт (бот сам его не
-    открывает). Результат — ТОЛЬКО в журнал: шаблон bait.png снят со старой наживки и
-    может не совпасть с новой, поэтому останавливать сессию по нему нельзя.
-    True — найдена, False — не найдена, None — инвентарь закрыт (проверка пропущена)."""
+    """Пассивная проверка наживки — СКАНЕРОМ ВСЕГО ЭКРАНА (v1.10): все стеки наживки
+    на экране находятся мульти-масштабным поиском (порог THR["bait"], NMS разделяет
+    стеки), а не одним совпадением в жёсткой области. Только если инвентарь СЕЙЧАС
+    открыт (бот сам его не открывает). Результат — ТОЛЬКО в журнал: сессию наживка
+    не останавливает. True — найдена, False — нет, None — инвентарь закрыт."""
     if not inventory_open():
         log(t("log_bait_skip"))
         return None
-    stacks = len(find_all("bait"))
-    present = stacks > 0 or find("bait") is not None
+    t_ = _tpl_trimmed("bait")
+    if t_ is None:
+        log(t("log_bait_notpl"))
+        return None
+    frame = grab()
+    if frame is None or frame.size == 0:
+        log(t("log_bait_notpl"))
+        return None
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    bait_thr = max(float(THR.get("bait", 0.90)), 0.93)   # весь экран: круглые предметы
+    hits = _match_scales(gray, t_, max_n=24, thr=bait_thr, with_f=True)  # в игре дают шум
+    if hits and hits[0][0] < 0.99 and CFG.get("tpl_selflearn", True):
+        # лучший стек — свежий эталон наживки (кривой шаблон чинится сам)
+        s0, x0, y0, f0 = hits[0]
+        _self_learn("bait", frame, x0, y0,
+                    max(8, int(t_.shape[1] * f0)), max(8, int(t_.shape[0] * f0)), s0)
+    present = len(hits) > 0
     STATS["checks"] += 1
-    log(t("log_bait", state=t("bait_yes") if present else t("bait_no"), n=stacks))
+    log(t("log_bait", state=t("bait_yes") if present else t("bait_no"), n=len(hits)))
     return present
 
 
@@ -3007,6 +3161,7 @@ def capture_template(name):
     img = grab_px(px + ox * sx, py + oy * sy, w * sx, h * sy)
     cv2.imwrite(os.path.join(TPL_DIR, name + ".png"), img)
     _tpl_cache.pop(name, None)
+    _tpl_trim_cache.pop(name, None)
     notify("nt_tpl_saved", "ok", name=name)
 
 
@@ -3391,6 +3546,7 @@ class App:
                         os.makedirs(TPL_DIR, exist_ok=True)
                         cv2.imwrite(os.path.join(TPL_DIR, "rod.png"), img)
                         _tpl_cache.pop("rod", None)
+                        _tpl_trim_cache.pop("rod", None)
                         notify("nt_tpl_saved", "ok", name="rod")
             threading.Thread(target=worker_fn, daemon=True).start()
 
@@ -3580,6 +3736,7 @@ class App:
                 ("m_postdelay", "s", ("post_catch_delay", 0.5, 6, 0.25, "{:.2f}")),
                 ("m_menudelay", "s", ("use_menu_delay", 0.2, 5.0, 0.1, "{:.1f}")),
                 ("m_rodmatch", "s", ("rod_match_min", 0.40, 0.95, 0.05, "{:.2f}")),
+                ("m_selflearn", "t", "tpl_selflearn"),
                 ("m_hide", "t", "hide_when_running"), ("m_snd_start", "t", "sound_start"),
                 ("m_snd_end", "t", "sound_end"), ("m_snd_catch", "t", "sound_catch"),
                 ("m_maxhold", "s", ("max_hold", 0.5, 8, 0.25, "{:.2f}")),

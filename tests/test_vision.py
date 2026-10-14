@@ -106,17 +106,17 @@ check("inv_header НЕ виден вне инвентаря", ef.find("inv_heade
 set_screen(shot("1791751385077-image.png"))
 check("rod не ложно-срабатывает на игровом экране", ef.best_score("rod") < ef.THR["rod"], f"{ef.best_score('rod'):.2f}")
 
-print("== 3. Визуальный авто-закид (v1.9): автопоиск по кадру, красная строка меню, конфиг ==")
+print("== 3. Визуальный авто-закид (v1.10): весь экран, кривые шаблоны, самообучение ==")
 check("жёстких координат по умолчанию НЕТ (автопоиск)",
       ef.DEFAULT_CFG["rod_click_pos"] is None and ef.DEFAULT_CFG["use_click_pos"] is None,
       f"{ef.DEFAULT_CFG['rod_click_pos']} / {ef.DEFAULT_CFG['use_click_pos']}")
-check("новые ключи v1.9 на месте",
+check("ключи v1.9/v1.10 на месте",
       ef.DEFAULT_CFG["rod_match_min"] == 0.70 and ef.DEFAULT_CFG["move_time"] == 0.30
-      and ef.DEFAULT_CFG["rod_retry_delay"] == 3.0)
+      and ef.DEFAULT_CFG["rod_retry_delay"] == 3.0 and ef.DEFAULT_CFG["tpl_selflearn"] is True)
 
-# --- удочка: мульти-масштабный поиск по ПОЛНОМУ кадру (реальный скриншот инвентаря) ---
+
 class _Cap3:
-    """Полный «экран» = img; координаты 1:1 (1920x1080)."""
+    """Полный «экран» = img; координаты 1:1."""
     def __init__(self, img):
         self.img = img
         self.mon = {"left": 0, "top": 0, "width": img.shape[1], "height": img.shape[0]}
@@ -144,26 +144,133 @@ INV3 = cv2.imread(os.path.join(ROOT, "1791751387911-image.png"))
 MENU3 = cv2.imread(os.path.join(ROOT, "1791751384528-image.png"))
 GAME3 = cv2.imread(os.path.join(ROOT, "27033efd-f8b1-489a-97b3-64f476efafbf.png"))
 assert all(x is not None for x in (INV3, MENU3, GAME3))
+
+# отдельная песочница шаблонов: тесты не трогают боевые templates/
+_tmp3 = os.path.join(ROOT, "tests", "vision_tpl")
+os.makedirs(_tmp3, exist_ok=True)
+import shutil as _shutil
+for _n in ("rod", "bait", "inv_header", "hud_fish", "hud_bait", "hud_shield"):
+    _src = os.path.join(ROOT, "templates", _n + ".png")
+    if os.path.exists(_src):
+        _shutil.copy(_src, os.path.join(_tmp3, _n + ".png"))
+ef.TPL_DIR = _tmp3
+ef.CFG["tpl_selflearn"] = False
 ef.CAP = _Cap3(INV3)
 ef.scale = lambda: (1.0, 1.0)
 ef.monitor = lambda: ef.CAP.mon
+
 rx, ry, rs = ef.rod_on_screen()
-check("удочка найдена на полном кадре инвентаря (центр (126, 256), score~1.0)",
-      (rx, ry) == (126, 256) and rs > 0.95, f"({rx}, {ry}) score={rs}")
+check("удочка найдена на полном кадре инвентаря (~ (126, 256), score > 0.9)",
+      rx is not None and abs(rx - 126) <= 5 and abs(ry - 256) <= 5 and rs > 0.9,
+      f"({rx}, {ry}) score={rs}")
+
+# --- кривой шаблон: тёмные поля 25px со всех сторон (кроп не того размера) ---
+rod3 = cv2.imread(os.path.join(ROOT, "templates", "rod.png"), cv2.IMREAD_GRAYSCALE)
+_padded = cv2.copyMakeBorder(rod3, 25, 25, 25, 25, cv2.BORDER_CONSTANT, value=8)
+cv2.imwrite(os.path.join(_tmp3, "rod.png"), _padded)
+ef._tpl_cache.clear()
+ef._tpl_trim_cache.clear()
+rx, ry, rs = ef.rod_on_screen()
+check("кривой кроп (тёмные поля 25px) НЕ ломает поиск: обрезка полей + точный масштаб",
+      rx is not None and abs(rx - 126) <= 5 and rs > 0.85, f"({rx}, {ry}) score={rs}")
+
+# --- другое «разрешение экрана»: кадр 0.8x, шаблон от 1080p ---
+_small = cv2.resize(INV3, (1536, 864), interpolation=cv2.INTER_AREA)
+ef.CAP = _Cap3(_small)
+ef.monitor = lambda: ef.CAP.mon
+rx, ry, rs = ef.rod_on_screen()
+check("кадр 1536x864 с шаблоном от 1080p: удочка найдена (~ (101, 206))",
+      rx is not None and abs(rx - 101) <= 6 and abs(ry - 206) <= 6 and rs > 0.8,
+      f"({rx}, {ry}) score={rs}")
+
 ef.CAP = _Cap3(GAME3)
-rx2, ry2, rs2 = ef.rod_on_screen()
+ef.monitor = lambda: ef.CAP.mon
+rx, ry, rs = ef.rod_on_screen()
 check("в игровом кадре (инвентарь закрыт) удочки нет",
-      rx2 is None and rs2 < ef.CFG["rod_match_min"], f"score={rs2}")
+      rx is None and rs < ef.CFG["rod_match_min"], f"score={rs}")
 
 # --- меню: красная строка «Выбросить» -> точка «Использовать» ---
 ef.CAP = _Cap3(MENU3)
+ef.monitor = lambda: ef.CAP.mon
 info = ef.context_menu_info(126, 256)
 check("меню найдено по красной строке: «Использовать» = (205, y над строкой y=298)",
       info is not None and info[0] == 205 and 260 <= info[1] < 298, str(info))
 ef.CAP = _Cap3(INV3)
+ef.monitor = lambda: ef.CAP.mon
 check("меню закрыто -> None (нет красной строки)", ef.context_menu_info(126, 256) is None)
 
-# --- конфиг: миграция 5 -> 6 и санитизация ---
+# --- самообучение: mediocre-шаблон чинится ПОСЛЕ подтверждения меню ---
+ef.CFG["tpl_selflearn"] = True
+_mediocre = cv2.GaussianBlur(cv2.resize(rod3, (54, 54), interpolation=cv2.INTER_AREA), (3, 3), 0)
+cv2.imwrite(os.path.join(_tmp3, "rod.png"), _mediocre)
+ef._tpl_cache.clear()
+ef._tpl_trim_cache.clear()
+x0, y0, s_before, _, _ = ef._rod_locate(INV3)
+check("mediocre-шаблон (чужое разрешение/мыло) находит удочку с 0.70..0.93",
+      x0 is not None and 0.70 <= s_before < 0.93, f"score={s_before}")
+screens3 = {"cur": INV3}
+ef.grab = lambda rect=None: screens3["cur"]
+
+
+def _grab_px3(l, t, w, h):
+    img = screens3["cur"]
+    H, W = img.shape[:2]
+    a0, b0 = max(0, int(l)), max(0, int(t))
+    a1, b1 = min(W, int(l) + int(w)), min(H, int(t) + int(h))
+    return None if b1 <= b0 or a1 <= a0 else img[b0:b1, a0:a1]
+
+
+ef.grab_px = _grab_px3
+ef.check_stop = lambda: 0.0
+ef.nap = lambda sec: None
+ef.cursor_pos = lambda: (900, 540)
+ef.smooth_move = lambda x, y: None
+ef.inventory_open = lambda: True
+_sent3 = []
+
+
+def _send3(flags, dx=0, dy=0):
+    _sent3.append(flags)
+    if flags == ef.MOUSEEVENTF_RIGHTUP:
+        screens3["cur"] = MENU3                      # ПКМ -> игра открыла меню
+    elif flags == ef.MOUSEEVENTF_LEFTUP and screens3["cur"] is MENU3:
+        screens3["cur"] = INV3                       # ЛКМ по «Использовать» -> меню закрылось
+
+
+ef._send_mouse = _send3
+_ok = ef.use_rod()
+_healed = cv2.imread(os.path.join(_tmp3, "rod.png"), cv2.IMREAD_GRAYSCALE)
+check("после подтверждённого меню шаблон обновлён с экрана (self-heal)",
+      _ok is True and _healed is not None and _healed.shape != (54, 54), str(_healed.shape if _healed is not None else None))
+ef._tpl_cache.clear()
+ef._tpl_trim_cache.clear()
+x0, y0, s_after, _, _ = ef._rod_locate(INV3)
+check("вылеченный шаблон ищет точнее, чем mediocre", s_after > s_before + 0.05 and abs(x0 - 126) <= 5,
+      f"{s_before:.3f} -> {s_after:.3f}")
+# мусорный шаблон (круг) НЕ учится: меню не подтвердит клик -> шаблон не перезаписан
+_bad = np.full((90, 90), 12, np.uint8)
+cv2.circle(_bad, (45, 45), 10, 200, -1)
+cv2.imwrite(os.path.join(_tmp3, "rod.png"), _bad)
+ef._tpl_cache.clear()
+ef._tpl_trim_cache.clear()
+screens3["cur"] = GAME3                            # удочки нет, клик мимо
+ef.use_rod()
+_after_bad = cv2.imread(os.path.join(_tmp3, "rod.png"), cv2.IMREAD_GRAYSCALE)
+check("мусорный шаблон НЕ самообучается на промахе (нет подтверждения меню)",
+      _after_bad is not None and _after_bad.shape == (90, 90))
+ef.CFG["tpl_selflearn"] = False
+
+# --- наживка: сканер всего экрана, стеки через NMS ---
+ef.CAP = _Cap3(INV3)
+ef.monitor = lambda: ef.CAP.mon
+_hits = ef._match_scales(cv2.cvtColor(INV3, cv2.COLOR_BGR2GRAY), ef._tpl_trimmed("bait"),
+                         max_n=24, thr=0.93, with_f=True)
+check("наживка: >= 5 стеков на инвентаре (порог 0.93, весь экран)", len(_hits) >= 5, f"{len(_hits)} стеков")
+_hits_g = ef._match_scales(cv2.cvtColor(GAME3, cv2.COLOR_BGR2GRAY), ef._tpl_trimmed("bait"),
+                           max_n=24, thr=0.93, with_f=True)
+check("наживка: в игровом кадре ложных стеков нет", len(_hits_g) == 0, f"{len(_hits_g)}")
+
+# --- конфиг: миграция 5/6 -> 7 и санитизация ---
 import json as _json
 tmp3 = os.path.join(ROOT, "tests", "vision_cfg.json")
 ef.CFG_PATH = tmp3
@@ -177,14 +284,16 @@ ef.load_cfg()
 check("конфиг v5 (жёсткие точки 1.8) мигрирует в автопоиск (None/None)",
       ef.CFG["rod_click_pos"] is None and ef.CFG["use_click_pos"] is None,
       f"{ef.CFG['rod_click_pos']} / {ef.CFG['use_click_pos']}")
+check("миграция добавляет tpl_selflearn", ef.CFG["tpl_selflearn"] is True)
 with open(tmp3, "w", encoding="utf-8") as f:
-    _json.dump({"cfg_version": 6, "rod_click_pos": "мусор", "use_click_pos": [1], "lang": "ru"}, f)
+    _json.dump({"cfg_version": 7, "rod_click_pos": "мусор", "use_click_pos": [1], "lang": "ru"}, f)
 ef.CFG.clear()
 ef.CFG.update(ef.DEFAULT_CFG)
 ef.load_cfg()
 check("битые координаты -> None (автопоиск), без падений",
       ef.CFG["rod_click_pos"] is None and ef.CFG["use_click_pos"] is None)
 os.remove(tmp3)
+_shutil.rmtree(_tmp3, ignore_errors=True)
 
 print("== 4. relay_decide: реле с предсказанием останова, гистерезис ==")
 A_UP, G_DN, VMAX, LOOK, HYST = 1750.0, 800.0, 850.0, 0.17, 12.0

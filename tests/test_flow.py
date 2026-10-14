@@ -126,6 +126,7 @@ def install_stubs():
                                               keyUp=lambda k: None, PAUSE=0, FAILSAFE=False)
     ef.nap = lambda sec: None
     ef.check_stop = lambda: 0.0
+    ef.CFG["tpl_selflearn"] = False             # тесты не должны переписывать шаблоны
     ef.learn_game_window = lambda timeout=15.0: "Skyrim"
     ef.game_focused = lambda: True
     ef.GAME_TITLE = "Skyrim"
@@ -200,8 +201,9 @@ ef._send_mouse = send_switch
 ok3 = ef.use_rod()
 ef._send_mouse = _real_send_switch
 check("use_rod успех: удочка найдена зрением, меню отработано", ok3 is True)
-check("курсор ПРИВЕДЁН к найденной удочке (финальный move (126, 256) — центр иконки на кадре)",
-      ("move", 126, 256) in sent, str([k for k in sent if k[0] == "move"][-3:]))
+check("курсор ПРИВЕДЁН к найденной удочке (центр иконки ~ (126, 256) на кадре, ±5 px)",
+      any(k[0] == "move" and abs(k[1] - 126) <= 5 and abs(k[2] - 256) <= 5 for k in sent),
+      str([k for k in sent if k[0] == "move"][-3:]))
 check("курсор приведён к «Использовать» (x=205, над красной строкой, y 270..300)",
       any(k[0] == "move" and k[1] == 205 and 270 <= k[2] <= 300 for k in sent))
 flags_seq = [k[1] for k in sent if k[0] == "mouse"]
@@ -241,14 +243,14 @@ check("меню не открылось -> False: ПКМ есть, ЛКМ НЕТ
 ef.inventory_open = _real_inv_open
 
 print("== 4. Ручные точки 📍 переопределяют автопоиск ==")
-_real_rod_on_screen, _real_cmi = ef.rod_on_screen, ef.context_menu_info
+_real_rod_locate, _real_cmi = ef._rod_locate, ef.context_menu_info
 
 
-def must_not_search():
+def must_not_search(*a, **k):
     raise AssertionError("автопоиск не должен запускаться: задана ручная точка")
 
 
-ef.rod_on_screen = must_not_search
+ef._rod_locate = must_not_search
 ef.context_menu_info = must_not_search
 ef.CFG["rod_click_pos"] = [300, 400]
 ef.CFG["use_click_pos"] = [520, 330]
@@ -256,7 +258,7 @@ sent.clear()
 ef.cursor_pos = lambda: (300, 400)
 check("ручная точка удочки: ПКМ по (300, 400)", ef.use_rod() is True and ("move", 300, 400) in sent)
 check("ручная точка «Использовать»: ЛКМ по (520, 330)", ("move", 520, 330) in sent)
-ef.rod_on_screen, ef.context_menu_info = _real_rod_on_screen, _real_cmi
+ef._rod_locate, ef.context_menu_info = _real_rod_locate, _real_cmi
 ef.CFG["rod_click_pos"] = None
 ef.CFG["use_click_pos"] = None
 
