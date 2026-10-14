@@ -182,7 +182,7 @@ ef.inventory_open = _real_invopen
 screens["cur"] = GAME
 check("инвентарь закрыт -> None (пропуск, не ошибка)", ef.bait_check() is None)
 
-print("== 3. macro_play: glide в точку старта, затем ОТНОСИТЕЛЬНЫЕ дельты 1-в-1 ==")
+print("== 3. macro_play: АТОМАРНЫЙ повтор — только прыжок+клик, курсор не стримится ==")
 screens["cur"] = INV
 sent.clear()
 ef.CFG["cast_macro"] = [
@@ -195,16 +195,18 @@ ef.nap = lambda sec: naps3.append(round(float(sec), 3))
 _real_glide3, _real_cursor3 = ef._glide, ef.cursor_pos
 glides3 = []
 ef._glide = lambda x, y, dur=0.22: glides3.append((int(x), int(y)))
-ef.cursor_pos = lambda: (900, 540)          # мышь «фактически» в стороне
+ef.cursor_pos = lambda: (900, 540)          # мышь «фактически» в стороне (для home)
 ok3 = ef.macro_play()
 ef.nap = _real_nap3
 ef._glide, ef.cursor_pos = _real_glide3, _real_cursor3
 check("macro_play успех", ok3 is True)
-check("мышь ПЕРЕВЕДЕНА из фактического положения в точку начала записи (126, 256)",
-      glides3 == [(126, 256)], str(glides3))
+check("glide НЕ вызван: курсор не ездит, только мгновенные прыжки к кликам",
+      glides3 == [], str(glides3))
 mv3 = [k for k in sent if k[0] == "mouse" and k[1] == ef.MOUSEEVENTF_MOVE]
-check("движение — ОТНОСИТЕЛЬНАЯ дельта как у физической мыши: ровно один MOUSEEVENTF_MOVE(79, 30)",
-      mv3 == [("mouse", ef.MOUSEEVENTF_MOVE, 79, 30)], str(mv3))
+check("дельты НЕ подаются вовсе (курсор не стримится, летать нечему)",
+      mv3 == [], str(mv3))
+check("glide НЕ вызывается (никакого плавного езда по экрану)",
+      glides3 == [], str(glides3))
 check("ЯКОРЯ КЛИКОВ: ПКМ (down+up) ровно в (126, 256), ЛКМ (down+up) — в (205, 286), финал — домой (900, 540)",
       [k for k in sent if k[0] == "move"] == [("move", 126, 256), ("move", 126, 256),
                                                ("move", 205, 286), ("move", 205, 286),
@@ -298,7 +300,7 @@ ef.notify = _real_notify3c
 ef.MACRO_STATE.update(rec=False, stop=False, cancel=False)
 ef.CFG["cast_macro"] = [[0.0, "down", "r"], [0.2, "up", "r"], [0.5, "down", "l"], [0.7, "up", "l"]]
 
-print("== 3d. Стартовая точка: glide по факту, дельты в теле, возврат мыши домой ==")
+print("== 3d. Атомарный повтор: клики по запасным точкам (старт+сумма дельт) ==")
 sent.clear()
 _gd, _cp = ef._glide, ef.cursor_pos
 glides_d = []
@@ -310,13 +312,13 @@ ok_d = ef.macro_run(start_macro)
 ef._glide, ef.cursor_pos = _gd, _cp
 flags_d = [k[1] for k in sent if k[0] == "mouse" and k[1] != ef.MOUSEEVENTF_MOVE]
 mv_d = [k for k in sent if k[0] == "mouse" and k[1] == ef.MOUSEEVENTF_MOVE]
-check("мышь переведена в точку старта записи (340, 512), кнопки как записаны",
-      ok_d is True and glides_d == [(340, 512)]
+check("кнопки как записаны (ПКМ -> ЛКМ), glide НЕ вызван",
+      ok_d is True and glides_d == []
       and flags_d == [ef.MOUSEEVENTF_RIGHTDOWN, ef.MOUSEEVENTF_RIGHTUP,
                       ef.MOUSEEVENTF_LEFTDOWN, ef.MOUSEEVENTF_LEFTUP],
       f"glide={glides_d} flags={flags_d}")
-check("тело — относительная дельта (-135, -226) через MOUSEEVENTF_MOVE",
-      mv_d == [("mouse", ef.MOUSEEVENTF_MOVE, -135, -226)], str(mv_d))
+check("дельты НЕ подаются вовсе",
+      mv_d == [], str(mv_d))
 check("ЯКОРЯ КЛИКОВ: ПКМ (down+up) в старте (340, 512), ЛКМ (down+up) в (205, 286) = 340-135, 512-226; финал — домой (60, 60)",
       [k for k in sent if k[0] == "move"] == [("move", 340, 512), ("move", 340, 512),
                                                ("move", 205, 286), ("move", 205, 286),
@@ -353,25 +355,25 @@ ef._glide, ef.cursor_pos, ef.grab, ef.nap = _gd3f, _cp3f, _gr3f, _np3f
 mv3f = [k for k in sent if k[0] == "move"]
 check("клик 1-в-1 по ПИКСЕЛЯМ ИГРЫ: был (195, 150), UI переехал -> (125, 105), возврат домой",
       ok3f1 is True and ok3f2 is True
-      and mv3f[:2] == [("move", 195, 150), ("move", 195, 150)]
-      and mv3f[3:5] == [("move", 125, 105), ("move", 125, 105)]
-      and mv3f[-1] == ("move", 500, 400), str(mv3f))
+      and mv3f == [("move", 195, 150), ("move", 195, 150), ("move", 500, 400),
+                    ("move", 125, 105), ("move", 125, 105), ("move", 500, 400)],
+      str(mv3f))
 
-print("== 3g. Дельты при зажатой кнопке НЕ проигрываются (курсором рулит игра) ==")
+print("== 3g. Атомарность: ни одна дельта не доходит до мыши, движения только прыжками к кликам ==")
 sent.clear()
 _gd3g, _cp3g, _np3g = ef._glide, ef.cursor_pos, ef.nap
 ef._glide = lambda x, y, dur=0.22: None
 ef.cursor_pos = lambda: (77, 77)
 ef.nap = lambda sec: None
-macro3g = [[0.0, "p", 10, 10], [0.1, "down", "r"], [0.2, "m", 900, 900],
-           [0.3, "up", "r"], [0.4, "m", 5, 5], [0.5, "up", "l"]]
+macro3g = [[0.0, "p", 10, 10], [0.1, "m", 900, 900], [0.2, "m", 7, 7],
+           [0.3, "down", "r"], [0.4, "up", "r"]]
 ok3g = ef.macro_run(macro3g)
 ef._glide, ef.cursor_pos, ef.nap = _gd3g, _cp3g, _np3g
 mv3g = [k for k in sent if k[0] == "move"]
 mm3g = [k for k in sent if k[0] == "mouse" and k[1] == ef.MOUSEEVENTF_MOVE]
-check("рывок (900, 900) при зажатой ПКМ подавлен; свободная дельта (5, 5) подана",
-      ok3g is True and mm3g == [("mouse", ef.MOUSEEVENTF_MOVE, 5, 5)]
-      and mv3g == [("move", 10, 10), ("move", 10, 10), ("move", 915, 915), ("move", 77, 77)],
+check("дельты (900,900) и (7,7) НЕ поданы; клик в запасной точке (917,917)=10+900+7; возврат домой",
+      ok3g is True and mm3g == []
+      and mv3g == [("move", 917, 917), ("move", 917, 917), ("move", 77, 77)],
       f"mouse_moves={mm3g} moves={mv3g}")
 
 print("== 4. macro_run: произвольные кнопки и порядок (ПКМ-режим без движений) ==")

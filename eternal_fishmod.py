@@ -2758,10 +2758,8 @@ def macro_record():
       * у каждого нажатия — ЯКОРЬ: снимок кадра игры вокруг точки клика
         [t, "down", btn, x, y, png-base64]; при повторе клик встаёт туда, где
         этот кусочек интерфейса на экране СЕЙЧАС (метод «под курсор игры»);
-      * на время записи баллистика курсора Windows выключается (ускорение
-        «повышенная точность указателя» off + скорость указателя 10 = 1:1)
-        и восстанавливается после — дельты пишутся ровно такие, какие ты
-        делаешь рукой;
+      * баллистика мыши НЕ трогается (v1.19): запись идёт с твоей обычной
+        сенсой, ничего в системе не переключается;
       * при работающем боте запись отклоняется с тостом (конфликт ввода).
     Все флаги сбрасываются в finally — запись не может «залипнуть»."""
     if MACRO_STATE["rec"]:                  # тумблер: повторное нажатие = стоп и сохранить
@@ -2778,7 +2776,6 @@ def macro_record():
         events = []
         clicks = 0
         cancelled = False
-        bal = None                            # баллистика курсора до записи
         try:
             for i in (3, 2, 1):
                 if MACRO_STATE["cancel"] or MACRO_STATE["stop"]:
@@ -2790,8 +2787,6 @@ def macro_record():
             if not MACRO_STATE["cancel"]:
                 notify("toast_rec_on", "ok")
                 log(t("toast_rec_on"))
-                bal = _ballistics_get()
-                _ballistics_set(_NO_ACCEL)   # пишем дельты 1:1: EPP off, скорость 10
                 t0 = time.perf_counter()
                 prev = {"l": False, "r": False}
                 last_act = t0
@@ -2858,7 +2853,6 @@ def macro_record():
             except Exception:
                 pass
         finally:
-            _ballistics_set(bal)             # вернуть баллистику как была
             cancelled = bool(MACRO_STATE["cancel"])
             MACRO_STATE["rec"] = False
             MACRO_STATE["stop"] = False
@@ -3052,96 +3046,69 @@ def _macro_fire(kind, btn):
 
 
 def macro_run(ev):
-    """ТОЧНОЕ воспроизведение записи (v1.17 — так, как её сделала твоя рука):
-      1) мышь ставится в ТОЧКУ НАЧАЛА записи (плавный перевод + точная посадка) —
-         каждый повтор стартует с одного и того же места;
-      2) на время повтора ВЫКЛЮЧАЕТСЯ баллистика курсора Windows (ускорение
-         «повышенная точность указателя» + скорость 10 = ×1.0): записанные дельты
-         уже содержат реакцию системы на твою руку, повторное её применение
-         разгоняло движение («быстрая сенса»);
-      3) записанные ОТНОСИТЕЛЬНЫЕ дельты подаются как MOUSEEVENTF_MOVE — ровно тот
-         же поток ввода, что от физической мыши: никакого пересчёта координат
-         (DPI/мониторы/масштаб) — «уводы вниз-вверх» и дёрганья невозможны;
-      4) ПОПАДАНИЕ — ПО КАДРУ ИГРЫ (метод «под курсор игры»): игровой курсор
-         рисует сама игра, ОС про него не знает, поэтому перед каждым кликом
-         записанный кусочек экрана (якорь) НАХОДИТСЯ НА ТЕКУЩЕМ КАДРЕ, и клик
-         встаёт туда, где этот кусочек интерфейса сейчас. Нет кадра — запасные
-         точки: записанная координата клика / сумма дельт. Дрейф между закидами
-         и масштабирование движений на попадание не влияют в принципе;
-      5) дельты при ЗАЖАТОЙ кнопке не проигрываются: пока кнопка держится,
-         курсором рулит игра (камера/захват) — эти движения не наши;
-      6) темп по абсолютным часам от одного t0; догоняющих рывков нет;
-      7) незакрытые нажатия закрывает _macro_balance — ни одна кнопка не «залипнет»;
-      8) после повтора баллистика восстанавливается как была, мышь возвращается
-         туда, где была до повтора.
+    """АТОМАРНЫЙ ПОВТОР МАКРО (v1.19) — курсор вообще не «едет», улетать нечему:
+      1) записанные дельты движения НЕ подаются вовсе: закиду важны КЛИКИ, а не
+         траектория. На каждое нажатие/отпускание — ровно один мгновенный прыжок
+         курсора и сразу клик; больше мышь не двигается ничем;
+      2) точка прыжка — по КАДРУ ИГРЫ (метод «под курсор игры»): записанный
+         снимок-якорь ищется на текущем кадре, и клик встаёт туда, где кусочек
+         интерфейса находится СЕЙЧАС; кадр недоступен — запасные точки:
+         записанная координата клика, затем старт + сумма записанных дельт;
+      3) баллистика мыши НЕ трогается ни при записи, ни при повторе — твоя сенса
+         всегда остаётся твоей;
+      4) паузы между кликами — по абсолютным часам, как записано; незакрытые
+         нажатия закрывает _macro_balance; после повтора мышь возвращается туда,
+         где была до него.
     True — доиграно; False — прервано записью."""
     events = _macro_balance([list(e) for e in (ev or [])])
     if not events:
         return True
     start = next((e for e in events if e[1] == "p" and len(e) == 4), None)
-    body = [e for e in events if e[1] != "p"]
-    if start:                                # точный перевод в точку начала записи
-        try:
-            _glide(int(start[2]), int(start[3]))
-        except Exception:                    # без glide — хотя бы точный прыжок в цель
-            mouse_move_abs(int(start[2]), int(start[3]))
-    bal = _ballistics_get()
-    _ballistics_set(_NO_ACCEL)               # дельты 1:1: EPP off, скорость 10
+    px, py = (int(start[2]), int(start[3])) if start else (None, None)
     home = None                              # куда вернуть мышь после повтора
     try:
         home = cursor_pos()
     except Exception:
         pass
-    px, py = (int(start[2]), int(start[3])) if start else (None, None)
     ok = True
-    held = set()                             # зажатые кнопки в ходе повтора
-    fixed = {}                               #resolved-точки кликов (для парных up)
+    fixed = {}                               # точки кликов (up — в ту же точку)
     try:
         t0 = time.perf_counter()
-        for ev_i in body:
+        for ev_i in events:
             left = t0 + float(ev_i[0]) - time.perf_counter()
             if left > 0:
                 nap(left)                    # записанная секунда события
             kind = ev_i[1]
-            if kind == "m":                  # ОТНОСИТЕЛЬНОЕ движение — как у мыши
-                dx, dy = int(ev_i[2]), int(ev_i[3])
-                if px is not None:           # счётчик записанного пути (запасной якорь)
-                    px += dx
-                    py += dy
-                if not held:                 # при ЗАЖАТОЙ кнопке курсором рулит игра —
-                    _send_mouse(MOUSEEVENTF_MOVE, dx, dy)  # эти дельты не наши
-            elif kind == "down":
+            if kind == "p":                  # старт — лишь запасной отсчёт, не движение
+                continue
+            if kind == "m":                  # траекторию не стримим — только счёт
+                if px is not None:           # (запасные точки для кликов без якорей)
+                    px += int(ev_i[2])
+                    py += int(ev_i[3])
+                continue
+            if kind == "down":
                 btn = ev_i[2]
-                held.add(btn)
                 spot = None
                 if len(ev_i) >= 6:           # ЯКОРЬ ПО КАДРУ ИГРЫ: где кусочек
                     spot = _anchor_find(ev_i[5])   # экрана сейчас — туда и клик
                 if spot is None:             # запасные точки: записанная координата
                     spot = (int(ev_i[3]), int(ev_i[4])) if len(ev_i) >= 5 else (
-                        px, py)              # клика / сумма дельт до клика
-                if spot is not None:
-                    try:
-                        mouse_move_abs(int(spot[0]), int(spot[1]))
-                    except Exception:
-                        pass
+                        (px, py) if px is not None else None)
                 fixed[btn] = spot
-                _macro_fire("down", btn)
-            elif kind == "up":
+            else:                            # up
                 btn = ev_i[2]
-                held.discard(btn)
                 spot = fixed.get(btn) if fixed.get(btn) is not None else (
                     (px, py) if px is not None else None)
-                if spot is not None:
-                    try:
-                        mouse_move_abs(int(spot[0]), int(spot[1]))
-                    except Exception:
-                        pass
-                _macro_fire("up", btn)
+            if spot is not None:             # АТОМАРНО: один прыжок -> сразу клик
+                try:
+                    mouse_move_abs(int(spot[0]), int(spot[1]))
+                except Exception:
+                    pass
+            _macro_fire(kind, btn)
             if MACRO_STATE["rec"]:
                 ok = False
                 break
     finally:
-        _ballistics_set(bal)                 # вернуть баллистику как была
         if home:                             # вернуть мышь, откуда начали повтор
             try:
                 mouse_move_abs(int(home[0]), int(home[1]))
