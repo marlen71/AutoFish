@@ -511,4 +511,58 @@ if fails:
     for f in fails:
         print("  -", f)
     sys.exit(1)
+print("== 13. Детектор игрового курсора (v1.23) ==")
+img13 = np.full((600, 900, 3), 25, np.uint8)
+ef.cv2.fillPoly(img13, [np.array([[400, 300], [414, 309], [400, 318]], np.int32)], (255, 255, 255))
+pt13 = ef._game_cursor(img13)
+check("белая стрелка найдена, центр ~ (407, 309)",
+      pt13 is not None and abs(pt13[0] - 407) <= 3 and abs(pt13[1] - 309) <= 3, str(pt13))
+check("чистый кадр -> None", ef._game_cursor(np.full((600, 900, 3), 25, np.uint8)) is None)
+img13b = np.full((600, 900, 3), 25, np.uint8)
+img13b[100:300, 100:300] = 255
+check("большое белое пятно (кнопка/окно) -> None", ef._game_cursor(img13b) is None)
+
+print("== 14. Замкнутый контур: игровой курсор доведён до цели (v1.23) ==")
+
+
+class ServoUser32:
+    def __init__(self):
+        self.moves = []
+
+    def SetCursorPos(self, x, y):
+        self.moves.append((x, y))
+        return 1
+
+
+class ServoUser32Spy(ServoUser32):
+    pass
+
+
+u32_14 = ServoUser32()
+_old_windll = ef.ctypes.windll
+ef.ctypes.windll = types.SimpleNamespace(user32=u32_14)
+_seq14 = [(350, 220), (300, 220)]        # шаг 1: игровой курсор мимо на +50; шаг 2: на цели
+
+
+def _servo_grab(rect=None):
+    if not _seq14:
+        return np.full((1080, 1920, 3), 20, np.uint8)
+    fx, fy = _seq14.pop(0)
+    img = np.full((1080, 1920, 3), 20, np.uint8)
+    ef.cv2.fillPoly(img, [np.array([[fx - 7, fy - 9], [fx + 7, fy], [fx - 7, fy + 9]], np.int32)],
+                    (255, 255, 255))
+    return img
+
+
+_real_grab14, _real_nap14 = ef.grab, ef.nap
+ef.grab = _servo_grab
+ef.nap = lambda sec: None
+ok14, cur14 = ef._drive_game_cursor(7777, 300, 220, "r")
+ef.grab, ef.nap = _real_grab14, _real_nap14
+ef.ctypes.windll = _old_windll
+check("контур сошёлся: ИГРОВОЙ курсор на цели, возврат — компенсированная точка (250, 220)",
+      ok14 is True and cur14 == (250, 220), "%s %s" % (ok14, cur14))
+check("2 шага: 2-й SetCursorPos скомпенсировал промах +50 (игра смещает курсор)",
+      len(u32_14.moves) == 2 and u32_14.moves[-1] == (250, 220), str(u32_14.moves))
+
 print("ALL FLOW CHECKS PASSED")

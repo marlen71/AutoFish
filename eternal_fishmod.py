@@ -341,6 +341,8 @@ STRINGS = {
     "log_equip_rod": "🎣 Удочка найдена: ({x}, {y}), точность {s:.2f} — ПКМ",
     "log_equip_rod_nofind": "❌ Удочка не найдена в инвентаре (шаблон rod.png) — открой инвентарь",
     "log_equip_win": "🖱 Клики — прямо в окно интерфейса игры, курсор Windows не двигается",
+    "log_drive_step": "Контур: игровой курсор ({x}, {y})",
+    "log_drive_fail": "Контур не подтвердил курсор на цели — кликаю как есть",
     "log_equip_cur": "🖱 Окно интерфейса не найдено — кликаю курсором",
     "log_use_nofind": "❌ Меню предмета не открылось (красная строка не найдена)",
     "log_equip_miss": "Кадр момента промаха сохранён: miss_rod.png — пришли его, если промах повторится",
@@ -453,6 +455,8 @@ STRINGS = {
     "log_equip_rod": "🎣 Rod found: ({x}, {y}), score {s:.2f} — RMB",
     "log_equip_rod_nofind": "❌ Rod not found in the inventory (rod.png template) — open the inventory",
     "log_equip_win": "🖱 Clicks go straight into the game UI window; the Windows cursor never moves",
+    "log_drive_step": "Servo: game cursor at ({x}, {y})",
+    "log_drive_fail": "Servo did not confirm the cursor on target — clicking anyway",
     "log_equip_cur": "🖱 UI window not found — clicking via cursor",
     "log_use_nofind": "❌ Item menu did not open (red row not found)",
     "log_equip_miss": "Frame of the miss saved: miss_rod.png — send it if the miss repeats",
@@ -565,6 +569,8 @@ STRINGS = {
     "log_equip_rod": "🎣 Вудку знайдено: ({x}, {y}), точність {s:.2f} — ПКМ",
     "log_equip_rod_nofind": "❌ Вудку не знайдено в інвентарі (шаблон rod.png) — відкрий інвентар",
     "log_equip_win": "🖱 Кліки — прямо у вікно інтерфейсу гри, курсор Windows не рухається",
+    "log_drive_step": "Контур: ігровий курсор ({x}, {y})",
+    "log_drive_fail": "Контур не підтвердив курсор на цілі — клікаю як є",
     "log_equip_cur": "🖱 Вікно інтерфейсу не знайдено — клікаю курсором",
     "log_use_nofind": "❌ Меню предмета не відкрилося (червоний рядок не знайдено)",
     "log_equip_miss": "Кадр моменту промаху збережено: miss_rod.png — надішли його, якщо промах повториться",
@@ -2771,6 +2777,95 @@ def _ui_click(fx, fy, btn, down):
     return "cur"
 
 
+def _game_cursor(frame):
+    """Детектор ИГРОВОГО курсора (v1.23): клиент рисует на кадре белую стрелку
+    ~14×19 px с чёрной обводкой. Ищем компактный почти-белый вертикальный кластер
+    в ЛЕВОЙ панели (x < 40% ширины — там слоты инвентаря и меню предмета),
+    отбрасывая крупные/плоские пятна (кнопки, ползунки, текст тултипа) и всю
+    правую половину экрана (там белые элементы боевого UI ловят детектор).
+    (x, y) центра стрелки или None."""
+    try:
+        g = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        m = (g > 225).astype(np.uint8)
+        n, _lab, stats, cent = cv2.connectedComponentsWithStats(m, 8)
+        best = None
+        H, W = frame.shape[:2]
+        x_lim = int(W * 0.40)                # инвентарь/меню — левая панель
+        for i in range(1, n):
+            x, y, w, h, area = stats[i]
+            if 6 <= w <= 26 and 9 <= h <= 34 and h > w and area >= 25:
+                fill = area / float(w * h)
+                if 0.25 <= fill <= 0.75 and y < H * 0.85 and x + w <= x_lim:
+                    if best is None or area > best[4]:
+                        best = stats[i]
+        if best is None:
+            return None
+        x, y, w, h, area = (int(v) for v in best)
+        return (x + w // 2, y + h // 2)
+    except Exception:
+        return None
+
+
+def _drive_game_cursor(hwnd, tx, ty, btn="r", timeout=1.6):
+    """ЗАМКНУТЫЙ КОНТУР (v1.23): ведём ИГРОВОЙ курсор в цель (tx, ty) — как человек.
+    Каждый шаг: ставим КУРСОР WINDOWS в цель (raw-input игры двигает её игровой
+    курсор), берём кадр, находим игровой курсор детектором, считаем остаточный
+    промах и КОМПЕНСИРУЕМ его следующим шагом. Когда курсор игры стоит на цели
+    (или шаги кончились) — клик. Возвращает (True, (wx, wy)) при попадании, где
+    (wx, wy) — последняя точка КУРСОРА WINDOWS (компенсированная): клик курсором
+    надо ставить именно в неё, иначе фолбэк передёрнет курсор на сырую цель и
+    компенсация собьётся."""
+    w = getattr(ctypes, "windll", None)
+    if w is None:                         # не-Windows среда (тест-раннер) — сервопривод недоступен
+        return (False, None)
+    u32 = w.user32
+    m = monitor()
+    ox, oy = int(m["left"]), int(m["top"])
+    t_end = time.perf_counter() + timeout
+    cx = cy = None                            # где ИГРОВОЙ курсор сейчас (по кадру)
+    off_x = off_y = 0.0                       # ошибка: курсор Windows vs курсор игры
+    for _step in range(8):
+        if cx is not None and abs(tx - cx) <= 6 and abs(ty - cy) <= 6:
+            break                             # курсор игры на цели
+        # хотим игровой курсор в (tx, ty): курсор Windows = цель + накопл. ошибка
+        off_x = max(-160.0, min(160.0, off_x))   # ошибка не должна уйти в бесконечность
+        off_y = max(-160.0, min(160.0, off_y))
+        wx = int(max(0, min(4000, tx + off_x)))
+        wy = int(max(0, min(4000, ty + off_y)))
+        u32.SetCursorPos(ox + wx, oy + wy)
+        nap(0.12)                             # игре/кадру нужно время
+        fr = grab()
+        cur = _game_cursor(fr) if fr is not None and fr.size else None
+        if cur:
+            nx_, ny_ = int(cur[0]), int(cur[1])
+            if _step and nx_ == cx and ny_ == cy:
+                break                         # курсор игры не отозвался — дальше ждать глупо
+            cx, cy = nx_, ny_
+            off_x, off_y = float(wx - cx), float(wy - cy)   # накопленная ошибка
+            log(t("log_drive_step", x=cx, y=cy))
+        if time.perf_counter() >= t_end:
+            break
+    okc = cx is not None and abs(tx - cx) <= 14 and abs(ty - cy) <= 14
+    return okc, (wx, wy)
+
+
+def _aim_click(hwnd, tx, ty):
+    """Сервопривод (v1.23) + выбор точки для клика. Возвращает (x, y) для _ui_click:
+    окно интерфейса найдено — кликаем в саму цель (сообщение в окно, курсор игры
+    уже доведён туда сервоприводом); окна нет — клик курсором ПО КОМПЕНСИРОВАННОЙ
+    точке Windows-курсора (сырая цель сдвинула бы игровой курсор обратно мимо)."""
+    if hwnd:
+        okc, _w = _drive_game_cursor(hwnd, tx, ty)
+        if not okc:
+            log(t("log_drive_fail"))
+        return (int(tx), int(ty))
+    okc, w = _drive_game_cursor(None, tx, ty)
+    if okc and w is not None:
+        return (int(w[0]), int(w[1]))
+    log(t("log_drive_fail"))
+    return (int(tx), int(ty))
+
+
 def _red_menu_row(frame):
     """Красная строка меню предмета («Выбросить»): строка с плотной насыщенно-красной
     заливкой. Возвращает (x_центр, y) строки или None. «Использовать» — белая строка
@@ -2875,8 +2970,10 @@ def vision_equip():
         return False
     rx, ry = int(best[1][0]), int(best[1][1])
     log(t("log_equip_rod", x=rx, y=ry, s=best[0]))
-    how = _ui_click(rx, ry, "r", True)
-    _ui_click(rx, ry, "r", False)
+    hwnd = _cef_render_hwnd()
+    ax, ay = _aim_click(hwnd, rx, ry)
+    how = _ui_click(ax, ay, "r", True)
+    _ui_click(ax, ay, "r", False)
     log(t("log_equip_win") if how == "win" else t("log_equip_cur"))
     row, t_end = None, time.perf_counter() + 1.5
     while time.perf_counter() < t_end:       # ждём меню предмета (до 1.5 с)
@@ -2890,8 +2987,9 @@ def vision_equip():
         log(t("log_use_nofind"))
         return False
     ux, uy = int(row[0]), max(0, int(row[1]) - max(18, int(fr.shape[0] * 0.030)))
-    _ui_click(ux, uy, "l", True)
-    _ui_click(ux, uy, "l", False)
+    ax, ay = _aim_click(hwnd, ux, uy)
+    _ui_click(ax, ay, "l", True)
+    _ui_click(ax, ay, "l", False)
     log(t("log_use_found", ux=ux, uy=uy))
     nap(float(CFG.get("after_equip_delay", 1.2)))
     return True
