@@ -329,6 +329,51 @@ check("зажатая ПКМ в конце записи получает отп�
 b2 = ef._macro_balance([[0.0, "down", "l"], [0.1, "up", "l"], [0.3, "down", "r"]])
 check("парная запись не меняется по сути", len(b2) == 4 and b2[-1] == [0.32, "up", "r"], str(b2))
 
+print("== 3f. Якоря по кадру игры: клик встаёт туда, где кусочек UI СЕЙЧАС ==")
+import base64 as _b64
+sent.clear()
+_gd3f, _cp3f, _gr3f, _np3f = ef._glide, ef.cursor_pos, ef.grab, ef.nap
+ef._glide = lambda x, y, dur=0.22: None
+ef.cursor_pos = lambda: (500, 400)
+ef.nap = lambda sec: None
+frame3f = np.zeros((400, 600, 3), np.uint8)
+frame3f[135:165, 175:215] = (40, 90, 210)
+frame3f[140:160, 180:210] = (220, 160, 30)
+_ok, _buf = cv2.imencode(".png", frame3f[122:178, 167:223])
+b643f = _b64.b64encode(_buf.tobytes()).decode()
+ef.grab = lambda rect=None: frame3f.copy()
+macro3f = [[0.0, "p", 10, 10], [0.1, "down", "l", 195, 150, b643f], [0.2, "up", "l"]]
+ok3f1 = ef.macro_run(macro3f)
+frame3f2 = np.zeros((400, 600, 3), np.uint8)     # игра переехала: тот же кусок UI
+frame3f2[90:120, 105:145] = (40, 90, 210)        # теперь вокруг (125, 105)
+frame3f2[95:115, 110:140] = (220, 160, 30)
+ef.grab = lambda rect=None: frame3f2.copy()
+ok3f2 = ef.macro_run(macro3f)
+ef._glide, ef.cursor_pos, ef.grab, ef.nap = _gd3f, _cp3f, _gr3f, _np3f
+mv3f = [k for k in sent if k[0] == "move"]
+check("клик 1-в-1 по ПИКСЕЛЯМ ИГРЫ: был (195, 150), UI переехал -> (125, 105), возврат домой",
+      ok3f1 is True and ok3f2 is True
+      and mv3f[:2] == [("move", 195, 150), ("move", 195, 150)]
+      and mv3f[3:5] == [("move", 125, 105), ("move", 125, 105)]
+      and mv3f[-1] == ("move", 500, 400), str(mv3f))
+
+print("== 3g. Дельты при зажатой кнопке НЕ проигрываются (курсором рулит игра) ==")
+sent.clear()
+_gd3g, _cp3g, _np3g = ef._glide, ef.cursor_pos, ef.nap
+ef._glide = lambda x, y, dur=0.22: None
+ef.cursor_pos = lambda: (77, 77)
+ef.nap = lambda sec: None
+macro3g = [[0.0, "p", 10, 10], [0.1, "down", "r"], [0.2, "m", 900, 900],
+           [0.3, "up", "r"], [0.4, "m", 5, 5], [0.5, "up", "l"]]
+ok3g = ef.macro_run(macro3g)
+ef._glide, ef.cursor_pos, ef.nap = _gd3g, _cp3g, _np3g
+mv3g = [k for k in sent if k[0] == "move"]
+mm3g = [k for k in sent if k[0] == "mouse" and k[1] == ef.MOUSEEVENTF_MOVE]
+check("рывок (900, 900) при зажатой ПКМ подавлен; свободная дельта (5, 5) подана",
+      ok3g is True and mm3g == [("mouse", ef.MOUSEEVENTF_MOVE, 5, 5)]
+      and mv3g == [("move", 10, 10), ("move", 10, 10), ("move", 915, 915), ("move", 77, 77)],
+      f"mouse_moves={mm3g} moves={mv3g}")
+
 print("== 4. macro_run: произвольные кнопки и порядок (ПКМ-режим без движений) ==")
 sent.clear()
 ok4 = ef.macro_run(ef.CFG["cast_macro"])

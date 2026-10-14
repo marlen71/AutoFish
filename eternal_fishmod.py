@@ -2752,7 +2752,12 @@ def macro_record():
       * кнопки пишутся по переходам down/up (VK-поллинг 100 Гц), движения — шагом
         >= 2 px, время — от t0 записи (monotonic);
       * ОТНОСИТЕЛЬНЫЕ дельты движения мыши [t, "m", dx, dy] — ровно то, что
-        получает игра; повтор не зависит от DPI/маппинга координат;
+        получает игра; повтор не зависит от DPI/маппинга координат. Пока кнопка
+        ЗАЖАТА, дельты НЕ пишутся: курсором рулит игра (камера/захват), и её
+        рывки в запись не попадают;
+      * у каждого нажатия — ЯКОРЬ: снимок кадра игры вокруг точки клика
+        [t, "down", btn, x, y, png-base64]; при повторе клик встаёт туда, где
+        этот кусочек интерфейса на экране СЕЙЧАС (метод «под курсор игры»);
       * на время записи баллистика курсора Windows выключается (ускорение
         «повышенная точность указателя» off + скорость указателя 10 = 1:1)
         и восстанавливается после — дельты пишутся ровно такие, какие ты
@@ -2802,23 +2807,42 @@ def macro_record():
                     for name, vk in (("l", 0x01), ("r", 0x02)):   # VK_LBUTTON, VK_RBUTTON
                         down = bool(ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000)
                         if down != prev[name]:
-                            events.append([round(now - t0, 3), "down" if down else "up", name])
-                            prev[name] = down
+                            ev = [round(now - t0, 3), "down" if down else "up", name]
                             if down:
+                                # ЯКОРЬ КЛИКА: кадр игры вокруг точки нажатия — при
+                                # повторе клик встанет по ПИКСЕЛЯМ ИГРЫ (курсор
+                                # Windows и игровой спрайт на попадание не влияют)
+                                try:
+                                    cp = cursor_pos()
+                                    ev += [int(cp[0]), int(cp[1])]
+                                    img = _anchor_capture(cp[0], cp[1])
+                                    if img:
+                                        ev.append(img)
+                                except Exception:
+                                    pass
                                 clicks += 1
+                            events.append(ev)
+                            prev[name] = down
                             last_act = now
                     try:
                         pos = cursor_pos()
                     except Exception:
                         pos = None
                     if pos is not None and last_pos is not None and pos != last_pos:
-                        # ОТНОСИТЕЛЬНАЯ дельта — ровно то, что получает игра от
-                        # физической мыши: повтор не зависит ни от DPI/маппинга
-                        # координат, ни от того, как игра трактует позицию курсора
-                        events.append([round(now - t0, 3), "m",
-                                       int(pos[0] - last_pos[0]), int(pos[1] - last_pos[1])])
-                        last_pos = pos
-                        last_act = now
+                        if prev["l"] or prev["r"]:
+                            # Кнопка ЗАЖАТА — курсором рулит ИГРА (камера/захват):
+                            # именно эти чужие рывки таскали мышь «в самый низ».
+                            # Дельты НЕ пишем, путь просто продолжаем с нового места
+                            last_pos = pos
+                            last_act = now
+                        else:
+                            # ОТНОСИТЕЛЬНАЯ дельта — ровно то, что получает игра от
+                            # физической мыши: повтор не зависит ни от DPI/маппинга
+                            # координат, ни от того, как игра трактует позицию курсора
+                            events.append([round(now - t0, 3), "m",
+                                           int(pos[0] - last_pos[0]), int(pos[1] - last_pos[1])])
+                            last_pos = pos
+                            last_act = now
                     if MACRO_STATE["cancel"] or MACRO_STATE["stop"]:
                         break               # бинд/кнопка: стоп (cancel решит судьбу записи)
                     if clicks >= 2 and now - last_act >= 2.0:
@@ -2972,6 +2996,53 @@ def _ballistics_set(st):
     _mspeed_set(st[1])
 
 
+_ANCHOR_CROP = 56                        # снимок-якорь: кусочек кадра вокруг клика
+_ANCHOR_THR = 0.82                       # порог узнавания кусочка на новом кадре
+
+
+def _anchor_capture(px, py):
+    """Снимок-якорь: кусочек КАДРА ИГРЫ вокруг точки клика (base64 PNG).
+    None — кадр недоступен (якорь не критичен: остаются запасные точки)."""
+    try:
+        frame = grab()
+        if frame is None or frame.size == 0:
+            return None
+        h, w = frame.shape[:2]
+        r = _ANCHOR_CROP // 2
+        x0, y0 = max(0, int(px) - r), max(0, int(py) - r)
+        x1, y1 = min(w, x0 + _ANCHOR_CROP), min(h, y0 + _ANCHOR_CROP)
+        if x1 - x0 < 16 or y1 - y0 < 16:
+            return None
+        ok, buf = cv2.imencode(".png", frame[y0:y1, x0:x1])
+        return base64.b64encode(buf.tobytes()).decode("ascii") if ok else None
+    except Exception:
+        return None
+
+
+def _anchor_find(img_b64):
+    """Найти снимок-якорь на ТЕКУЩЕМ кадре игры: (x, y) центра или None.
+    Метод «под курсор игры»: игровой курсор рисует сама игра и ОС про него не
+    знает, поэтому попадание строится по ПИКСЕЛЯМ ИГРЫ — где записанный кусочек
+    интерфейса находится сейчас, туда и ставится клик. Ни курсор Windows, ни
+    игровой спрайт, ни масштабирование движений в расчёт не идут."""
+    try:
+        t_ = cv2.imdecode(np.frombuffer(base64.b64decode(img_b64), np.uint8),
+                          cv2.IMREAD_COLOR)
+        if t_ is None or t_.size == 0:
+            return None
+        frame = grab()
+        if frame is None or frame.size == 0:
+            return None
+        s_, pt, _ = _match_scales(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY),
+                                  cv2.cvtColor(t_, cv2.COLOR_BGR2GRAY),
+                                  max_n=1, thr=_ANCHOR_THR)
+        if pt and float(s_ or 0) >= _ANCHOR_THR:
+            return (int(pt[0]), int(pt[1]))
+    except Exception:
+        pass
+    return None
+
+
 def _macro_fire(kind, btn):
     """Одно нажатие/отпускание записанной кнопки."""
     if kind == "down":
@@ -2991,13 +3062,17 @@ def macro_run(ev):
       3) записанные ОТНОСИТЕЛЬНЫЕ дельты подаются как MOUSEEVENTF_MOVE — ровно тот
          же поток ввода, что от физической мыши: никакого пересчёта координат
          (DPI/мониторы/масштаб) — «уводы вниз-вверх» и дёрганья невозможны;
-      4) ПЕРЕД КАЖДЫМ кликом курсор ставится ровно в ЗАПИСАННУЮ точку клика
-         (якорь = точка старта + сумма дельт до клика): попадание 1-в-1 при
-         каждом закиде, даже если система/игра масштабировали относительные
-         движения, — дрейф от закида к закиду исключён в принципе;
-      5) темп по абсолютным часам от одного t0; догоняющих рывков нет;
-      6) незакрытые нажатия закрывает _macro_balance — ни одна кнопка не «залипнет»;
-      7) после повтора баллистика восстанавливается как была, мышь возвращается
+      4) ПОПАДАНИЕ — ПО КАДРУ ИГРЫ (метод «под курсор игры»): игровой курсор
+         рисует сама игра, ОС про него не знает, поэтому перед каждым кликом
+         записанный кусочек экрана (якорь) НАХОДИТСЯ НА ТЕКУЩЕМ КАДРЕ, и клик
+         встаёт туда, где этот кусочек интерфейса сейчас. Нет кадра — запасные
+         точки: записанная координата клика / сумма дельт. Дрейф между закидами
+         и масштабирование движений на попадание не влияют в принципе;
+      5) дельты при ЗАЖАТОЙ кнопке не проигрываются: пока кнопка держится,
+         курсором рулит игра (камера/захват) — эти движения не наши;
+      6) темп по абсолютным часам от одного t0; догоняющих рывков нет;
+      7) незакрытые нажатия закрывает _macro_balance — ни одна кнопка не «залипнет»;
+      8) после повтора баллистика восстанавливается как была, мышь возвращается
          туда, где была до повтора.
     True — доиграно; False — прервано записью."""
     events = _macro_balance([list(e) for e in (ev or [])])
@@ -3019,25 +3094,49 @@ def macro_run(ev):
         pass
     px, py = (int(start[2]), int(start[3])) if start else (None, None)
     ok = True
+    held = set()                             # зажатые кнопки в ходе повтора
+    fixed = {}                               #resolved-точки кликов (для парных up)
     try:
         t0 = time.perf_counter()
-        for t_rel, kind, *args in body:
-            left = t0 + float(t_rel) - time.perf_counter()
+        for ev_i in body:
+            left = t0 + float(ev_i[0]) - time.perf_counter()
             if left > 0:
                 nap(left)                    # записанная секунда события
+            kind = ev_i[1]
             if kind == "m":                  # ОТНОСИТЕЛЬНОЕ движение — как у мыши
-                dx, dy = int(args[0]), int(args[1])
-                if px is not None:           # счётчик записанного пути (для якорей)
+                dx, dy = int(ev_i[2]), int(ev_i[3])
+                if px is not None:           # счётчик записанного пути (запасной якорь)
                     px += dx
                     py += dy
-                _send_mouse(MOUSEEVENTF_MOVE, dx, dy)
-            elif kind in ("down", "up"):
-                if px is not None:           # ЯКОРЬ: клик ровно в записанной точке —
-                    try:                     # попадание не зависит от того, как
-                        mouse_move_abs(px, py)  # система масштабировала дельты
+                if not held:                 # при ЗАЖАТОЙ кнопке курсором рулит игра —
+                    _send_mouse(MOUSEEVENTF_MOVE, dx, dy)  # эти дельты не наши
+            elif kind == "down":
+                btn = ev_i[2]
+                held.add(btn)
+                spot = None
+                if len(ev_i) >= 6:           # ЯКОРЬ ПО КАДРУ ИГРЫ: где кусочек
+                    spot = _anchor_find(ev_i[5])   # экрана сейчас — туда и клик
+                if spot is None:             # запасные точки: записанная координата
+                    spot = (int(ev_i[3]), int(ev_i[4])) if len(ev_i) >= 5 else (
+                        px, py)              # клика / сумма дельт до клика
+                if spot is not None:
+                    try:
+                        mouse_move_abs(int(spot[0]), int(spot[1]))
                     except Exception:
                         pass
-                _macro_fire(kind, args[0])
+                fixed[btn] = spot
+                _macro_fire("down", btn)
+            elif kind == "up":
+                btn = ev_i[2]
+                held.discard(btn)
+                spot = fixed.get(btn) if fixed.get(btn) is not None else (
+                    (px, py) if px is not None else None)
+                if spot is not None:
+                    try:
+                        mouse_move_abs(int(spot[0]), int(spot[1]))
+                    except Exception:
+                        pass
+                _macro_fire("up", btn)
             if MACRO_STATE["rec"]:
                 ok = False
                 break

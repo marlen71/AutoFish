@@ -10,6 +10,7 @@ import json
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import math          # noqa: E402
+import base64
 import cv2           # noqa: E402
 import numpy as np   # noqa: E402
 
@@ -198,14 +199,18 @@ ef.CFG.update(ef.DEFAULT_CFG)
 ef.load_cfg()
 check("макро СТАРОГО формата (абсолютные \"move\") -> None: повтор невозможен",
       ef.CFG["cast_macro"] is None)
-_good = [[0.0, "p", 10, 20], [0.5, "down", "r"], [0.7, "up", "r"], [1.1, "m", 5, -3]]
+_ok_png, _png = cv2.imencode(".png", np.zeros((56, 56, 3), np.uint8))
+_img = base64.b64encode(_png.tobytes()).decode()
+assert _ok_png and len(_img) > 40
+_good = [[0.0, "p", 10, 20], [0.5, "down", "r", 30, 40, _img], [0.7, "up", "r"],
+         [1.1, "m", 5, -3]]
 with open(tmp3, "w", encoding="utf-8") as f:
     _json.dump({"cfg_version": 10, "cast_macro": _good, "lang": "ru"}, f)
 ef.CFG.clear()
 ef.CFG.update(ef.DEFAULT_CFG)
 ef.CFG_MIGRATED.clear()
 ef.load_cfg()
-check("корректное макро (дельты, cfg v10) переживает загрузку конфига",
+check("корректное макро (дельты + якорь png, cfg v10) переживает загрузку конфига",
       ef.CFG["cast_macro"] == _good)
 check("...и миграция его не трогает", "cast_macro" not in ef.CFG_MIGRATED, str(ef.CFG_MIGRATED))
 os.remove(tmp3)
