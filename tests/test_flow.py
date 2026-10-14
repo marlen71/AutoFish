@@ -182,7 +182,7 @@ ef.inventory_open = _real_invopen
 screens["cur"] = GAME
 check("инвентарь закрыт -> None (пропуск, не ошибка)", ef.bait_check() is None)
 
-print("== 3. macro_play: запись повторяется 1-в-1 (движения, ПКМ, ЛКМ, тайминги) ==")
+print("== 3. macro_play: точный повтор — glide в точку старта, затем запись 1-в-1 ==")
 screens["cur"] = INV
 sent.clear()
 ef.CFG["cast_macro"] = [
@@ -192,12 +192,19 @@ ef.CFG["cast_macro"] = [
 naps3 = []
 _real_nap3 = ef.nap
 ef.nap = lambda sec: naps3.append(round(float(sec), 3))
+_real_glide3, _real_cursor3 = ef._glide, ef.cursor_pos
+glides3 = []
+ef._glide = lambda x, y, dur=0.22: glides3.append((int(x), int(y)))
+ef.cursor_pos = lambda: (900, 540)          # мышь «фактически» в стороне
 ok3 = ef.macro_play()
 ef.nap = _real_nap3
+ef._glide, ef.cursor_pos = _real_glide3, _real_cursor3
 check("macro_play успех", ok3 is True)
+check("мышь ПЕРЕВЕДЕНА из фактического положения в точку начала записи (126, 256)",
+      glides3 == [(126, 256)], str(glides3))
 moves3 = [k for k in sent if k[0] == "move"]
-check("курсор встал в записанные точки: (126, 256) и (205, 286)",
-      moves3 == [("move", 126, 256), ("move", 205, 286)], str(moves3))
+check("далее запись 1-в-1: единственное записанное движение — (205, 286)",
+      moves3 == [("move", 205, 286)], str(moves3))
 flags3 = [k[1] for k in sent if k[0] == "mouse"]
 check("ровно одно ПКМ и одна ЛКМ — как в записи",
       flags3.count(ef.MOUSEEVENTF_RIGHTDOWN) == 1 and flags3.count(ef.MOUSEEVENTF_RIGHTUP) == 1
@@ -276,18 +283,39 @@ ef.keyboard = _types.SimpleNamespace(add_hotkey=lambda key, cb: _reg.append(key)
 ef.HK.clear()
 ef.register_hotkeys()
 check("бинд записи зарегистрирован (bind_macro)", ef.CFG["bind_macro"] in _reg, str(_reg))
+_src_gone = io.open(ef.__file__, encoding="utf-8").read()
+check("старые помощники нажатий удалены из кода",
+      not any(f"def {n}" in _src_gone for n in ("mouse_rmb_click", "mouse_lmb_click",
+                                                "pdi_key", "key_down", "key_up", "tap"))
+      and "idle_cursor" not in ef.DEFAULT_CFG and "idle_cursor" in ef.REMOVED_CFG_KEYS)
 ef.notify = _real_notify3c
 ef.MACRO_STATE.update(rec=False, stop=False, cancel=False)
 ef.CFG["cast_macro"] = [[0.0, "down", "r"], [0.2, "up", "r"], [0.5, "down", "l"], [0.7, "up", "l"]]
 
-print("== 3d. Стартовая точка: макро всегда начинается с постановки мыши ==")
+print("== 3d. Стартовая точка: glide по факту, без лишних движений в теле записи ==")
 sent.clear()
+_gd, _cp = ef._glide, ef.cursor_pos
+glides_d = []
+ef._glide = lambda x, y, dur=0.22: glides_d.append((int(x), int(y)))
+ef.cursor_pos = lambda: (60, 60)
 start_macro = [[0.0, "move", 340, 512], [0.3, "down", "r"], [0.45, "up", "r"],
                [1.4, "move", 205, 286], [1.7, "down", "l"], [1.85, "up", "l"]]
-ef.macro_run(start_macro)
-first_out = sent[0] if sent else None
-check("первое событие повтора — мышь в точке начала записи (340, 512)",
-      first_out == ("move", 340, 512), str(sent[:2]))
+ok_d = ef.macro_run(start_macro)
+ef._glide, ef.cursor_pos = _gd, _cp
+flags_d = [k[1] for k in sent if k[0] == "mouse"]
+check("мышь переведена в точку старта записи (340, 512), запись проиграна",
+      ok_d is True and glides_d == [(340, 512)]
+      and flags_d == [ef.MOUSEEVENTF_RIGHTDOWN, ef.MOUSEEVENTF_RIGHTUP,
+                      ef.MOUSEEVENTF_LEFTDOWN, ef.MOUSEEVENTF_LEFTUP],
+      f"glide={glides_d} flags={flags_d}")
+check("стартовая точка не дублируется движением внутри записи",
+      not any(k == ("move", 340, 512) for k in sent), str([k for k in sent if k[0] == "move"]))
+
+print("== 3e. Баланс кнопок: оборванная запись не оставляет зажатую кнопку ==")
+b1 = ef._macro_balance([[0.0, "down", "r"], [0.2, "move", 5, 5]])
+check("зажатая ПКМ в конце записи получает отпускание", b1[-1] == [0.22, "up", "r"], str(b1[-1]))
+b2 = ef._macro_balance([[0.0, "down", "l"], [0.1, "up", "l"], [0.3, "down", "r"]])
+check("парная запись не меняется по сути", len(b2) == 4 and b2[-1] == [0.32, "up", "r"], str(b2))
 
 print("== 4. macro_run: произвольные кнопки и порядок (ПКМ-режим без движений) ==")
 sent.clear()

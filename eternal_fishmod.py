@@ -142,7 +142,6 @@ DEFAULT_CFG = {
     "post_catch_delay": 2.5,             # пауза после пойманной рыбы перед следующим циклом
     "after_equip_delay": 1.2,            # пауза после «Использовать» до заброса
     "cast_delay": 0.8,                   # пауза перед закидыванием удочки
-    "idle_cursor": [1250, 500],
     # ВИЗУАЛЬНЫЙ АВТО-ЗАКИД (v1.9): жёстких координат НЕТ. Удочка ищется по ВСЕМУ экрану
     # (мульти-масштабный шаблон rod.png), «Использовать» — по красной строке «Выбросить»
     # в открытом меню. Ключи ниже — только РУЧНОЕ переопределение (страница «Настройки»):
@@ -202,7 +201,7 @@ REMOVED_CFG_KEYS = ("pid_mode", "pid_kp", "pid_ki", "pid_kd", "pid_ilim", "pid_d
                     "lead_time", "lead_max", "hover_adapt", "hover_ref", "hover_k", "hover_span",
                     "brake_ms", "bait_check_every", "use_offset", "equip_retry_delay",
                     "inv_wheel_center", "rod_click_pos", "use_click_pos", "rod_match_min",
-                    "move_time", "use_menu_delay", "rod_retry_delay")
+                    "move_time", "use_menu_delay", "rod_retry_delay", "idle_cursor")
 CFG = dict(DEFAULT_CFG)
 
 THR = {"rod": 0.90, "bait": 0.90, "inv_header": 0.80,
@@ -344,7 +343,7 @@ STRINGS = {
     "s_macro_none": "не записано", "s_macro_len": "записано: {d:.1f} с · кликов: {n}",
     "b_rec": "⏺ Записать", "b_play": "▷ Проверить", "b_clear": "✕ Стереть",
     "toast_rec_go": "Запись через {i}…",
-    "toast_rec_on": "⏺ ПИШУ: сделай ПКМ по удочке → пауза → клик по «Использовать», потом 2 с не трогай мышь",
+    "toast_rec_on": "⏺ ПИШУ: ПКМ по удочке → пауза → «Использовать»; F6 — стоп и сохранить",
     "toast_rec_done": "Макро сохранено: {d:.1f} с, кликов {n}",
     "toast_rec_empty": "В записи нет кликов — макро не сохранено",
     "toast_rec_running": "Сначала останови бота (F8)", "toast_rec_cancel": "⏹ Запись отменена — ничего не сохранено",
@@ -461,7 +460,7 @@ STRINGS = {
     "s_macro_none": "not recorded", "s_macro_len": "recorded: {d:.1f} s · clicks: {n}",
     "b_rec": "⏺ Record", "b_play": "▷ Test", "b_clear": "✕ Clear",
     "toast_rec_go": "Recording in {i}…",
-    "toast_rec_on": "⏺ RECORDING: RMB on the rod → pause → click “Use”, then keep the mouse still for 2 s",
+    "toast_rec_on": "⏺ RECORDING: RMB on the rod → pause → “Use”; F6 to stop & save",
     "toast_rec_done": "Macro saved: {d:.1f} s, {n} clicks",
     "toast_rec_empty": "No clicks recorded — macro not saved",
     "toast_rec_running": "Stop the bot first (F8)", "toast_rec_cancel": "⏹ Recording cancelled — nothing saved",
@@ -578,7 +577,7 @@ STRINGS = {
     "s_macro_none": "не записано", "s_macro_len": "записано: {d:.1f} с · кліків: {n}",
     "b_rec": "⏺ Записати", "b_play": "▷ Перевірити", "b_clear": "✕ Стерти",
     "toast_rec_go": "Запис через {i}…",
-    "toast_rec_on": "⏺ ПИШУ: зроби ПКМ по вудці → пауза → клік по «Використати», потім 2 с не рухай мишею",
+    "toast_rec_on": "⏺ ПИШУ: ПКМ по вудці → пауза → «Використати»; F6 — стоп і зберегти",
     "toast_rec_done": "Макро збережено: {d:.1f} с, кліків {n}",
     "toast_rec_empty": "У записі немає кліків — макро не збережено",
     "toast_rec_running": "Спочатку зупини бота (F8)", "toast_rec_cancel": "⏹ Запис скасовано — нічого не збережено",
@@ -1749,38 +1748,9 @@ def mouse_lmb_up():
     mouse_down = False
     last_up_sent = time.perf_counter()
 
-def mouse_rmb_click(x, y):
-    """ПКМ в точке (x, y) через SendInput."""
-    mouse_move_abs(x, y)
-    time.sleep(0.05)
-    _send_mouse(MOUSEEVENTF_RIGHTDOWN)
-    time.sleep(0.08)
-    _send_mouse(MOUSEEVENTF_RIGHTUP)
-
-def mouse_lmb_click(x, y):
-    """ЛКМ в точке (x, y) через SendInput."""
-    mouse_move_abs(x, y)
-    time.sleep(0.05)
-    _send_mouse(MOUSEEVENTF_LEFTDOWN)
-    time.sleep(0.08)
-    _send_mouse(MOUSEEVENTF_LEFTUP)
-
-def pdi_key(name):
-    return name if name in pydirectinput.KEYBOARD_MAPPING else None
-
-
-def key_down(name):
-    k = pdi_key(name)
-    if k:
-        pydirectinput.keyDown(k)
-        held_keys.add(k)
-
-
-def key_up(name):
-    k = pdi_key(name)
-    if k:
-        pydirectinput.keyUp(k)
-        held_keys.discard(k)
+# (v1.14) старые помощники нажатий удалены: mouse_rmb_click/mouse_lmb_click,
+# pdi_key/key_down/key_up. Весь ввод — записанное макро (macro_run) или явные
+# mouse_lmb_down/up мини-игры; «лишних» нажатий в коде больше нет.
 
 
 def release_all():
@@ -1867,15 +1837,6 @@ def nap(sec):
         if left <= 0:
             return
         time.sleep(min(left, 0.02))
-
-
-def tap(name, hold=0.06):
-    key_down(name)
-    try:
-        nap(hold)
-    finally:
-        key_up(name)
-    nap(0.05)
 
 
 def move_px(x, y):
@@ -2834,8 +2795,7 @@ def macro_record():
                         pos = cursor_pos()
                     except Exception:
                         pos = None
-                    if pos is not None and (last_pos is None
-                                            or abs(pos[0] - last_pos[0]) + abs(pos[1] - last_pos[1]) >= 2):
+                    if pos is not None and pos != last_pos:   # ЛЮБОЕ движение — в запись
                         events.append([round(now - t0, 3), "move", int(pos[0]), int(pos[1])])
                         last_pos = pos
                         last_act = now
@@ -2847,7 +2807,7 @@ def macro_record():
                         break               # один клик и долгая тишина
                     if now - t0 >= 30.0:
                         break               # потолок записи
-                    time.sleep(0.01)        # 100 Гц — точные тайминги
+                    time.sleep(0.005)       # 200 Гц — клики и траектория без пропусков
         except Exception as e:
             try:
                 log(t("log_rec_fail", e=f"{type(e).__name__}: {e}"))
@@ -2865,6 +2825,9 @@ def macro_record():
                 notify("toast_rec_empty", "warn")
                 log(t("log_rec_fail", e="no clicks"))
             else:
+                # кнопки в паре: если запись оборвалась на зажатой кнопке —
+                # дописываем отпускание, при повторе ничего не «залипнет»
+                events = _macro_balance(events)
                 dur = float(events[-1][0]) if events else 0.0
                 CFG["cast_macro"] = events
                 save_cfg()
@@ -2877,11 +2840,68 @@ def macro_record():
     threading.Thread(target=worker, daemon=True).start()
 
 
-def macro_run(ev):
-    """Проигрывает события макро (движения/кнопки в координатах кадра) с записанными
-    таймингами. True — доиграл до конца; False — прерван (запись/стоп)."""
+def _macro_balance(events):
+    """Гарантирует пары down/up для каждой кнопки: запись, оборвавшаяся на зажатой
+    кнопке, получает отпускание в конце — при повторе ничего не «залипнет»."""
+    held = {"l": False, "r": False}
+    for e in events:
+        if len(e) >= 3 and e[1] in ("down", "up"):
+            held[e[2]] = (e[1] == "down")
+    end_t = float(events[-1][0]) if events else 0.0
+    for name, is_down in held.items():
+        if is_down:
+            events.append([round(end_t + 0.02, 3), "up", name])
+    return events
+
+
+def _glide(x, y, dur=0.22):
+    """ТОЧНЫЙ перевод курсора в (x, y) за dur секунд: smoothstep (плавный разгон и
+    торможение), финальная позиция — ровно цель. Так мышь доезжает из своего
+    фактического положения в точку начала записи перед повтором макро."""
+    try:
+        x0, y0 = cursor_pos()
+    except Exception:
+        x0, y0 = int(x), int(y)
+    x, y = int(x), int(y)
+    if max(abs(x - x0), abs(y - y0)) < 2:       # уже на месте
+        mouse_move_abs(x, y)
+        return
+    steps = int(max(8, min(44, dur / 0.008)))
     t0 = time.perf_counter()
-    for t_rel, kind, *args in ev:
+    for i in range(1, steps + 1):
+        check_stop()
+        tt = i / steps
+        e = tt * tt * (3.0 - 2.0 * tt)          # smoothstep
+        mouse_move_abs(int(round(x0 + (x - x0) * e)), int(round(y0 + (y - y0) * e)))
+        left = (t0 + dur * tt) - time.perf_counter()
+        if left > 0:
+            time.sleep(min(left, 0.02))
+    mouse_move_abs(x, y)                        # финал — ровно в цель
+
+
+def macro_run(ev):
+    """ТОЧНОЕ воспроизведение записи (v1.14):
+      1) смотрит, где мышь ФАКТИЧЕСКИ стоит сейчас, и плавно-точно переводит её
+         в ТОЧКУ НАЧАЛА ЗАПИСИ (первое событие макро, ~0.22 с) — «как записывал,
+         так и повторяется»;
+      2) после перевода таймер запускается заново: каждое движение/нажатие
+         повторяется в свою записанную секунду (ожидание считается от одного t0 —
+         дрейф не накапливается);
+      3) кнопки только те, что записаны, порядок тот же; незакрытые нажатия
+         в записи закрывает _macro_balance — ни одна кнопка не «залипнет».
+    True — доиграно до конца; False — прервано (запись/стоп)."""
+    ev = list(ev or [])
+    if not ev:
+        return True
+    body = ev
+    if ev[0][1] == "move" and len(ev[0]) == 4:  # стартовая точка записи
+        try:
+            _glide(int(ev[0][2]), int(ev[0][3]))
+        except Exception:                       # без курса не остаёмся: хотя бы прыжок в цель
+            mouse_move_abs(int(ev[0][2]), int(ev[0][3]))
+        body = ev[1:]
+    t0 = time.perf_counter()
+    for t_rel, kind, *args in body:
         wait = t0 + float(t_rel) - time.perf_counter()
         if wait > 0:
             nap(wait)
