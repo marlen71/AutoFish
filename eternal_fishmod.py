@@ -2807,7 +2807,7 @@ def macro_record():
                         break               # один клик и долгая тишина
                     if now - t0 >= 30.0:
                         break               # потолок записи
-                    time.sleep(0.005)       # 200 Гц — клики и траектория без пропусков
+                    time.sleep(0.002)       # 500 Гц — клики и траектория без пропусков
         except Exception as e:
             try:
                 log(t("log_rec_fail", e=f"{type(e).__name__}: {e}"))
@@ -2879,40 +2879,76 @@ def _glide(x, y, dur=0.22):
     mouse_move_abs(x, y)                        # финал — ровно в цель
 
 
+MACRO_TICK = 0.002                       # шаг интерполяции повтора (500 Гц)
+
+
+def _macro_fire(kind, btn):
+    """Одно нажатие/отпускание записанной кнопки."""
+    if kind == "down":
+        _send_mouse(MOUSEEVENTF_LEFTDOWN if btn == "l" else MOUSEEVENTF_RIGHTDOWN)
+    elif kind == "up":
+        _send_mouse(MOUSEEVENTF_LEFTUP if btn == "l" else MOUSEEVENTF_RIGHTUP)
+
+
 def macro_run(ev):
-    """ТОЧНОЕ воспроизведение записи (v1.14):
-      1) смотрит, где мышь ФАКТИЧЕСКИ стоит сейчас, и плавно-точно переводит её
-         в ТОЧКУ НАЧАЛА ЗАПИСИ (первое событие макро, ~0.22 с) — «как записывал,
-         так и повторяется»;
-      2) после перевода таймер запускается заново: каждое движение/нажатие
-         повторяется в свою записанную секунду (ожидание считается от одного t0 —
-         дрейф не накапливается);
-      3) кнопки только те, что записаны, порядок тот же; незакрытые нажатия
-         в записи закрывает _macro_balance — ни одна кнопка не «залипнет».
-    True — доиграно до конца; False — прервано (запись/стоп)."""
-    ev = list(ev or [])
-    if not ev:
+    """ТОЧНОЕ воспроизведение записи (v1.15 — без дёрганьев и «быстрой сенсы»):
+      1) мышь переводится из фактического положения в точку начала записи (glide);
+      2) путь между записанными точками ИНТЕРПОЛИРУЕТСЯ шагом 2 мс: курсор едет по
+         записанной траектории с ЗАПИСАННОЙ скоростью, а не телепортируется между
+         сэмплами (телепорты и сжатие пауз выглядели как дёрганья);
+      3) темп держится по абсолютным часам от одного t0 — дрейф не накапливается,
+         догоняющих всплесков нет;
+      4) клики повторяются в свои записанные секунды; незакрытые нажатия закрывает
+         _macro_balance — ни одна кнопка не «залипнет».
+    True — доиграно; False — прервано записью; Stopped уходит в главный цикл."""
+    events = _macro_balance([list(e) for e in (ev or [])])
+    if not events:
         return True
-    body = ev
-    if ev[0][1] == "move" and len(ev[0]) == 4:  # стартовая точка записи
+    moves = [(float(e[0]), int(e[2]), int(e[3])) for e in events
+             if e[1] == "move" and len(e) == 4]
+    acts = [(float(e[0]), e[1], e[2]) for e in events if e[1] in ("down", "up")]
+    if moves:                            # точка начала записи: точный перевод мыши
         try:
-            _glide(int(ev[0][2]), int(ev[0][3]))
-        except Exception:                       # без курса не остаёмся: хотя бы прыжок в цель
-            mouse_move_abs(int(ev[0][2]), int(ev[0][3]))
-        body = ev[1:]
+            _glide(moves[0][1], moves[0][2])
+        except Exception:                # без glide — хотя бы точный прыжок в цель
+            mouse_move_abs(moves[0][1], moves[0][2])
+    if not moves:                        # макро без движения: действия по таймингам
+        t0 = time.perf_counter()
+        for t_rel, kind, btn in acts:
+            left = t0 + t_rel - time.perf_counter()
+            if left > 0:
+                nap(left)
+            _macro_fire(kind, btn)
+            if MACRO_STATE["rec"]:
+                return False
+        return True
+    dur = max(moves[-1][0], acts[-1][0] if acts else moves[-1][0])
     t0 = time.perf_counter()
-    for t_rel, kind, *args in body:
-        wait = t0 + float(t_rel) - time.perf_counter()
-        if wait > 0:
-            nap(wait)
-        if kind == "move":
-            mouse_move_abs(int(args[0]), int(args[1]))
-        elif kind == "down":
-            _send_mouse(MOUSEEVENTF_LEFTDOWN if args[0] == "l" else MOUSEEVENTF_RIGHTDOWN)
-        elif kind == "up":
-            _send_mouse(MOUSEEVENTF_LEFTUP if args[0] == "l" else MOUSEEVENTF_RIGHTUP)
+    ai = 0
+    seg = 0
+    for k in range(1, int(dur / MACRO_TICK) + 2):
+        tau = min(k * MACRO_TICK, dur)
+        while seg + 1 < len(moves) and moves[seg + 1][0] <= tau:
+            seg += 1
+        t_a, x_a, y_a = moves[seg]
+        if seg + 1 < len(moves):         # интерполяция сегмента пути
+            t_b, x_b, y_b = moves[seg + 1]
+            u = min(max((tau - t_a) / max(t_b - t_a, 1e-6), 0.0), 1.0)
+            x, y = x_a + (x_b - x_a) * u, y_a + (y_b - y_a) * u
+        else:
+            x, y = x_a, y_a
+        mouse_move_abs(int(round(x)), int(round(y)))
+        while ai < len(acts) and acts[ai][0] <= tau:
+            _macro_fire(acts[ai][1], acts[ai][2])
+            ai += 1
         if MACRO_STATE["rec"]:
             return False
+        left = t0 + tau - time.perf_counter()
+        if left > 0:
+            nap(left)                    # точный темп + реакция на стоп (Stopped)
+    mouse_move_abs(moves[-1][1], moves[-1][2])   # финал — ровно последняя точка
+    for _, kind, btn in acts[ai:]:
+        _macro_fire(kind, btn)
     return True
 
 
@@ -4144,6 +4180,20 @@ def main():
     register_hotkeys()
     import atexit
     atexit.register(shutdown)
+    try:
+        # БЕЗ этого sleep(2-5 мс) на Windows спит ~15.6 мс: повторы макро сжимались
+        # в рывки («дёрганная быстрая сенса»), тайминги мини-игры плыли.
+        # 1 мс разрешение — точные паузы везде.
+        ctypes.windll.winmm.timeBeginPeriod(1)
+
+        def _end_period():
+            try:
+                ctypes.windll.winmm.timeEndPeriod(1)
+            except Exception:
+                pass
+        atexit.register(_end_period)
+    except Exception:
+        pass
     log(t("log_ready", app=f"{APP_NAME} v{APP_VERSION}", toggle=CFG["bind_toggle"].upper(),
           panic=CFG["bind_panic"].upper()))
     try:

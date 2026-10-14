@@ -203,8 +203,12 @@ check("macro_play успех", ok3 is True)
 check("мышь ПЕРЕВЕДЕНА из фактического положения в точку начала записи (126, 256)",
       glides3 == [(126, 256)], str(glides3))
 moves3 = [k for k in sent if k[0] == "move"]
-check("далее запись 1-в-1: единственное записанное движение — (205, 286)",
-      moves3 == [("move", 205, 286)], str(moves3))
+check("путь ИНТЕРПОЛИРОВАН (не телепорты): >= 90 точек хода",
+      len(moves3) >= 90, str(len(moves3)))
+check("финал ровно в записанной точке (205, 286)",
+      moves3 and moves3[-1] == ("move", 205, 286), str(moves3[-1:]))
+check("весь путь в границах записанного отрезка x 126..205, y 256..286",
+      all(126 <= k[1] <= 205 and 256 <= k[2] <= 286 for k in moves3))
 flags3 = [k[1] for k in sent if k[0] == "mouse"]
 check("ровно одно ПКМ и одна ЛКМ — как в записи",
       flags3.count(ef.MOUSEEVENTF_RIGHTDOWN) == 1 and flags3.count(ef.MOUSEEVENTF_RIGHTUP) == 1
@@ -213,9 +217,9 @@ check("ровно одно ПКМ и одна ЛКМ — как в записи"
 check("порядок как записано: ПКМ раньше ЛКМ",
       flags3.index(ef.MOUSEEVENTF_RIGHTDOWN) < flags3.index(ef.MOUSEEVENTF_LEFTDOWN))
 check("клавиатура не тронута", not [k for k in sent if k[0] in ("keydown", "keyup")])
-check("тайминги из записи переданы в паузы (ПКМ на 0.3 с, «Использовать» на 1.4 с)",
-      any(0.28 <= v <= 0.32 for v in naps3) and any(1.38 <= v <= 1.42 for v in naps3),
-      str(naps3[:6]))
+check("темп по абсолютным часам: первый тик ~MACRO_TICK, тиков = длительность/шаг",
+      len(naps3) >= 900 and naps3[0] <= 0.02,
+      f"пауз={len(naps3)} первый={naps3[0] if naps3 else None}")
 log_text3 = io.open(ef.LOG_PATH, encoding="utf-8").read() if os.path.exists(ef.LOG_PATH) else ""
 check("в журнале: макро проиграно", "Макро" in log_text3 or "макро" in log_text3.lower(),
       log_text3.strip()[-70:])
@@ -303,13 +307,14 @@ start_macro = [[0.0, "move", 340, 512], [0.3, "down", "r"], [0.45, "up", "r"],
 ok_d = ef.macro_run(start_macro)
 ef._glide, ef.cursor_pos = _gd, _cp
 flags_d = [k[1] for k in sent if k[0] == "mouse"]
+moves_d = [k for k in sent if k[0] == "move"]
 check("мышь переведена в точку старта записи (340, 512), запись проиграна",
       ok_d is True and glides_d == [(340, 512)]
       and flags_d == [ef.MOUSEEVENTF_RIGHTDOWN, ef.MOUSEEVENTF_RIGHTUP,
                       ef.MOUSEEVENTF_LEFTDOWN, ef.MOUSEEVENTF_LEFTUP],
       f"glide={glides_d} flags={flags_d}")
-check("стартовая точка не дублируется движением внутри записи",
-      not any(k == ("move", 340, 512) for k in sent), str([k for k in sent if k[0] == "move"]))
+check("повтор заканчивается ровно в последней записанной точке (205, 286)",
+      moves_d and moves_d[-1] == ("move", 205, 286), str(moves_d[-1:]))
 
 print("== 3e. Баланс кнопок: оборванная запись не оставляет зажатую кнопку ==")
 b1 = ef._macro_balance([[0.0, "down", "r"], [0.2, "move", 5, 5]])
