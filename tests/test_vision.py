@@ -138,7 +138,8 @@ class _Cap3:
 check("жёстких координат закида больше нет в DEFAULT_CFG",
       not [k for k in ("rod_click_pos", "use_click_pos", "rod_match_min", "move_time",
                        "use_menu_delay", "rod_retry_delay") if k in ef.DEFAULT_CFG])
-check("макро по умолчанию не записано", ef.DEFAULT_CFG["cast_macro"] is None)
+check("клики в окно интерфейса включены по умолчанию", ef.DEFAULT_CFG["ui_click_window"] is True)
+check("порог поиска удочки задан", abs(ef.DEFAULT_CFG["rod_thr"] - 0.80) < 1e-9)
 check("устаревшие ключи закида в REMOVED_CFG_KEYS",
       all(k in ef.REMOVED_CFG_KEYS for k in ("rod_click_pos", "use_click_pos", "rod_match_min",
                                              "move_time", "use_menu_delay", "rod_retry_delay")))
@@ -184,35 +185,19 @@ check("конфиг v8 мигрирует: старые ключи закида 
       all(k not in ef.CFG for k in ("rod_click_pos", "use_click_pos", "use_menu_delay",
                                     "move_time", "rod_match_min")),
       str(sorted(ef.CFG_DROPPED)[:6]))
-check("...а cast_macro добавлен дефолтом (None)", ef.CFG["cast_macro"] is None)
+_macro_keys = {"cast_macro": [[0.0, "down", "r"]], "macro_click_window": False,
+               "bind_macro": "f6"}
 with open(tmp3, "w", encoding="utf-8") as f:
-    _json.dump({"cfg_version": 9, "cast_macro": "мусор", "lang": "ru"}, f)
+    _json.dump(dict(_macro_keys, cfg_version=10, lang="ru"), f)
 ef.CFG.clear()
 ef.CFG.update(ef.DEFAULT_CFG)
+ef.CFG_DROPPED.clear()
 ef.load_cfg()
-check("битое макро -> None, без падений", ef.CFG["cast_macro"] is None)
-_old = [[0.0, "move", 10, 20], [0.5, "down", "r"], [0.7, "up", "r"]]
-with open(tmp3, "w", encoding="utf-8") as f:
-    _json.dump({"cfg_version": 10, "cast_macro": _old, "lang": "ru"}, f)
-ef.CFG.clear()
-ef.CFG.update(ef.DEFAULT_CFG)
-ef.load_cfg()
-check("макро СТАРОГО формата (абсолютные \"move\") -> None: повтор невозможен",
-      ef.CFG["cast_macro"] is None)
-_ok_png, _png = cv2.imencode(".png", np.zeros((56, 56, 3), np.uint8))
-_img = base64.b64encode(_png.tobytes()).decode()
-assert _ok_png and len(_img) > 40
-_good = [[0.0, "p", 10, 20], [0.5, "down", "r", 30, 40, _img], [0.7, "up", "r"],
-         [1.1, "m", 5, -3]]
-with open(tmp3, "w", encoding="utf-8") as f:
-    _json.dump({"cfg_version": 10, "cast_macro": _good, "lang": "ru"}, f)
-ef.CFG.clear()
-ef.CFG.update(ef.DEFAULT_CFG)
-ef.CFG_MIGRATED.clear()
-ef.load_cfg()
-check("корректное макро (дельты + якорь png, cfg v10) переживает загрузку конфига",
-      ef.CFG["cast_macro"] == _good)
-check("...и миграция его не трогает", "cast_macro" not in ef.CFG_MIGRATED, str(ef.CFG_MIGRATED))
+check("ключи макро-эры удалены из конфига и перечислены в CFG_DROPPED",
+      all(k not in ef.CFG for k in _macro_keys)
+      and all(k in ef.CFG_DROPPED for k in _macro_keys), str(sorted(ef.CFG_DROPPED)[:6]))
+check("ключи v1.21 добавлены дефолтами (ui_click_window, rod_thr)",
+      ef.CFG["ui_click_window"] is True and abs(ef.CFG["rod_thr"] - 0.80) < 1e-9)
 os.remove(tmp3)
 _shutil.rmtree(_tmp3, ignore_errors=True)
 

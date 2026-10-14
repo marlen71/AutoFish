@@ -272,7 +272,9 @@ ef._tpl_cache.clear()
 ef.register_hotkeys = lambda: None
 ef.ensure_sounds = lambda: None
 ef.keyboard = types.SimpleNamespace(add_hotkey=lambda *a, **k: object(), remove_hotkey=lambda h: None,
-                                    unhook_all=lambda: None)
+                                    unhook_all=lambda: None,
+                                    KEY_DOWN="down", KEY_UP="up",
+                                    read_event=lambda: types.SimpleNamespace(event_type="down", name="escape"))
 ef.pydirectinput = types.SimpleNamespace(KEYBOARD_MAPPING={}, PAUSE=0, FAILSAFE=False)
 ef.winsound = None
 ef._send_mouse = lambda *a, **k: None
@@ -383,6 +385,7 @@ check("степперы/тумблеры реально меняют конфи�
 check("изменения тут же пишутся в fishmod_config.json", os.path.exists(ef.CFG_PATH))
 ef.CFG.clear()
 ef.CFG.update(ef.DEFAULT_CFG)
+ef.vision_equip = lambda: False                # клик «▷ Экипировать» не должен трогать захват
 app.show_page(4)
 lang_texts = sorted(it.get("text") for it in app.cv.items.values() if it.get("text") in ("RU", "EN", "UA"))
 check("на «Настройки» есть три плитки языка", lang_texts == ["EN", "RU", "UA"], str(lang_texts))

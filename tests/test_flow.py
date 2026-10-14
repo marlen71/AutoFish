@@ -127,7 +127,7 @@ def install_stubs():
     ef.nap = lambda sec: None
     ef.check_stop = lambda: 0.0
     ef.CFG["tpl_selflearn"] = False             # тесты не должны переписывать шаблоны
-    ef.CFG["cast_macro"] = None                 # макро — не переносить между секциями
+    ef.CFG["ui_click_window"] = True            # клики экипировки — в окно интерфейса
     ef.learn_game_window = lambda timeout=15.0: "Skyrim"
     ef.game_focused = lambda: True
     ef.GAME_TITLE = "Skyrim"
@@ -182,238 +182,120 @@ ef.inventory_open = _real_invopen
 screens["cur"] = GAME
 check("инвентарь закрыт -> None (пропуск, не ошибка)", ef.bait_check() is None)
 
-print("== 3. macro_play: АТОМАРНЫЙ повтор — только прыжок+клик, курсор не стримится ==")
+print("== 3. vision_equip: удочка зрением, клики в окно интерфейса, курсор не двигается ==")
 screens["cur"] = INV
 sent.clear()
-ef.CFG["cast_macro"] = [
-    [0.0, "p", 126, 256], [0.3, "down", "r"], [0.45, "up", "r"],
-    [1.4, "m", 79, 30], [1.7, "down", "l"], [1.85, "up", "l"],
-]
+_rod_png = cv2.imread(os.path.join(ROOT, "templates", "rod.png"), cv2.IMREAD_COLOR)
+assert _rod_png is not None and _rod_png.size
+_frame3 = GAME.copy()
+_rx3, _ry3 = 300, 220
+_h3, _w3 = _rod_png.shape[:2]
+_frame3[_ry3:_ry3 + _h3, _rx3:_rx3 + _w3] = _rod_png      # удочка «лежит» в ячейке
+_frame3[300:322, 380:520] = (60, 60, 235)                  # красная строка «Выбросить»
+screens["cur"] = _frame3
 naps3 = []
-_real_nap3 = ef.nap
+_real_nap3, _real_inv3 = ef.nap, ef.inventory_open
+_real_hwnd3, _real_uiclk3 = ef._cef_render_hwnd, ef._cef_click_at
 ef.nap = lambda sec: naps3.append(round(float(sec), 3))
-_real_glide3, _real_cursor3 = ef._glide, ef.cursor_pos
-glides3 = []
-ef._glide = lambda x, y, dur=0.22: glides3.append((int(x), int(y)))
-ef.cursor_pos = lambda: (900, 540)          # мышь «фактически» в стороне (для home)
-ok3 = ef.macro_play()
-ef.nap = _real_nap3
-ef._glide, ef.cursor_pos = _real_glide3, _real_cursor3
-check("macro_play успех", ok3 is True)
-check("glide НЕ вызван: курсор не ездит, только мгновенные прыжки к кликам",
-      glides3 == [], str(glides3))
-mv3 = [k for k in sent if k[0] == "mouse" and k[1] == ef.MOUSEEVENTF_MOVE]
-check("дельты НЕ подаются вовсе (курсор не стримится, летать нечему)",
-      mv3 == [], str(mv3))
-check("glide НЕ вызывается (никакого плавного езда по экрану)",
-      glides3 == [], str(glides3))
-check("ЯКОРЯ КЛИКОВ: ПКМ ровно в (126, 256) (посадка+досадка дрейфа), ЛКМ — в (205, 286), финал — домой",
-      [k for k in sent if k[0] == "move"] == [("move", 126, 256)] * 3 + [("move", 205, 286)] * 3
-      + [("move", 900, 540)],
-      str([k for k in sent if k[0] == "move"]))
-flags3 = [k[1] for k in sent if k[0] == "mouse" and k[1] != ef.MOUSEEVENTF_MOVE]
-check("ровно одно ПКМ и одна ЛКМ — как в записи",
-      flags3.count(ef.MOUSEEVENTF_RIGHTDOWN) == 1 and flags3.count(ef.MOUSEEVENTF_RIGHTUP) == 1
-      and flags3.count(ef.MOUSEEVENTF_LEFTDOWN) == 1 and flags3.count(ef.MOUSEEVENTF_LEFTUP) == 1,
-      str(flags3))
-check("порядок как записано: ПКМ раньше ЛКМ",
-      flags3.index(ef.MOUSEEVENTF_RIGHTDOWN) < flags3.index(ef.MOUSEEVENTF_LEFTDOWN))
-check("клавиатура не тронута", not [k for k in sent if k[0] in ("keydown", "keyup")])
-check("темп по абсолютным часам: пауза на каждое событие + хвост после макро",
-      len(naps3) == 6 and abs(naps3[0] - 0.3) <= 0.05
-      and abs(naps3[-1] - float(ef.CFG["after_equip_delay"])) <= 0.05,
-      f"пауз={len(naps3)} первая={naps3[0] if naps3 else None} последняя={naps3[-1:] if naps3 else None}")
-log_text3 = io.open(ef.LOG_PATH, encoding="utf-8").read() if os.path.exists(ef.LOG_PATH) else ""
-check("в журнале: макро проиграно", "Макро" in log_text3 or "макро" in log_text3.lower(),
-      log_text3.strip()[-70:])
+ef.inventory_open = lambda: True
+clicks3 = []
+ef._cef_render_hwnd = lambda: 7777
+ef._cef_click_at = lambda hwnd, x, y, btn, down: clicks3.append((hwnd, x, y, btn, down)) or True
+ok3 = ef.vision_equip()
+ef.nap, ef.inventory_open = _real_nap3, _real_inv3
+ef._cef_render_hwnd, ef._cef_click_at = _real_hwnd3, _real_uiclk3
+check("vision_equip успех", ok3 is True)
+rmb3 = [k for k in clicks3 if k[3] == "r"]
+lmb3 = [k for k in clicks3 if k[3] == "l"]
+check("ПКМ по найденной удочке — в окно интерфейса, down+up",
+      len(rmb3) == 2 and all(k[0] == 7777 and abs(k[1] - (_rx3 + _w3 // 2)) <= 8
+                             and abs(k[2] - (_ry3 + _h3 // 2)) <= 8 for k in rmb3)
+      and rmb3[0][4] is True and rmb3[1][4] is False, str(rmb3))
+_uy3 = 300 - max(18, int(_frame3.shape[0] * 0.030))
+check("«Использовать» — ЛКМ над красной строкой «Выбросить»",
+      len(lmb3) == 2 and all(k[0] == 7777 and abs(k[1] - 450) <= 8
+                             and abs(k[2] - _uy3) <= 4 for k in lmb3)
+      and lmb3[0][4] is True and lmb3[1][4] is False, str(lmb3))
+check("курсор Windows не двигался и обычный ввод не звался", not sent, str(sent[:4]))
+check("меню ждали (nap-опрос), после «Использовать» — пауза",
+      len(naps3) >= 1 and any(v >= 1.0 for v in naps3), str(naps3[:4]))
 
-print("== 3b. Макро не записано: ни одного клика, сессия останавливается с no_macro ==")
-ef.CFG["cast_macro"] = None
+print("== 3b. Инвентарь закрыт: экипировки нет, кликов нет ==")
 sent.clear()
-check("macro_play без записи -> False", ef.macro_play() is False)
-check("...и ноль нажатий", not sent, str(sent[:4]))
+ef._cef_render_hwnd = lambda: 7777
+clicks3b = []
+ef._cef_click_at = lambda *a: clicks3b.append(a) or True
+ef.inventory_open = lambda: False
+ok3b = ef.vision_equip()
+ef.inventory_open, ef._cef_render_hwnd, ef._cef_click_at = _real_inv3, _real_hwnd3, _real_uiclk3
+check("инвентарь закрыт -> False и ноль кликов", ok3b is False and clicks3b == [] and not sent)
+
+print("== 3c. Удочки на кадре нет: False, кликов нет, строка в журнале ==")
+sent.clear()
+screens["cur"] = np.zeros((600, 800, 3), np.uint8)
+clicks3c = []
+ef._cef_render_hwnd = lambda: 7777
+ef._cef_click_at = lambda *a: clicks3c.append(a) or True
+ef.inventory_open = lambda: True
+_real_nap3c = ef.nap
+ef.nap = lambda sec: None
+ok3c = ef.vision_equip()
+ef.nap, ef.inventory_open = _real_nap3c, _real_inv3
+ef._cef_render_hwnd, ef._cef_click_at = _real_hwnd3, _real_uiclk3
+check("удочки нет -> False и ноль кликов", ok3c is False and clicks3c == [] and not sent)
+log3c = io.open(ef.LOG_PATH, encoding="utf-8").read() if os.path.exists(ef.LOG_PATH) else ""
+check("в журнале: удочка не найдена", "не найдена" in log3c.lower(), log3c.strip()[-70:])
+
+print("== 3d. Удочка есть, меню не открылось: только ПКМ, False ==")
+sent.clear()
+_frame3d = _frame3.copy()
+_frame3d[294:328, 374:526] = (20, 20, 20)                  # стираем красную строку
+screens["cur"] = _frame3d
+clicks3d = []
+ef._cef_render_hwnd = lambda: 7777
+ef._cef_click_at = lambda *a: clicks3d.append(a) or True
+ef.inventory_open = lambda: True
+_real_nap3d = ef.nap
+ef.nap = lambda sec: None
+ok3d = ef.vision_equip()
+ef.nap, ef.inventory_open = _real_nap3d, _real_inv3
+ef._cef_render_hwnd, ef._cef_click_at = _real_hwnd3, _real_uiclk3
+check("меню не открылось -> False, ровно 2 фазы ПКМ",
+      ok3d is False and len(clicks3d) == 2 and all(k[3] == "r" for k in clicks3d), str(clicks3d))
+
+print("== 3e. Окно интерфейса не найдено: клики курсором (запасной путь) ==")
+sent.clear()
+screens["cur"] = _frame3
+ef._cef_render_hwnd = lambda: None
+ef._cef_click_at = lambda *a: None
+ef.inventory_open = lambda: True
+_real_nap3e = ef.nap
+ef.nap = lambda sec: None
+ok3e = ef.vision_equip()
+ef.nap, ef.inventory_open = _real_nap3e, _real_inv3
+ef._cef_render_hwnd, ef._cef_click_at = _real_hwnd3, _real_uiclk3
+mv3e = [k for k in sent if k[0] == "move"]
+fl3e = [k[1] for k in sent if k[0] == "mouse"]
+check("фолбэк: курсор на каждую фазу (4 прыжка), ПКМ по удочке и ЛКМ над строкой",
+      ok3e is True and len(mv3e) == 4 and mv3e[0] == mv3e[1] and mv3e[2] == mv3e[3]
+      and fl3e == [ef.MOUSEEVENTF_RIGHTDOWN, ef.MOUSEEVENTF_RIGHTUP,
+                   ef.MOUSEEVENTF_LEFTDOWN, ef.MOUSEEVENTF_LEFTUP], f"sent={sent}")
+
+print("== 3f. Макро-система удалена; без удочки сессия останавливается с no_macro ==")
+check("макро-функции удалены", not any(hasattr(ef, n) for n in
+      ("macro_record", "macro_run", "macro_play", "macro_cancel", "_macro_balance",
+       "_glide", "_anchor_find", "MACRO_STATE")))
+check("ключи макро-эры в REMOVED_CFG_KEYS",
+      all(k in ef.REMOVED_CFG_KEYS for k in ("cast_macro", "macro_click_window", "bind_macro")))
 ef.CFG.update({"auto_cast": True, "equip_on_start": True})
 ef.STATS.update({"catches": 0, "t0": time.time(), "t_end": None, "mg": [], "checks": 0})
-check("fishing_run без макро возвращает no_macro", ef.fishing_run() == "no_macro")
-check("причина no_macro переводится", "макро" in ef.reason_text("no_macro", "").lower(),
+_real_inv3f, _real_wio3f = ef.inventory_open, ef.wait_inventory_open
+ef.inventory_open = lambda: False
+ef.wait_inventory_open = lambda: True
+check("fishing_run без удочки возвращает no_macro", ef.fishing_run() == "no_macro")
+ef.inventory_open, ef.wait_inventory_open = _real_inv3f, _real_wio3f
+check("причина no_macro: удочка не найдена", "удочк" in ef.reason_text("no_macro", "").lower(),
       ef.reason_text("no_macro", ""))
-print("== 3c. Бинд записи: тумблер, защита от бота, отмена F10 ==")
-_real_notify3c = ef.notify
-nt3c = []
-ef.notify = lambda k, tone="ok", **kw: nt3c.append(k)
-# тумблер: запись идёт -> нажатие просит стоп, не роняя флаг
-ef.MACRO_STATE.update(rec=True, stop=False, cancel=False)
-ef.macro_record()
-check("повторное нажатие бинда = стоп с сохранением",
-      ef.MACRO_STATE["stop"] is True and ef.MACRO_STATE["rec"] is True)
-# при работающем боте запись не стартует
-ef.MACRO_STATE.update(rec=False, stop=False, cancel=False)
-ef.STATE["running"] = True
-ef.macro_record()
-check("при работающем боте запись отклонена с тостом",
-      nt3c.count("toast_rec_running") == 1 and ef.MACRO_STATE["rec"] is False)
-ef.STATE["running"] = False
-# F10-отмена: флаг ставится, при простое — no-op
-ef.MACRO_STATE.update(rec=True, stop=False, cancel=False)
-ef.macro_cancel()
-check("panic-отмена ставит cancel", ef.MACRO_STATE["cancel"] is True)
-ef.MACRO_STATE.update(rec=False, stop=False, cancel=False)
-ef.macro_cancel()
-check("отмена в простое — no-op", ef.MACRO_STATE["cancel"] is False)
-# panic() вызывает отмену записи
-ef.MACRO_STATE.update(rec=True, stop=False, cancel=False)
-cancels = []
-cancels = []
-ef.macro_cancel, _bak = (lambda: cancels.append(1)), ef.macro_cancel
-ef.release_all, _bak_ra = (lambda: None), ef.release_all
-_ev_bak = ef.stop_event
-class _FakeEv:
-    def set(self):
-        pass
-
-    def clear(self):
-        pass
-
-    def is_set(self):
-        return False
-ef.stop_event = _FakeEv()
-ef.panic()
-ef.macro_cancel = _bak
-ef.release_all = _bak_ra
-ef.stop_event = _ev_bak
-check("panic() отменяет запись макро", cancels == [1])
-# регистрация хоткея записи
-import types as _types
-_reg = []
-ef.keyboard = _types.SimpleNamespace(add_hotkey=lambda key, cb: _reg.append(key),
-                                     remove_hotkey=lambda h: None, unhook_all=lambda: None)
-ef.HK.clear()
-ef.register_hotkeys()
-check("бинд записи зарегистрирован (bind_macro)", ef.CFG["bind_macro"] in _reg, str(_reg))
-_src_gone = io.open(ef.__file__, encoding="utf-8").read()
-check("старые помощники нажатий удалены из кода",
-      not any(f"def {n}" in _src_gone for n in ("mouse_rmb_click", "mouse_lmb_click",
-                                                "pdi_key", "key_down", "key_up", "tap"))
-      and "idle_cursor" not in ef.DEFAULT_CFG and "idle_cursor" in ef.REMOVED_CFG_KEYS)
-ef.notify = _real_notify3c
-ef.MACRO_STATE.update(rec=False, stop=False, cancel=False)
-ef.CFG["cast_macro"] = [[0.0, "down", "r"], [0.2, "up", "r"], [0.5, "down", "l"], [0.7, "up", "l"]]
-
-print("== 3d. Атомарный повтор: клики по запасным точкам (старт+сумма дельт) ==")
-sent.clear()
-_gd, _cp = ef._glide, ef.cursor_pos
-glides_d = []
-ef._glide = lambda x, y, dur=0.22: glides_d.append((int(x), int(y)))
-ef.cursor_pos = lambda: (60, 60)
-start_macro = [[0.0, "p", 340, 512], [0.3, "down", "r"], [0.45, "up", "r"],
-               [1.4, "m", -135, -226], [1.7, "down", "l"], [1.85, "up", "l"]]
-ok_d = ef.macro_run(start_macro)
-ef._glide, ef.cursor_pos = _gd, _cp
-flags_d = [k[1] for k in sent if k[0] == "mouse" and k[1] != ef.MOUSEEVENTF_MOVE]
-mv_d = [k for k in sent if k[0] == "mouse" and k[1] == ef.MOUSEEVENTF_MOVE]
-check("кнопки как записаны (ПКМ -> ЛКМ), glide НЕ вызван",
-      ok_d is True and glides_d == []
-      and flags_d == [ef.MOUSEEVENTF_RIGHTDOWN, ef.MOUSEEVENTF_RIGHTUP,
-                      ef.MOUSEEVENTF_LEFTDOWN, ef.MOUSEEVENTF_LEFTUP],
-      f"glide={glides_d} flags={flags_d}")
-check("дельты НЕ подаются вовсе",
-      mv_d == [], str(mv_d))
-check("ЯКОРЯ КЛИКОВ: ПКМ в старте (340, 512), ЛКМ в (205, 286) = 340-135, 512-226; финал — домой",
-      [k for k in sent if k[0] == "move"] == [("move", 340, 512)] * 3 + [("move", 205, 286)] * 3
-      + [("move", 60, 60)],
-      str([k for k in sent if k[0] == "move"]))
-
-print("== 3e. Баланс кнопок: оборванная запись не оставляет зажатую кнопку ==")
-b1 = ef._macro_balance([[0.0, "down", "r"], [0.2, "move", 5, 5]])
-check("зажатая ПКМ в конце записи получает отпускание", b1[-1] == [0.22, "up", "r"], str(b1[-1]))
-b2 = ef._macro_balance([[0.0, "down", "l"], [0.1, "up", "l"], [0.3, "down", "r"]])
-check("парная запись не меняется по сути", len(b2) == 4 and b2[-1] == [0.32, "up", "r"], str(b2))
-
-print("== 3f. Якоря по кадру игры: клик встаёт туда, где кусочек UI СЕЙЧАС ==")
-import base64 as _b64
-sent.clear()
-_gd3f, _cp3f, _gr3f, _np3f = ef._glide, ef.cursor_pos, ef.grab, ef.nap
-ef._glide = lambda x, y, dur=0.22: None
-ef.cursor_pos = lambda: (500, 400)
-ef.nap = lambda sec: None
-frame3f = np.zeros((400, 600, 3), np.uint8)
-frame3f[135:165, 175:215] = (40, 90, 210)
-frame3f[140:160, 180:210] = (220, 160, 30)
-_ok, _buf = cv2.imencode(".png", frame3f[122:178, 167:223])
-b643f = _b64.b64encode(_buf.tobytes()).decode()
-ef.grab = lambda rect=None: frame3f.copy()
-macro3f = [[0.0, "p", 10, 10], [0.1, "down", "l", 195, 150, b643f], [0.2, "up", "l"]]
-ok3f1 = ef.macro_run(macro3f)
-frame3f2 = np.zeros((400, 600, 3), np.uint8)     # игра переехала: тот же кусок UI
-frame3f2[90:120, 105:145] = (40, 90, 210)        # теперь вокруг (125, 105)
-frame3f2[95:115, 110:140] = (220, 160, 30)
-ef.grab = lambda rect=None: frame3f2.copy()
-ok3f2 = ef.macro_run(macro3f)
-ef._glide, ef.cursor_pos, ef.grab, ef.nap = _gd3f, _cp3f, _gr3f, _np3f
-mv3f = [k for k in sent if k[0] == "move"]
-check("клик 1-в-1 по ПИКСЕЛЯМ ИГРЫ: был (195, 150), UI переехал -> (125, 105), возврат домой",
-      ok3f1 is True and ok3f2 is True
-      and mv3f == [("move", 195, 150)] * 3 + [("move", 500, 400)]
-      + [("move", 125, 105)] * 3 + [("move", 500, 400)],
-      str(mv3f))
-
-print("== 3g. Атомарность: ни одна дельта не доходит до мыши, движения только прыжками к кликам ==")
-sent.clear()
-_gd3g, _cp3g, _np3g = ef._glide, ef.cursor_pos, ef.nap
-ef._glide = lambda x, y, dur=0.22: None
-ef.cursor_pos = lambda: (77, 77)
-ef.nap = lambda sec: None
-macro3g = [[0.0, "p", 10, 10], [0.1, "m", 900, 900], [0.2, "m", 7, 7],
-           [0.3, "down", "r"], [0.4, "up", "r"]]
-ok3g = ef.macro_run(macro3g)
-ef._glide, ef.cursor_pos, ef.nap = _gd3g, _cp3g, _np3g
-mv3g = [k for k in sent if k[0] == "move"]
-mm3g = [k for k in sent if k[0] == "mouse" and k[1] == ef.MOUSEEVENTF_MOVE]
-check("дельты (900,900) и (7,7) НЕ поданы; клик в запасной точке (917,917)=10+900+7; возврат домой",
-      ok3g is True and mm3g == []
-      and mv3g == [("move", 917, 917)] * 3 + [("move", 77, 77)],
-      f"mouse_moves={mm3g} moves={mv3g}")
-
-print("== 3h. Режим «клики в окно игры»: курсор НЕ двигается вовсе ==")
-sent.clear()
-_ef_hwnd3h, _ef_click3h, _cp3h = ef._cef_render_hwnd, ef._cef_click_at, ef.cursor_pos
-clicks3h = []
-ef._cef_render_hwnd = lambda: 7777
-ef._cef_click_at = lambda hwnd, x, y, btn, down: clicks3h.append((hwnd, x, y, btn, down)) or True
-ef.cursor_pos = lambda: (60, 60)
-ef.CFG["macro_click_window"] = True
-ok3h = ef.macro_run([[0.0, "p", 10, 10], [0.1, "m", 50, 40],
-                     [0.2, "down", "l", 195, 150], [0.3, "up", "l"]])
-ef.CFG["macro_click_window"] = False
-check("клики ушли в окно интерфейса (down+up в якорной точке), курсор НЕ тронут",
-      ok3h is True and clicks3h == [(7777, 195, 150, "l", True), (7777, 195, 150, "l", False)]
-      and sent == [], f"clicks={clicks3h} sent={sent}")
-
-print("== 3i. Окно интерфейса не найдено -> обычный режим: прыжок+клик, журнал дрейфа ==")
-sent.clear()
-clicks3i = []
-ef._cef_render_hwnd = lambda: None
-ef._cef_click_at = lambda *a: clicks3i.append(a) or True
-ef.CFG["macro_click_window"] = True
-ok3i = ef.macro_run([[0.0, "down", "l", 195, 150], [0.1, "up", "l"]])
-ef._cef_render_hwnd, ef._cef_click_at, ef.cursor_pos = _ef_hwnd3h, _ef_click3h, _cp3h
-ef.CFG["macro_click_window"] = False
-flags3i = [k[1] for k in sent if k[0] == "mouse"]
-check("фолбэк на курсор: прыжки в (195, 150), ЛКМ down+up, клик-в-окно не звался",
-      ok3i is True and clicks3i == []
-      and flags3i == [ef.MOUSEEVENTF_LEFTDOWN, ef.MOUSEEVENTF_LEFTUP]
-      and [k for k in sent if k[0] == "move"] == [("move", 195, 150)] * 3 + [("move", 60, 60)],
-      f"sent={sent}")
-
-print("== 4. macro_run: произвольные кнопки и порядок (ПКМ-режим без движений) ==")
-sent.clear()
-ok4 = ef.macro_run(ef.CFG["cast_macro"])
-flags4 = [k[1] for k in sent if k[0] == "mouse"]
-check("macro_run доиграл до конца", ok4 is True)
-check("события ровно как в записи", flags4 == [ef.MOUSEEVENTF_RIGHTDOWN, ef.MOUSEEVENTF_RIGHTUP,
-                                               ef.MOUSEEVENTF_LEFTDOWN, ef.MOUSEEVENTF_LEFTUP],
-      str(flags4))
-ef.CFG["cast_macro"] = None
 
 print("== 5. Заброс и отпускание ЛКМ ==")
 sent.clear()
@@ -456,7 +338,8 @@ print("== 6. Главный цикл: поймал рыбу -> стоп по н�
 ef.CFG.update({"auto_cast": True, "equip_on_start": True, "bite_timeout": 1,
                "no_bite_limit": 3, "post_catch_delay": 0.0, "cast_delay": 0.0})
 screens["cur"] = GAME
-ef.macro_play = lambda: sent.append(("equip",)) or True
+ef.vision_equip = lambda: sent.append(("equip",)) or True
+ef.wait_inventory_open = lambda: True
 bites["n"] = 0
 
 
@@ -480,7 +363,7 @@ check("цикл прерван стопом на втором клёве", raise
 check("одна рыба засчитана", ef.STATS["catches"] == 1, str(ef.STATS["catches"]))
 check("время мини-игры записано в статистику", ef.STATS["mg"] == [3.5], str(ef.STATS["mg"]))
 check("клёв ожидался дважды (после улова цикл продолжился)", bites["n"] == 2, str(bites["n"]))
-check("перед забросом макро проиграно (macro_play вызван)", any(k[0] == "equip" for k in sent))
+check("перед забросом экипировка выполнена (vision_equip вызван)", any(k[0] == "equip" for k in sent))
 check("наживка не останавливала сессию (только журнал)",
       not [k for k in sent if k[0] == "stop_no_bait"])
 log_text = io.open(ef.LOG_PATH, encoding="utf-8").read() if os.path.exists(ef.LOG_PATH) else ""

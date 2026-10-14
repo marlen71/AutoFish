@@ -19,13 +19,13 @@ Eternal FishMod — полуавтомат рыбалки для Skyrim RP-се�
   * Распознавание рыбы не зависит от её цвета (контраст по горизонтали внутри шкалы),
     поэтому подходит для любых видов рыб.
   * Полная локализация интерфейса: RU / EN / UA, переключение на лету (страница «Настройки»).
-  * Авто-закидывание — ЗАПИСЬ/ПОВТОР МАКРО (v1.12): один раз жмёшь «⏺ Записать» на
-    «Настройках», сам делаешь закид (ПКМ по удочке -> пауза -> клик по «Использовать»)
-    — бот запоминает все движения мыши и нажатия с таймингами и затем повторяет запись
-    1-в-1 после каждой рыбы. Работает при любом интерфейсе, разрешении и скинах:
-    запись уже «работает», повторять её надёжнее любого распознавания. «▷ Проверить»
-    — проиграть запись, «✕ Стереть» — записать заново. Инвентарь открывает человек
-    (TAB бот не жмёт). «Только мини-игра» = инвентарь и забросы отключены.
+  * Авто-закидывание — ЗРЕНИЕ (v1.21, запись макро удалена): в открытом инвентаре
+    бот сам находит удочку по шаблону rod.png и кликает «Использовать» (белая строка
+    над красной «Выбросить»). Клики ставятся ПРЯМО В ОКНО интерфейса игры (DOM в
+    CEF/Chromium) — курсор мыши Windows не двигается вовсе, поэтому игровой курсор
+    (клиент ведёт его сам) ни на что не влияет. Работает при любом разрешении
+    (мульти-масштабный поиск). Инвентарь открывает человек (TAB бот не жмёт).
+    «Только мини-игра» = инвентарь и забросы отключены.
   * Лаунчер launch.py / start.bat, файл VERSION + scripts/release.py (релизы на GitHub).
 
 Установка:  python launch.py   (сам поставит зависимости)   или   pip install -r requirements.txt
@@ -101,7 +101,7 @@ CFG_PATH = os.path.join(BASE_DIR, "fishmod_config.json")
 STATS_PATH = os.path.join(BASE_DIR, "fishmod_stats.json")
 LOG_PATH = os.path.join(BASE_DIR, "fishmod.log")
 VERSION_PATH = os.path.join(BASE_DIR, "VERSION")
-CFG_VERSION = 10                 # формат конфига: меняем только при НЕсовместимых правках
+CFG_VERSION = 11                 # формат конфига: меняем только при НЕсовместимых правках
 REF_W, REF_H = 1920, 1080
 
 
@@ -125,8 +125,8 @@ def read_version():
 DEFAULT_CFG = {
     "lang": "ru",                      # ru | en | ua — язык интерфейса (RU/EN/UA на странице «Настройки»)
     "bind_toggle": "f8", "bind_panic": "f10", "bind_gui": "insert", "bind_debug": "f9",
-    "bind_macro": "f6",                  # старт/стоп записи макро закидывания (1-е нажатие —
-                                         # старт, повторное — стоп; F10 отменяет без записи)
+    "ui_click_window": True,             # клики экипировки прямо в окно интерфейса (курсор не двигается)
+    "rod_thr": 0.80,                     # порог поиска удочки в инвентаре (шаблон rod.png)
     "bar": [913, 471, 50, 529],          # область шкалы мини-игры (x, y, w, h) для 1920x1080
     "bar_pad": 22,                       # расширить кадр вокруг шкалы — нужен для красной рамки «РЫБА СРЫВАЕТСЯ»
     "bar_refine": True,                  # каждое измерение сверяется с РЕАЛЬНОЙ шкалой на кадре
@@ -147,11 +147,9 @@ DEFAULT_CFG = {
     # в открытом меню. Ключи ниже — только РУЧНОЕ переопределение (страница «Настройки»):
     # 📍 у «ПКМ удочка» заодно снимает шаблон rod.png с экрана; пусто/None = автопоиск.
     "tpl_selflearn": True,               # наживка: лучший стек обновляет bait.png с экрана
-    # АВТО-ЗАКИД = ЗАПИСАННОЕ МАКРО (v1.12): один раз записываешь свои движения и клики
-    # (ПКМ по удочке -> пауза -> клик по «Использовать»), бот повторяет запись 1-в-1
-    # после каждой рыбы. Запись: «Настройки» -> «⏺ Записать».
-    "cast_macro": None,                  # события [[t, "move"|"down"|"up", ...], ...] или None
-    "macro_click_window": False,         # клики PostMessage прямо в окно интерфейса игры (курсор не двигается)
+    # АВТО-ЗАКИД = ЗРЕНИЕ (v1.21): удочка ищется по шаблону rod.png в открытом
+    # инвентаре, «Использовать» — по красной строке меню предмета; клики ставятся
+    # прямо в окно интерфейса игры (ui_click_window), курсор Windows не двигается.
     "sound_start": True, "sound_end": True, "sound_catch": False, "volume": 60,
     "hide_when_running": True,           # прятать окно, пока бот ловит (оверлей не мешает «зрению»)
     "ui_scale": 0.72,
@@ -202,7 +200,8 @@ REMOVED_CFG_KEYS = ("pid_mode", "pid_kp", "pid_ki", "pid_kd", "pid_ilim", "pid_d
                     "lead_time", "lead_max", "hover_adapt", "hover_ref", "hover_k", "hover_span",
                     "brake_ms", "bait_check_every", "use_offset", "equip_retry_delay",
                     "inv_wheel_center", "rod_click_pos", "use_click_pos", "rod_match_min",
-                    "move_time", "use_menu_delay", "rod_retry_delay", "idle_cursor")
+                    "move_time", "use_menu_delay", "rod_retry_delay", "idle_cursor",
+                    "cast_macro", "macro_click_window", "bind_macro")
 CFG = dict(DEFAULT_CFG)
 
 THR = {"rod": 0.90, "bait": 0.90, "inv_header": 0.80,
@@ -246,14 +245,6 @@ def load_cfg():
             for k in REMOVED_CFG_KEYS:
                 if k in data and k not in CFG_DROPPED:
                     CFG_DROPPED.append(k)
-            # макро закидывания (v1.16): дельты движения ["m", dx, dy], кнопки
-            # ["down"/"up", btn], старт ["p", x, y]; мусор/старый формат -> None
-            _m = CFG.get("cast_macro")
-            if _m is not None and not (isinstance(_m, list) and _m
-                                       and all(isinstance(e, (list, tuple)) and len(e) >= 3
-                                               and isinstance(e[0], (int, float))
-                                               and e[1] in ("p", "m", "down", "up") for e in _m)):
-                CFG["cast_macro"] = None
             # устаревшие ЗНАЧЕНИЯ мигрируем явно (CFG_VERSION не меняем — ключ-то на месте).
             # mss из проекта вырезан, а конфиги версий 1.2-1.3 успели записать
             # "capture_backend": "mss" при тихом откате — иначе пользователь навсегда
@@ -262,13 +253,8 @@ def load_cfg():
                 CFG["capture_backend"] = DEFAULT_CFG["capture_backend"]
                 CFG_MIGRATED.append("capture_backend")
             if int(data.get("cfg_version", 1) or 1) < CFG_VERSION:
-                if int(data.get("cfg_version", 1) or 1) < 10 and CFG.get("cast_macro"):
-                    # v1.16: макро переведено на относительные дельты (точно как мышь);
-                    # старую абсолютную запись просим сделать заново (20 секунд)
-                    CFG["cast_macro"] = None
-                    CFG_MIGRATED.append("cast_macro")
-                # аддитивная миграция: недостающие ключи (в т.ч. cast_macro) добавляем
-                # дефолтами; устаревшие чистит REMOVED_CFG_KEYS выше
+                # аддитивная миграция: недостающие ключи (в т.ч. ui_click_window,
+                # rod_thr) добавляем дефолтами; устаревшие чистит REMOVED_CFG_KEYS выше
                 CFG.update({k: v for k, v in DEFAULT_CFG.items() if k not in known})
                 save_cfg()
             return True
@@ -339,35 +325,24 @@ STRINGS = {
     "m_maxhold": "Макс. удержание, с",
     "m_lostms": "Потеря зоны, мс", "m_fishthr": "Порог контраста рыбы", "m_fishdet": "Поиск рыбы",
     "m_barpad": "Отступ рамки, px", "m_slipthr": "Порог красной рамки",
-    "s_sec_lang": "ЯЗЫК / LANGUAGE / МОВА", "s_sec_binds": "Горячие клавиши", "s_lang": "Язык интерфейса", "s_bind_toggle": "Старт / Стоп", "s_bind_panic": "Аварийный стоп", "s_bind_macro": "Запись макро (старт/стоп)",
+    "s_sec_lang": "ЯЗЫК / LANGUAGE / МОВА", "s_sec_binds": "Горячие клавиши", "s_lang": "Язык интерфейса", "s_bind_toggle": "Старт / Стоп", "s_bind_panic": "Аварийный стоп",
     "s_bind_gui": "Показать / скрыть окно", "s_volume": "Громкость звуков, %", "s_cast_delay": "Задержка заброса, сек",
     "s_game_none": "Окно игры определяется при старте (F8 в игре)", "s_game": "Окно игры: «{title}»",
     "s_version": "Версия {v} · захват: {b}", "s_capture_backend": "Захват при старте",
     "toast_cfg_saved": "Конфиг сохранён успешно", "toast_cfg_save_fail": "Не удалось сохранить конфиг",
     "toast_cfg_loaded": "Конфиг загружен успешно", "toast_cfg_missing": "Файл конфига не найден",
     "toast_cfg_reset": "Настройки сброшены", "toast_lang": "Язык: {lang}",
-    "s_sec_macro": "МАКРО ЗАКИДЫВАНИЯ (запиши один раз — бот повторяет сам)",
-    "s_macro_none": "не записано", "s_macro_len": "записано: {d:.1f} с · кликов: {n}",
-    "b_rec": "⏺ Записать", "b_play": "▷ Проверить", "b_clear": "✕ Стереть",
-    "toast_rec_go": "Запись через {i}…",
-    "toast_rec_on": "⏺ ПИШУ: ПКМ по удочке → пауза → «Использовать»; F6 — стоп и сохранить",
-    "toast_rec_done": "Макро сохранено: {d:.1f} с, кликов {n}",
-    "toast_rec_empty": "В записи нет кликов — макро не сохранено",
-    "toast_rec_running": "Сначала останови бота (F8)", "toast_rec_cancel": "⏹ Запись отменена — ничего не сохранено",
-    "toast_macro_play": "▸ Проигрываю макро…",
-    "toast_macro_cleared": "Макро стёрто",
-    "toast_macro_need_inv": "Открой инвентарь в игре — потом «▷ Проверить»",
-    "log_macro_play": "▶ Макро закидывания: повторяю запись ({d:.1f} с, {n} событий)",
-    "log_macro_done": "✔ Макро выполнено — удочка взята",
-    "log_macro_none": "❌ Макро закидывания не записано — «Настройки» → «⏺ Записать»",
-    "log_macro_win": "🖱 Клики — прямо в окно интерфейса игры, курсор Windows не двигается",
-    "log_macro_win_nofind": "Окно интерфейса игры не найдено — кликаю курсором",
-    "log_macro_drift": "Курсор сдвинут после прыжка: цель ({x}, {y}), фактически ({cx}, {cy}) — переставляю",
-    "m_clickwin": "Клики прямо в окно игры (курсор не двигается)",
-    "log_macro_saved": "💾 Макро закидывания сохранено: {d:.1f} с, {n} событий",
-    "log_rec_fail": "❌ Запись макро не удалась: {e}",
-    "nt_macro_none": "Сначала запиши закид: «Настройки» → «⏺ Записать»",
-    "reason_no_macro": "макро закидывания не записано",
+    "s_sec_equip": "ЭКИПИРОВКА УДОЧКИ (v1.21 — зрение, запись макро удалена)",
+    "s_equip_hint": "Бот сам найдёт удочку в открытом инвентаре и кликнет «Использовать»",
+    "b_equip": "▷ Экипировать",
+    "nt_equip_need_inv": "Открой инвентарь в игре — бот сам возьмёт удочку",
+    "m_clickwin": "Клики прямо в окно интерфейса игры (курсор не двигается)",
+    "log_equip_rod": "🎣 Удочка найдена: ({x}, {y}), точность {s:.2f} — ПКМ",
+    "log_equip_rod_nofind": "❌ Удочка не найдена в инвентаре (шаблон rod.png) — открой инвентарь",
+    "log_equip_win": "🖱 Клики — прямо в окно интерфейса игры, курсор Windows не двигается",
+    "log_equip_cur": "🖱 Окно интерфейса не найдено — кликаю курсором",
+    "log_use_nofind": "❌ Меню предмета не открылось (красная строка не найдена)",
+    "reason_no_macro": "удочка не найдена в инвентаре",
     "log_rod_skip": "🎣 equip_on_start выключен — начинаю с заброса (удочка уже в руках)",
     "st_stopped": "ОСТАНОВЛЕНО", "st_idle_d": "Нажми СТАРТ или F8",
     "st_starting": "ЗАПУСК", "st_starting_d": "Определяю окно игры…",
@@ -461,35 +436,24 @@ STRINGS = {
     "m_maxhold": "Max hold, s",
     "m_lostms": "Zone lost, ms", "m_fishthr": "Fish contrast threshold", "m_fishdet": "Fish detection",
     "m_barpad": "Bar border pad, px", "m_slipthr": "Red frame threshold",
-    "s_sec_lang": "ЯЗЫК / LANGUAGE / МОВА", "s_sec_binds": "Hotkeys", "s_lang": "Interface language", "s_bind_toggle": "Start / Stop", "s_bind_panic": "Panic stop", "s_bind_macro": "Macro record (start/stop)",
+    "s_sec_lang": "ЯЗЫК / LANGUAGE / МОВА", "s_sec_binds": "Hotkeys", "s_lang": "Interface language", "s_bind_toggle": "Start / Stop", "s_bind_panic": "Panic stop",
     "s_bind_gui": "Show / hide window", "s_volume": "Sound volume, %", "s_cast_delay": "Cast delay, s",
     "s_game_none": "Game window is detected on start (press F8 inside the game)", "s_game": "Game window: “{title}”",
     "s_version": "Version {v} · capture: {b}", "s_capture_backend": "Capture on start",
     "toast_cfg_saved": "Config saved successfully", "toast_cfg_save_fail": "Failed to save config",
     "toast_cfg_loaded": "Config loaded successfully", "toast_cfg_missing": "Config file not found",
     "toast_cfg_reset": "Settings reset", "toast_lang": "Language: {lang}",
-    "s_sec_macro": "CAST MACRO (record once — the bot repeats it itself)",
-    "s_macro_none": "not recorded", "s_macro_len": "recorded: {d:.1f} s · clicks: {n}",
-    "b_rec": "⏺ Record", "b_play": "▷ Test", "b_clear": "✕ Clear",
-    "toast_rec_go": "Recording in {i}…",
-    "toast_rec_on": "⏺ RECORDING: RMB on the rod → pause → “Use”; F6 to stop & save",
-    "toast_rec_done": "Macro saved: {d:.1f} s, {n} clicks",
-    "toast_rec_empty": "No clicks recorded — macro not saved",
-    "toast_rec_running": "Stop the bot first (F8)", "toast_rec_cancel": "⏹ Recording cancelled — nothing saved",
-    "toast_macro_play": "▸ Replaying macro…",
-    "toast_macro_cleared": "Macro cleared",
-    "toast_macro_need_inv": "Open the in-game inventory — then “▷ Test”",
-    "log_macro_play": "▶ Cast macro: replaying the recording ({d:.1f} s, {n} events)",
-    "log_macro_done": "✔ Macro done — rod is taken",
-    "log_macro_none": "❌ Cast macro not recorded — Settings → “⏺ Record”",
-    "log_macro_win": "🖱 Clicks go straight into the game UI window; the Windows cursor never moves",
-    "log_macro_win_nofind": "Game UI window not found — clicking via cursor",
-    "log_macro_drift": "Cursor displaced after the jump: target ({x}, {y}), actual ({cx}, {cy}) — re-placing",
-    "m_clickwin": "Click straight into the game window (cursor stays put)",
-    "log_macro_saved": "💾 Cast macro saved: {d:.1f} s, {n} events",
-    "log_rec_fail": "❌ Macro recording failed: {e}",
-    "nt_macro_none": "Record the cast first: Settings → “⏺ Record”",
-    "reason_no_macro": "cast macro not recorded",
+    "s_sec_equip": "ROD EQUIP (v1.21 — vision, macro recording removed)",
+    "s_equip_hint": "The bot finds the rod in your open inventory and clicks “Use” itself",
+    "b_equip": "▷ Equip",
+    "nt_equip_need_inv": "Open the in-game inventory — the bot will take the rod itself",
+    "m_clickwin": "Click straight into the game UI window (cursor stays put)",
+    "log_equip_rod": "🎣 Rod found: ({x}, {y}), score {s:.2f} — RMB",
+    "log_equip_rod_nofind": "❌ Rod not found in the inventory (rod.png template) — open the inventory",
+    "log_equip_win": "🖱 Clicks go straight into the game UI window; the Windows cursor never moves",
+    "log_equip_cur": "🖱 UI window not found — clicking via cursor",
+    "log_use_nofind": "❌ Item menu did not open (red row not found)",
+    "reason_no_macro": "rod not found in the inventory",
     "log_rod_skip": "🎣 equip_on_start is off — starting with the cast (rod already in hands)",
     "st_stopped": "STOPPED", "st_idle_d": "Press START or F8",
     "st_starting": "STARTING", "st_starting_d": "Detecting the game window…",
@@ -583,35 +547,24 @@ STRINGS = {
     "m_maxhold": "Макс. утримання, с",
     "m_lostms": "Втрата зони, мс", "m_fishthr": "Поріг контрасту риби", "m_fishdet": "Пошук риби",
     "m_barpad": "Відступ рамки, px", "m_slipthr": "Поріг червоної рамки",
-    "s_sec_lang": "ЯЗЫК / LANGUAGE / МОВА", "s_sec_binds": "Гарячі клавіші", "s_lang": "Мова інтерфейсу", "s_bind_toggle": "Старт / Стоп", "s_bind_panic": "Аварійний стоп", "s_bind_macro": "Запис макро (старт/стоп)",
+    "s_sec_lang": "ЯЗЫК / LANGUAGE / МОВА", "s_sec_binds": "Гарячі клавіші", "s_lang": "Мова інтерфейсу", "s_bind_toggle": "Старт / Стоп", "s_bind_panic": "Аварійний стоп",
     "s_bind_gui": "Показати / сховати вікно", "s_volume": "Гучність звуків, %", "s_cast_delay": "Затримка закидання, с",
     "s_game_none": "Вікно гри визначається на старті (F8 у грі)", "s_game": "Вікно гри: «{title}»",
     "s_version": "Версія {v} · захват: {b}", "s_capture_backend": "Захват на старті",
     "toast_cfg_saved": "Конфіг збережено успішно", "toast_cfg_save_fail": "Не вдалося зберегти конфіг",
     "toast_cfg_loaded": "Конфіг завантажено успішно", "toast_cfg_missing": "Файл конфігу не знайдено",
     "toast_cfg_reset": "Налаштування скинуто", "toast_lang": "Мова: {lang}",
-    "s_sec_macro": "МАКРО ЗАКИДАННЯ (запиши один раз — бот повторює сам)",
-    "s_macro_none": "не записано", "s_macro_len": "записано: {d:.1f} с · кліків: {n}",
-    "b_rec": "⏺ Записати", "b_play": "▷ Перевірити", "b_clear": "✕ Стерти",
-    "toast_rec_go": "Запис через {i}…",
-    "toast_rec_on": "⏺ ПИШУ: ПКМ по вудці → пауза → «Використати»; F6 — стоп і зберегти",
-    "toast_rec_done": "Макро збережено: {d:.1f} с, кліків {n}",
-    "toast_rec_empty": "У записі немає кліків — макро не збережено",
-    "toast_rec_running": "Спочатку зупини бота (F8)", "toast_rec_cancel": "⏹ Запис скасовано — нічого не збережено",
-    "toast_macro_play": "▸ Програю макро…",
-    "toast_macro_cleared": "Макро стерто",
-    "toast_macro_need_inv": "Відкрий інвентар у грі — потім «▷ Перевірити»",
-    "log_macro_play": "▶ Макро закидання: повторюю запис ({d:.1f} с, {n} подій)",
-    "log_macro_done": "✔ Макро виконано — вудку взято",
-    "log_macro_win": "🖱 Кліки — прямо у вікно інтерфейсу гри, курсор Windows не рухається",
-    "log_macro_win_nofind": "Вікно інтерфейсу гри не знайдено — клікаю курсором",
-    "log_macro_drift": "Курсор зсунуто після стрибка: ціль ({x}, {y}), фактично ({cx}, {cy}) — переставляю",
-    "m_clickwin": "Кліки прямо у вікно гри (курсор не рухається)",
-    "log_macro_none": "❌ Макро закидання не записано — «Налаштування» → «⏺ Записати»",
-    "log_macro_saved": "💾 Макро закидання збережено: {d:.1f} с, {n} подій",
-    "log_rec_fail": "❌ Запис макро не вдався: {e}",
-    "nt_macro_none": "Спочатку запиши закид: «Налаштування» → «⏺ Записати»",
-    "reason_no_macro": "макро закидання не записано",
+    "s_sec_equip": "ЕКІПІРУВАННЯ ВУДКИ (v1.21 — зір, запис макро видалено)",
+    "s_equip_hint": "Бот сам знайде вудку у відкритому інвентарі і клікне «Використати»",
+    "b_equip": "▷ Екіпірувати",
+    "nt_equip_need_inv": "Відкрий інвентар у грі — бот сам візьме вудку",
+    "m_clickwin": "Кліки прямо у вікно інтерфейсу гри (курсор не рухається)",
+    "log_equip_rod": "🎣 Вудку знайдено: ({x}, {y}), точність {s:.2f} — ПКМ",
+    "log_equip_rod_nofind": "❌ Вудку не знайдено в інвентарі (шаблон rod.png) — відкрий інвентар",
+    "log_equip_win": "🖱 Кліки — прямо у вікно інтерфейсу гри, курсор Windows не рухається",
+    "log_equip_cur": "🖱 Вікно інтерфейсу не знайдено — клікаю курсором",
+    "log_use_nofind": "❌ Меню предмета не відкрилося (червоний рядок не знайдено)",
+    "reason_no_macro": "вудку не знайдено в інвентарі",
     "log_rod_skip": "🎣 equip_on_start вимкнено — починаю з закидання (вудку вже в руках)",
     "st_stopped": "ЗУПИНЕНО", "st_idle_d": "Натисни СТАРТ або F8",
     "st_starting": "ЗАПУСК", "st_starting_d": "Визначаю вікно гри…",
@@ -1770,9 +1723,9 @@ def mouse_lmb_up():
     mouse_down = False
     last_up_sent = time.perf_counter()
 
-# (v1.14) старые помощники нажатий удалены: mouse_rmb_click/mouse_lmb_click,
-# pdi_key/key_down/key_up. Весь ввод — записанное макро (macro_run) или явные
-# mouse_lmb_down/up мини-игры; «лишних» нажатий в коде больше нет.
+# (v1.21) старые помощники нажатий удалены: mouse_rmb_click/mouse_lmb_click,
+# pdi_key/key_down/key_up и вся макро-система (запись/повтор). Весь ввод — зрительная
+# экипировка (_ui_click: окно интерфейса или курсор) и mouse_lmb_down/up мини-игры.
 
 
 def release_all():
@@ -2735,320 +2688,13 @@ def _match_scales(gray, t_, max_n=1, thr=0.60, with_f=False):
     return out
 
 
-# --- v1.12.0: АВТО-ЗАКИД = ЗАПИСАННОЕ МАКРО ---
-# Ты один раз показываешь боту закид: «⏺ Записать» на «Настройках» -> 3 с отсчёт ->
-# делаешь ПКМ по удочке, паузу, клик по «Использовать». Бот запоминает ВСЕ движения
-# мыши и нажатия с таймингами и потом повторяет запись 1-в-1 после каждой рыбы.
-# Никакого распознавания при закиде: запись уже «работает», повторять её надёжнее,
-# чем искать заново. (Шаблоны остаются только для пассивной проверки наживки.)
-
-MACRO_STATE = {"rec": False, "stop": False, "cancel": False}
-# rec — запись идёт; stop — досрочно завершить И СОХРАНИТЬ; cancel — отменить без записи
-
-
-def macro_cancel():
-    """АВАРИЙНАЯ ОТМЕНА записи (вызывается из panic/F10): всё, что успело записаться,
-    выбрасывается — в конфиг не попадёт ничего. Безопаснее «недописанного» макро."""
-    if MACRO_STATE["rec"]:
-        MACRO_STATE["cancel"] = True
-
-
-def macro_record():
-    """ЗАПИСЬ МАКРО (бинд bind_macro или кнопка «⏺ Записать») — ТУМБЛЕР:
-      * 1-е нажатие: отсчёт 3 с -> запись;
-      * повторное нажатие: досрочный СТОП с сохранением;
-      * F10 (panic): отмена БЕЗ сохранения;
-      * авто-стоп: после обоих кликов 2 с тишины (один клик — 4 с; потолок 30 с).
-    Надёжность записи:
-      * ПЕРВОЕ событие всегда ставит мышь в точку, где запись началась, — при
-        повторе курсор гарантированно стартует оттуда же;
-      * кнопки пишутся по переходам down/up (VK-поллинг 100 Гц), движения — шагом
-        >= 2 px, время — от t0 записи (monotonic);
-      * ОТНОСИТЕЛЬНЫЕ дельты движения мыши [t, "m", dx, dy] — ровно то, что
-        получает игра; повтор не зависит от DPI/маппинга координат. Пока кнопка
-        ЗАЖАТА, дельты НЕ пишутся: курсором рулит игра (камера/захват), и её
-        рывки в запись не попадают;
-      * у каждого нажатия — ЯКОРЬ: снимок кадра игры вокруг точки клика
-        [t, "down", btn, x, y, png-base64]; при повторе клик встаёт туда, где
-        этот кусочек интерфейса на экране СЕЙЧАС (метод «под курсор игры»);
-      * баллистика мыши НЕ трогается (v1.19): запись идёт с твоей обычной
-        сенсой, ничего в системе не переключается;
-      * при работающем боте запись отклоняется с тостом (конфликт ввода).
-    Все флаги сбрасываются в finally — запись не может «залипнуть»."""
-    if MACRO_STATE["rec"]:                  # тумблер: повторное нажатие = стоп и сохранить
-        MACRO_STATE["stop"] = True
-        return
-    if STATE.get("running"):
-        notify("toast_rec_running", "warn")
-        return
-    MACRO_STATE["stop"] = False              # чистый старт: чужие флаги не наследуем
-    MACRO_STATE["cancel"] = False
-    MACRO_STATE["rec"] = True
-
-    def worker():
-        events = []
-        clicks = 0
-        cancelled = False
-        try:
-            for i in (3, 2, 1):
-                if MACRO_STATE["cancel"] or MACRO_STATE["stop"]:
-                    break
-                notify("toast_rec_go", "ok", i=i)
-                time.sleep(1.0)
-            if MACRO_STATE["stop"]:          # стоп в отсчёте = записи ещё нет, это отмена
-                MACRO_STATE["cancel"] = True
-            if not MACRO_STATE["cancel"]:
-                notify("toast_rec_on", "ok")
-                log(t("toast_rec_on"))
-                t0 = time.perf_counter()
-                prev = {"l": False, "r": False}
-                last_act = t0
-                last_pos = None
-                try:                        # СТАРТОВАЯ ТОЧКА записи (для перевода мыши)
-                    p0 = cursor_pos()
-                    events.append([0.0, "p", int(p0[0]), int(p0[1])])
-                    last_pos = p0
-                except Exception:
-                    pass
-                while True:
-                    now = time.perf_counter()
-                    for name, vk in (("l", 0x01), ("r", 0x02)):   # VK_LBUTTON, VK_RBUTTON
-                        down = bool(ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000)
-                        if down != prev[name]:
-                            ev = [round(now - t0, 3), "down" if down else "up", name]
-                            if down:
-                                # ЯКОРЬ КЛИКА: кадр игры вокруг точки нажатия — при
-                                # повторе клик встанет по ПИКСЕЛЯМ ИГРЫ (курсор
-                                # Windows и игровой спрайт на попадание не влияют)
-                                try:
-                                    cp = cursor_pos()
-                                    ev += [int(cp[0]), int(cp[1])]
-                                    img = _anchor_capture(cp[0], cp[1])
-                                    if img:
-                                        ev.append(img)
-                                except Exception:
-                                    pass
-                                clicks += 1
-                            events.append(ev)
-                            prev[name] = down
-                            last_act = now
-                    try:
-                        pos = cursor_pos()
-                    except Exception:
-                        pos = None
-                    if pos is not None and last_pos is not None and pos != last_pos:
-                        if prev["l"] or prev["r"]:
-                            # Кнопка ЗАЖАТА — курсором рулит ИГРА (камера/захват):
-                            # именно эти чужие рывки таскали мышь «в самый низ».
-                            # Дельты НЕ пишем, путь просто продолжаем с нового места
-                            last_pos = pos
-                            last_act = now
-                        else:
-                            # ОТНОСИТЕЛЬНАЯ дельта — ровно то, что получает игра от
-                            # физической мыши: повтор не зависит ни от DPI/маппинга
-                            # координат, ни от того, как игра трактует позицию курсора
-                            events.append([round(now - t0, 3), "m",
-                                           int(pos[0] - last_pos[0]), int(pos[1] - last_pos[1])])
-                            last_pos = pos
-                            last_act = now
-                    if MACRO_STATE["cancel"] or MACRO_STATE["stop"]:
-                        break               # бинд/кнопка: стоп (cancel решит судьбу записи)
-                    if clicks >= 2 and now - last_act >= 2.0:
-                        break               # ПКМ и ЛКМ есть, 2 с тишины — хватит
-                    if clicks >= 1 and now - last_act >= 4.0:
-                        break               # один клик и долгая тишина
-                    if now - t0 >= 30.0:
-                        break               # потолок записи
-                    time.sleep(0.002)       # 500 Гц — клики и траектория без пропусков
-        except Exception as e:
-            try:
-                log(t("log_rec_fail", e=f"{type(e).__name__}: {e}"))
-            except Exception:
-                pass
-        finally:
-            cancelled = bool(MACRO_STATE["cancel"])
-            MACRO_STATE["rec"] = False
-            MACRO_STATE["stop"] = False
-            MACRO_STATE["cancel"] = False
-            if cancelled:
-                notify("toast_rec_cancel", "warn")
-                log(t("toast_rec_cancel"))
-            elif clicks < 1 or not events:
-                notify("toast_rec_empty", "warn")
-                log(t("log_rec_fail", e="no clicks"))
-            else:
-                # кнопки в паре: если запись оборвалась на зажатой кнопке —
-                # дописываем отпускание, при повторе ничего не «залипнет»
-                events = _macro_balance(events)
-                dur = float(events[-1][0]) if events else 0.0
-                CFG["cast_macro"] = events
-                save_cfg()
-                notify("toast_rec_done", "ok", d=dur, n=clicks)
-                log(t("log_macro_saved", d=dur, n=len(events)))
-            try:
-                EVENTS.put(("refresh_page",))   # обновить статус макро в GUI
-            except Exception:
-                pass
-    threading.Thread(target=worker, daemon=True).start()
-
-
-def _macro_balance(events):
-    """Гарантирует пары down/up для каждой кнопки: запись, оборвавшаяся на зажатой
-    кнопке, получает отпускание в конце — при повторе ничего не «залипнет»."""
-    held = {"l": False, "r": False}
-    for e in events:
-        if len(e) >= 3 and e[1] in ("down", "up"):
-            held[e[2]] = (e[1] == "down")
-    end_t = float(events[-1][0]) if events else 0.0
-    for name, is_down in held.items():
-        if is_down:
-            events.append([round(end_t + 0.02, 3), "up", name])
-    return events
-
-
-def _glide(x, y, dur=0.22):
-    """ТОЧНЫЙ перевод курсора в (x, y) за dur секунд: smoothstep (плавный разгон и
-    торможение), финальная позиция — ровно цель. Так мышь доезжает из своего
-    фактического положения в точку начала записи перед повтором макро."""
-    try:
-        x0, y0 = cursor_pos()
-    except Exception:
-        x0, y0 = int(x), int(y)
-    x, y = int(x), int(y)
-    if max(abs(x - x0), abs(y - y0)) < 2:       # уже на месте
-        mouse_move_abs(x, y)
-        return
-    steps = int(max(8, min(44, dur / 0.008)))
-    t0 = time.perf_counter()
-    for i in range(1, steps + 1):
-        check_stop()
-        tt = i / steps
-        e = tt * tt * (3.0 - 2.0 * tt)          # smoothstep
-        mouse_move_abs(int(round(x0 + (x - x0) * e)), int(round(y0 + (y - y0) * e)))
-        left = (t0 + dur * tt) - time.perf_counter()
-        if left > 0:
-            time.sleep(min(left, 0.02))
-    mouse_move_abs(x, y)                        # финал — ровно в цель
-
-
-_SPI_GETMOUSE = 0x0003
-_SPI_SETMOUSE = 0x0004
-_SPIF = 0x03                             # SPIF_UPDATEINIFILE | SPIF_SENDCHANGE
-
-
-def _epp_get():
-    """Текущие пороги ускорения курсора Windows («Повышенная точность указателя»).
-    None — узнать не удалось (не Windows и т.п.): тогда при повторе ничего не меняем."""
-    try:
-        arr = (ctypes.c_uint * 3)()
-        if ctypes.windll.user32.SystemParametersInfoW(_SPI_GETMOUSE, 0,
-                                                      ctypes.byref(arr), 0):
-            return (int(arr[0]), int(arr[1]), int(arr[2]))
-    except Exception:
-        pass
-    return None
-
-
-def _epp_set(v):
-    """Временно выключить/вернуть ускорение курсора (v = кортеж порогов или (0,0,0)).
-    Нужно потому, что ОТНОСИТЕЛЬНЫЕ дельты через SendInput проходят через то же
-    ускорение, что и физическая мышь: записанные дельты уже содержат ускорение,
-    и повторное его применение разгоняло движение («быстрая сенса»)."""
-    if v is None:
-        return
-    try:
-        arr = (ctypes.c_uint * 3)(int(v[0]), int(v[1]), int(v[2]))
-        ctypes.windll.user32.SystemParametersInfoW(_SPI_SETMOUSE, 0,
-                                                   ctypes.byref(arr), _SPIF)
-    except Exception:
-        pass
-
-
-_SPI_GETMOUSESPEED = 0x0070
-_SPI_SETMOUSESPEED = 0x0071
-_NO_ACCEL = ((0, 0, 0), 10)              # EPP off + скорость 10 (= умножение ×1.0)
-
-
-def _mspeed_get():
-    """Скорость указателя Windows (ползунок 1-20; 10 = ×1.0). None — не удалось."""
-    try:
-        v = ctypes.c_uint(0)
-        if ctypes.windll.user32.SystemParametersInfoW(_SPI_GETMOUSESPEED, 0,
-                                                      ctypes.byref(v), 0):
-            return int(v.value)
-    except Exception:
-        pass
-    return None
-
-
-def _mspeed_set(speed):
-    if speed is None:
-        return
-    try:
-        ctypes.windll.user32.SystemParametersInfoW(_SPI_SETMOUSESPEED, 0,
-                                                   int(speed), _SPIF)
-    except Exception:
-        pass
-
-
-def _ballistics_get():
-    """Профиль баллистики курсора: (пороги EPP, скорость указателя)."""
-    return (_epp_get(), _mspeed_get())
-
-
-def _ballistics_set(st):
-    if not st:
-        return
-    _epp_set(st[0])
-    _mspeed_set(st[1])
-
-
-_ANCHOR_CROP = 56                        # снимок-якорь: кусочек кадра вокруг клика
-_ANCHOR_THR = 0.82                       # порог узнавания кусочка на новом кадре
-
-
-def _anchor_capture(px, py):
-    """Снимок-якорь: кусочек КАДРА ИГРЫ вокруг точки клика (base64 PNG).
-    None — кадр недоступен (якорь не критичен: остаются запасные точки)."""
-    try:
-        frame = grab()
-        if frame is None or frame.size == 0:
-            return None
-        h, w = frame.shape[:2]
-        r = _ANCHOR_CROP // 2
-        x0, y0 = max(0, int(px) - r), max(0, int(py) - r)
-        x1, y1 = min(w, x0 + _ANCHOR_CROP), min(h, y0 + _ANCHOR_CROP)
-        if x1 - x0 < 16 or y1 - y0 < 16:
-            return None
-        ok, buf = cv2.imencode(".png", frame[y0:y1, x0:x1])
-        return base64.b64encode(buf.tobytes()).decode("ascii") if ok else None
-    except Exception:
-        return None
-
-
-def _anchor_find(img_b64):
-    """Найти снимок-якорь на ТЕКУЩЕМ кадре игры: (x, y) центра или None.
-    Метод «под курсор игры»: игровой курсор рисует сама игра и ОС про него не
-    знает, поэтому попадание строится по ПИКСЕЛЯМ ИГРЫ — где записанный кусочек
-    интерфейса находится сейчас, туда и ставится клик. Ни курсор Windows, ни
-    игровой спрайт, ни масштабирование движений в расчёт не идут."""
-    try:
-        t_ = cv2.imdecode(np.frombuffer(base64.b64decode(img_b64), np.uint8),
-                          cv2.IMREAD_COLOR)
-        if t_ is None or t_.size == 0:
-            return None
-        frame = grab()
-        if frame is None or frame.size == 0:
-            return None
-        s_, pt, _ = _match_scales(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY),
-                                  cv2.cvtColor(t_, cv2.COLOR_BGR2GRAY),
-                                  max_n=1, thr=_ANCHOR_THR)
-        if pt and float(s_ or 0) >= _ANCHOR_THR:
-            return (int(pt[0]), int(pt[1]))
-    except Exception:
-        pass
-    return None
-
+# --- v1.21.0: АВТО-ЗАКИД = ЗРЕНИЕ + КЛИКИ В ОКНО ИНТЕРФЕЙСА (без записи макро) ---
+# Запись/повтор макро УДАЛЕНЫ (v1.21): игровой курсор живёт своей жизнью (raw-input
+# клиента), поэтому любые записанные движения/точки курсора Windows ненадёжны.
+# Вместо записи бот КАЖДЫЙ РАЗ находит удочку в открытом инвентаре по шаблону
+# rod.png (мульти-масштабный поиск) и кликает «Использовать» — белая строка меню
+# предмета стоит прямо НАД красной строкой «Выбросить». Клик ставится ПРЯМО В ОКНО
+# интерфейса игры (DOM в CEF/Chromium) — курсор мыши Windows не двигается вовсе.
 
 _WM_MOUSEMOVE, _WM_LBDOWN, _WM_LBUP = 0x0200, 0x0201, 0x0202
 _WM_RBDOWN, _WM_RBUP = 0x0204, 0x0205
@@ -3059,7 +2705,7 @@ def _cef_render_hwnd():
     """HWND дочернего окна рендера интерфейса (CEF/Chromium, класс Chrome_*) у
     АКТИВНОГО окна игры: инвентарь и меню «Использовать» — это DOM, и клик можно
     поставить ПРЯМО в это окно сообщением Windows, не двигая курсор мыши вовсе.
-    None — окно не найдено (идём обычным путём)."""
+    None — окно не найдено (клик уйдёт курсором, запасной путь)."""
     try:
         u32 = ctypes.windll.user32
         top = u32.GetForegroundWindow()
@@ -3084,9 +2730,9 @@ def _cef_render_hwnd():
 
 def _cef_click_at(hwnd, fx, fy, btn, down):
     """Одна фаза клика ПРЯМО В ОКНО интерфейса игры: координата берётся из КАДРА
-    (та же система, что у якоря), переводится в клиент окна, затем WM_MOUSEMOVE +
-    нажатие/отпускание кнопки. Курсор мыши Windows НЕ двигается вообще. True —
-    окно приняло сообщения."""
+    (та же система, что у поиска удочки), переводится в клиент окна, затем
+    WM_MOUSEMOVE + нажатие/отпускание кнопки. Курсор мыши Windows НЕ двигается.
+    True — окно приняло сообщение."""
     try:
         from ctypes import wintypes
         m = monitor()
@@ -3104,136 +2750,86 @@ def _cef_click_at(hwnd, fx, fy, btn, down):
         return False
 
 
-def _macro_fire(kind, btn):
-    """Одно нажатие/отпускание записанной кнопки."""
-    if kind == "down":
-        _send_mouse(MOUSEEVENTF_LEFTDOWN if btn == "l" else MOUSEEVENTF_RIGHTDOWN)
-    elif kind == "up":
-        _send_mouse(MOUSEEVENTF_LEFTUP if btn == "l" else MOUSEEVENTF_RIGHTUP)
-
-
-def macro_run(ev):
-    """АТОМАРНЫЙ ПОВТОР МАКРО (v1.19) — курсор вообще не «едет», улетать нечему:
-      1) записанные дельты движения НЕ подаются вовсе: закиду важны КЛИКИ, а не
-         траектория. На каждое нажатие/отпускание — ровно один мгновенный прыжок
-         курсора и сразу клик; больше мышь не двигается ничем;
-      2) точка прыжка — по КАДРУ ИГРЫ (метод «под курсор игры»): записанный
-         снимок-якорь ищется на текущем кадре, и клик встаёт туда, где кусочек
-         интерфейса находится СЕЙЧАС; кадр недоступен — запасные точки:
-         записанная координата клика, затем старт + сумма записанных дельт;
-      3) баллистика мыши НЕ трогается ни при записи, ни при повторе — твоя сенса
-         всегда остаётся твоей;
-      4) паузы между кликами — по абсолютным часам, как записано; незакрытые
-         нажатия закрывает _macro_balance; после повтора мышь возвращается туда,
-         где была до него;
-      5) режим «клики в окно игры» (тумблер на «Настройках»): клики уходят
-         сообщениями Windows ПРЯМО в окно интерфейса игры (инвентарь — это DOM
-         в CEF/Chromium), курсор мыши не двигается вовсе — для игры, чей курсор
-         живёт своей жизнью (raw-input), это самый надёжный путь.
-    True — доиграно; False — прервано записью."""
-    events = _macro_balance([list(e) for e in (ev or [])])
-    if not events:
-        return True
-    start = next((e for e in events if e[1] == "p" and len(e) == 4), None)
-    px, py = (int(start[2]), int(start[3])) if start else (None, None)
-    home = None                              # куда вернуть мышь после повтора
+def _ui_click(fx, fy, btn, down):
+    """Одна фаза клика по интерфейсу: ПРЯМО В ОКНО DOM (ui_click_window, курсор
+    стоит на месте) либо, если окно не найдено, курсором (запасной путь)."""
+    hwnd = _cef_render_hwnd() if CFG.get("ui_click_window", True) else None
+    if hwnd is not None and _cef_click_at(hwnd, int(fx), int(fy), btn, down):
+        return "win"
     try:
-        home = cursor_pos()
+        mouse_move_abs(int(fx), int(fy))
     except Exception:
         pass
-    ok = True
-    fixed = {}                               # точки кликов (up — в ту же точку)
-    hwnd = None                              # окно интерфейса для режима «клик в окно»
-    if CFG.get("macro_click_window"):
-        hwnd = _cef_render_hwnd()
-        try:
-            log(t("log_macro_win") if hwnd else t("log_macro_win_nofind"))
-        except Exception:
-            pass
-    try:
-        t0 = time.perf_counter()
-        for ev_i in events:
-            left = t0 + float(ev_i[0]) - time.perf_counter()
-            if left > 0:
-                nap(left)                    # записанная секунда события
-            kind = ev_i[1]
-            if kind == "p":                  # старт — лишь запасной отсчёт, не движение
-                continue
-            if kind == "m":                  # траекторию не стримим — только счёт
-                if px is not None:           # (запасные точки для кликов без якорей)
-                    px += int(ev_i[2])
-                    py += int(ev_i[3])
-                continue
-            if kind == "down":
-                btn = ev_i[2]
-                spot = None
-                if len(ev_i) >= 6:           # ЯКОРЬ ПО КАДРУ ИГРЫ: где кусочек
-                    spot = _anchor_find(ev_i[5])   # экрана сейчас — туда и клик
-                if spot is None:             # запасные точки: записанная координата
-                    spot = (int(ev_i[3]), int(ev_i[4])) if len(ev_i) >= 5 else (
-                        (px, py) if px is not None else None)
-                fixed[btn] = spot
-            else:                            # up
-                btn = ev_i[2]
-                spot = fixed.get(btn) if fixed.get(btn) is not None else (
-                    (px, py) if px is not None else None)
-            if hwnd is not None and spot is not None:
-                # РЕЖИМ «КЛИК В ОКНО»: интерфейс игры — DOM (CEF), клик ставится
-                # сообщением Windows прямо в окно интерфейса по координатам якоря,
-                # курсор Windows вообще не двигается — «уводить» его нечему
-                if _cef_click_at(hwnd, int(spot[0]), int(spot[1]), btn, kind == "down"):
-                    if MACRO_STATE["rec"]:
-                        ok = False
-                        break
-                    continue
-            if spot is not None:             # АТОМАРНО: один прыжок -> сразу клик
-                try:
-                    mouse_move_abs(int(spot[0]), int(spot[1]))
-                    if kind == "down":       # диагностика: не утащил ли курсор кто-то
-                        try:
-                            cp = cursor_pos()
-                            if abs(cp[0] - int(spot[0])) > 1 or abs(cp[1] - int(spot[1])) > 1:
-                                mouse_move_abs(int(spot[0]), int(spot[1]))
-                                cp = cursor_pos()
-                                log(t("log_macro_drift", x=int(spot[0]), y=int(spot[1]),
-                                      cx=int(cp[0]), cy=int(cp[1])))
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-            _macro_fire(kind, btn)
-            if MACRO_STATE["rec"]:
-                ok = False
+    if btn == "r":
+        _send_mouse(MOUSEEVENTF_RIGHTDOWN if down else MOUSEEVENTF_RIGHTUP)
+    else:
+        _send_mouse(MOUSEEVENTF_LEFTDOWN if down else MOUSEEVENTF_LEFTUP)
+    return "cur"
+
+
+def _red_menu_row(frame):
+    """Красная строка меню предмета («Выбросить»): строка с плотной насыщенно-красной
+    заливкой. Возвращает (x_центр, y) строки или None. «Использовать» — белая строка
+    прямо НАД красной (клик экипировки ставится на строку выше, см. vision_equip)."""
+    r = frame[:, :, 2].astype(np.int16)
+    g = frame[:, :, 1].astype(np.int16)
+    b = frame[:, :, 0].astype(np.int16)
+    mask = (r > 110) & (r - np.maximum(g, b) > 60)
+    if not mask.any():
+        return None
+    rows = mask.sum(axis=1)
+    y = int(np.argmax(rows))
+    if int(rows[y]) < 40:                    # узкая красная полоска — не меню предмета
+        return None
+    xs = np.where(mask[y])[0]
+    return (int((int(xs[0]) + int(xs[-1])) // 2), y)
+
+
+def vision_equip():
+    """ЗРИТЕЛЬНАЯ ЭКИПИРОВКА БЕЗ ЗАПИСИ (v1.21): в ОТКРЫТОМ инвентаре бот сам находит
+    удочку (шаблон rod.png, мульти-масштабный поиск), делает ПКМ по ней, ждёт меню
+    предмета и кликает «Использовать» (белая строка НАД красной «Выбросить»).
+    Клик — прямо в окно интерфейса игры (курсор Windows не двигается); окно не
+    найдено — курсором. False — удочка/меню не найдены (сессия остановится с
+    причиной no_macro — «удочка не найдена в инвентаре»)."""
+    if not inventory_open():
+        log(t("nt_equip_need_inv"))
+        return False
+    t_ = _tpl_trimmed("rod")
+    if t_ is None:
+        log(t("log_bait_notpl"))             # тот же смысл: нет шаблона в templates/
+        return False
+    frame = grab()
+    if frame is None or frame.size == 0:
+        log(t("log_equip_rod_nofind"))
+        return False
+    thr = float(CFG.get("rod_thr", 0.80))
+    s_, pt, _f = _match_scales(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), t_,
+                               max_n=1, thr=thr)
+    if not pt or float(s_ or 0) < thr:
+        log(t("log_equip_rod_nofind"))
+        return False
+    rx, ry = int(pt[0]), int(pt[1])
+    log(t("log_equip_rod", x=rx, y=ry, s=float(s_)))
+    how = _ui_click(rx, ry, "r", True)
+    _ui_click(rx, ry, "r", False)
+    log(t("log_equip_win") if how == "win" else t("log_equip_cur"))
+    row, t_end = None, time.perf_counter() + 1.5
+    while time.perf_counter() < t_end:       # ждём меню предмета (до 1.5 с)
+        fr = grab()
+        if fr is not None and fr.size:
+            row = _red_menu_row(fr)
+            if row is not None:
                 break
-    finally:
-        if home and hwnd is None:            # вернуть мышь (в режиме «в окно» не двигали)
-            try:
-                mouse_move_abs(int(home[0]), int(home[1]))
-            except Exception:
-                pass
-    return ok
-
-
-def macro_play():
-    """АВТО-ЗАКИД КАК ЗАПИСЬ (v1.16): ждёт открытый инвентарь (его открываешь ТЫ),
-    затем точным повтором проигрывает записанный макро: ПКМ по удочке -> пауза ->
-    «Использовать» — те же относительные движения мыши, те же паузы и нажатия,
-    что при записи (ускорение курсора на время повтора отключается, мышь
-    возвращается на исходное место). Макро нет -> False (сессия остановится с
-    понятной причиной no_macro)."""
-    ev = CFG.get("cast_macro")
-    if not ev:
-        notify("nt_macro_none", "warn")
-        log(t("log_macro_none"))
+        nap(0.05)
+    if row is None:
+        log(t("log_use_nofind"))
         return False
-    wait_inventory_open()
-    set_state("st_cast", "st_cast_d", "busy")
-    notify("toast_macro_play")
-    log(t("log_macro_play", d=float(ev[-1][0]), n=len(ev)))
-    if not macro_run(ev):
-        return False
+    ux, uy = int(row[0]), max(0, int(row[1]) - max(18, int(fr.shape[0] * 0.030)))
+    _ui_click(ux, uy, "l", True)
+    _ui_click(ux, uy, "l", False)
+    log(t("log_use_found", ux=ux, uy=uy))
     nap(float(CFG.get("after_equip_delay", 1.2)))
-    log(t("log_macro_done"))
     return True
 
 
@@ -3331,8 +2927,10 @@ def fishing_run():
             set_state("st_cast", "st_cast_d", "busy")
             if first and not CFG["equip_on_start"]:
                 log(t("log_rod_skip"))          # удочка уже в руках — начинаем с заброса
-            elif not macro_play():              # повторяем записанный макро закидывания
-                return "no_macro"               # записи нет — стоп с понятной причиной
+            else:
+                wait_inventory_open()           # инвентарь открывает человек — ждём
+                if not vision_equip():          # зрительная экипировка (v1.21, без записи)
+                    return "no_macro"           # удочка/меню не найдены — стоп с причиной
             cast()
         first = False
         set_state("st_bite", "st_bite_d", "run")
@@ -3423,7 +3021,6 @@ def toggle_bot():
 
 
 def panic():
-    macro_cancel()                          # запись макро не должна переживать аварийный стоп
     stop_event.set()
     release_all()
 
@@ -3777,32 +3374,13 @@ class App:
             self.show_page(self.page)
             return False
 
-    def _macro_label(self):
-        ev = CFG.get("cast_macro")
-        if not ev:
-            return t("s_macro_none")
-        n = sum(1 for e in ev if len(e) >= 3 and e[1] == "down")
-        return t("s_macro_len", d=float(ev[-1][0]), n=n)
-
-    def do_macro_record(self):
-        macro_record()
-        self.show_page(self.page)
-
-    def do_macro_play(self):
-        ev = CFG.get("cast_macro")
-        if not ev:
-            self.toast(t("nt_macro_none"), "warn")
-            return
+    def do_equip_test(self):
+        """«▷ Экипировать»: прямо сейчас найти удочку в открытом инвентаре и взять
+        её (зрение + клики в окно интерфейса) — проверка без запуска рыбалки."""
         if not inventory_open():
-            self.toast(t("toast_macro_need_inv"), "warn")
+            self.toast(t("nt_equip_need_inv"), "warn")
             return
-        threading.Thread(target=macro_run, args=(ev,), daemon=True).start()
-
-    def do_macro_clear(self):
-        CFG["cast_macro"] = None
-        save_cfg()
-        self.toast(t("toast_macro_cleared"), "ok")
-        self.show_page(self.page)
+        threading.Thread(target=vision_equip, daemon=True).start()
 
     # ------------------------------------------------------------ выбор из списка / элемент списка CFG
     def choice(self, x, y, key, options, size=11, w=142, h=30):
@@ -3989,7 +3567,7 @@ class App:
                 ("m_snd_end", "t", "sound_end"), ("m_snd_catch", "t", "sound_catch"),
                 ("m_maxhold", "s", ("max_hold", 0.5, 8, 0.25, "{:.2f}")),
                 ("m_lostms", "s", ("lost_ms", 40, 900, 20, "{:g}")),
-                ("m_clickwin", "t", "macro_click_window")]
+                ("m_clickwin", "t", "ui_click_window")]
         right = [("m_hyst", "s", ("relay_hyst", 2.0, 60.0, 1.0, "{:g}")),
                  ("m_look", "s", ("relay_look_ms", 60, 300, 10, "{:g}")),
                  ("m_aup", "s", ("relay_a_up", 400.0, 4000.0, 100.0, "{:g}")),
@@ -4023,7 +3601,7 @@ class App:
         # --- клавиши ---
         self.txt(PANEL_X + 56, PANEL_Y + 168, t("s_sec_binds"), 10, C_DIM, True)
         rows = [("s_bind_toggle", "bind_toggle"), ("s_bind_panic", "bind_panic"),
-                ("s_bind_macro", "bind_macro"), ("s_bind_gui", "bind_gui")]
+                ("s_bind_gui", "bind_gui")]
         for k, (lab, key) in enumerate(rows):
             y = 182 + k * 30
             self.txt(PANEL_X + 56, PANEL_Y + y + 8, t(lab), 12, C_TEXT)
@@ -4035,12 +3613,10 @@ class App:
         y = 336
         self.txt(PANEL_X + 400, PANEL_Y + y + 8, t("s_cast_delay"), 11, C_TEXT)
         self.stepper(600, y, "cast_delay", 0.3, 3.0, 0.1, "{:.1f}")
-        # --- макро закидывания (v1.12) ---
-        self.txt(PANEL_X + 56, PANEL_Y + 412, t("s_sec_macro"), 10, C_DIM, True)
-        self.dyn["macro_st"] = self.txt(PANEL_X + 56, PANEL_Y + 434, self._macro_label(), 11, C_TEXT)
-        self.button(56, 458, 132, 32, t("b_rec"), self.do_macro_record, "red", 10)
-        self.button(200, 458, 120, 32, t("b_play"), self.do_macro_play, "gray", 10)
-        self.button(332, 458, 104, 32, t("b_clear"), self.do_macro_clear, "dark", 10)
+        # --- экипировка (v1.21: зрение вместо записи макро) ---
+        self.txt(PANEL_X + 56, PANEL_Y + 412, t("s_sec_equip"), 10, C_DIM, True)
+        self.dyn["macro_st"] = self.txt(PANEL_X + 56, PANEL_Y + 434, t("s_equip_hint"), 11, C_TEXT)
+        self.button(56, 458, 160, 32, t("b_equip"), self.do_equip_test, "gray", 10)
         self.dyn["game"] = self.txt(PANEL_X + 56, PANEL_Y + 500, "", 10, C_DIM)
         self.button(424, 496, 100, 30, t("b_save"), self.do_save, "gray", 10)
         self.button(532, 496, 100, 30, t("b_load"), self.do_load, "gray", 10)
@@ -4391,7 +3967,6 @@ def register_hotkeys():
     HK.append(keyboard.add_hotkey(CFG["bind_panic"], panic))
     HK.append(keyboard.add_hotkey(CFG["bind_gui"], lambda: EVENTS.put(("gui",))))
     HK.append(keyboard.add_hotkey(CFG["bind_debug"], lambda: EVENTS.put(("debug",))))
-    HK.append(keyboard.add_hotkey(CFG.get("bind_macro", "f6"), lambda: macro_record()))
 
 
 def shutdown():
