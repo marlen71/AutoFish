@@ -110,8 +110,8 @@ print("== 3. Визуальный авто-закид (v1.10): весь экра
 check("жёстких координат по умолчанию НЕТ (автопоиск)",
       ef.DEFAULT_CFG["rod_click_pos"] is None and ef.DEFAULT_CFG["use_click_pos"] is None,
       f"{ef.DEFAULT_CFG['rod_click_pos']} / {ef.DEFAULT_CFG['use_click_pos']}")
-check("ключи v1.9/v1.10 на месте",
-      ef.DEFAULT_CFG["rod_match_min"] == 0.70 and ef.DEFAULT_CFG["move_time"] == 0.30
+check("ключи v1.9-v1.11 на месте",
+      ef.DEFAULT_CFG["rod_match_min"] == 0.70 and ef.DEFAULT_CFG["move_time"] == 0.18
       and ef.DEFAULT_CFG["rod_retry_delay"] == 3.0 and ef.DEFAULT_CFG["tpl_selflearn"] is True)
 
 
@@ -163,6 +163,16 @@ rx, ry, rs = ef.rod_on_screen()
 check("удочка найдена на полном кадре инвентаря (~ (126, 256), score > 0.9)",
       rx is not None and abs(rx - 126) <= 5 and abs(ry - 256) <= 5 and rs > 0.9,
       f"({rx}, {ry}) score={rs}")
+
+# --- v1.11: сетка предметов + кандидаты (клик только у реальной иконки) ---
+_centers = ef._item_centers(cv2.cvtColor(INV3, cv2.COLOR_BGR2GRAY))
+check("сетка предметов: >= 30 иконок на инвентаре", len(_centers) >= 30, f"{len(_centers)} шт")
+_cands = ef.rod_candidates(INV3, 3)
+check("кандидаты: топ-1 у удочки (125, 259), score > 0.9",
+      _cands and abs(_cands[0][1] - 126) <= 6 and abs(_cands[0][2] - 259) <= 6 and _cands[0][0] > 0.9,
+      str([(round(c[0], 2), c[1], c[2]) for c in _cands]))
+_cands_g = ef.rod_candidates(GAME3, 3)
+check("кандидаты: в игровом кадре целей НЕТ (в пустоту не кликаем)", not _cands_g, str(_cands_g))
 
 # --- кривой шаблон: тёмные поля 25px со всех сторон (кроп не того размера) ---
 rod3 = cv2.imread(os.path.join(ROOT, "templates", "rod.png"), cv2.IMREAD_GRAYSCALE)

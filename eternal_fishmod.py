@@ -25,10 +25,13 @@ Eternal FishMod — полуавтомат рыбалки для Skyrim RP-се�
     кривой шаблон обрезается от полей и после подтверждённого клика САМ обновляется
     с экрана; курсор плавно ПЕРЕТАСКИВАЕТСЯ к цели, одно ПКМ, затем по красной строке
     «Выбросить» находит пункт «Использовать» и ведёт курсор туда, одна ЛКМ -> заброс;
-    то же после каждой рыбы. Никаких жёстких координат — работает при любом положении,
-    разрешении и масштабе инвентаря. 📍 на «Настройках» — своя точка + мгновенный
-    снимок шаблона; пусто = автопоиск. Инвентарь открывает человек (TAB бот не жмёт).
-    «Только мини-игра» = инвентарь и забросы отключены.
+    то же после каждой рыбы. Прицел «чётко в предмет»: совпадение принимается только
+    рядом с реальной иконкой предмета (сетка предметов с экрана), подтверждённая меню
+    ячейка запоминается — следующие забросы кликают точно в неё. Клики маппятся через
+    весь виртуальный рабочий стол (MULTIMONITOR-безопасно). Никаких жёстких координат —
+    работает при любом положении, разрешении и масштабе инвентаря. 📍 на «Настройках» —
+    своя точка + мгновенный снимок шаблона; пусто = автопоиск. Инвентарь открывает
+    человек (TAB бот не жмёт). «Только мини-игра» = инвентарь и забросы отключены.
   * Лаунчер launch.py / start.bat, файл VERSION + scripts/release.py (релизы на GitHub).
 
 Установка:  python launch.py   (сам поставит зависимости)   или   pip install -r requirements.txt
@@ -104,7 +107,7 @@ CFG_PATH = os.path.join(BASE_DIR, "fishmod_config.json")
 STATS_PATH = os.path.join(BASE_DIR, "fishmod_stats.json")
 LOG_PATH = os.path.join(BASE_DIR, "fishmod.log")
 VERSION_PATH = os.path.join(BASE_DIR, "VERSION")
-CFG_VERSION = 7                  # формат конфига: меняем только при НЕсовместимых правках
+CFG_VERSION = 8                  # формат конфига: меняем только при НЕсовместимых правках
 REF_W, REF_H = 1920, 1080
 
 
@@ -154,7 +157,7 @@ DEFAULT_CFG = {
     "rod_click_pos": None,               # ручная точка ПКМ по удочке; None = автопоиск
     "use_click_pos": None,               # ручная точка «Использовать»; None = поиск по меню
     "rod_match_min": 0.70,               # порог совпадения шаблона удочки на полном кадре
-    "move_time": 0.30,                   # сколько секунд курсор плавно едет к цели
+    "move_time": 0.18,                   # сколько секунд курсор едет к цели (коротко и решительно)
     "rod_retry_delay": 3.0,              # пауза между попытками найти удочку/меню
     "tpl_selflearn": True,               # нашла цель с высоким совпадением -> шаблон
                                          # обновляется с экрана (самообучение: кривой
@@ -267,6 +270,10 @@ def load_cfg():
                 CFG["capture_backend"] = DEFAULT_CFG["capture_backend"]
                 CFG_MIGRATED.append("capture_backend")
             if int(data.get("cfg_version", 1) or 1) < CFG_VERSION:
+                if int(data.get("cfg_version", 1) or 1) < 8:
+                    # v1.11: ход курсора короче и решительнее (0.30 -> 0.18 с)
+                    CFG["move_time"] = DEFAULT_CFG["move_time"]
+                    CFG_MIGRATED.append("move_time")
                 if int(data.get("cfg_version", 1) or 1) < 6:
                     # в 1.8.0 rod_click_pos/use_click_pos были ЖЁСТКИМИ точками клика
                     # (дефолт [126,256]/[205,278] — у многих не совпадал с инвентарём).
@@ -388,6 +395,9 @@ STRINGS = {
     "nt_rod_tpl": "Нет шаблона rod.png — сними его на странице «Зрение»",
     "log_self_learn": "🧠 Шаблон {name}.png обновлён с экрана (совпадение {s:.2f}) — поиск станет точнее",
     "log_bait_notpl": "Нет шаблона bait.png — наживка не проверяется («Зрение» → «Шаблон: наживка»)",
+    "log_rod_mem": "🎯 Клик по запомненной ячейке удочки ({x}, {y}) — там меню уже подтверждалось",
+    "log_rod_mem_lost": "🧭 Запомненная ячейка не подтвердилась ({s:.2f}) — ищу по всему экрану",
+    "log_rod_freeform": "⚠ Сетка предметов не найдена — клик по свободной точке ({x}, {y}), совпадение {s:.2f}",
     "log_rod_skip": "🎣 equip_on_start выключен — начинаю с заброса (удочка уже в руках)", "log_bait": "🪱 Наживка: {state} (стаков на экране: {n})",
     "bait_yes": "есть", "bait_no": "НЕТ", "log_rod_missing": "🎣 Удочки нет в руках — беру",
     "log_bait_icon": "🪱 Значок наживки пропал — проверяю инвентарь",
@@ -504,6 +514,9 @@ STRINGS = {
     "nt_rod_tpl": "No rod.png template — capture it on the Vision page",
     "log_self_learn": "🧠 Template {name}.png updated from screen (match {s:.2f}) — detection gets sharper",
     "log_bait_notpl": "No bait.png template — bait not checked (Vision → “Bait template”)",
+    "log_rod_mem": "🎯 Clicking the remembered rod cell ({x}, {y}) — menu confirmed there before",
+    "log_rod_mem_lost": "🧭 Remembered cell didn’t verify ({s:.2f}) — scanning the whole screen",
+    "log_rod_freeform": "⚠ No item grid found — clicking a free point ({x}, {y}), match {s:.2f}",
     "log_rod_skip": "🎣 equip_on_start is off — starting with the cast (rod already in hands)", "log_bait": "🪱 Bait: {state} (stacks on screen: {n})",
     "bait_yes": "yes", "bait_no": "NONE", "log_rod_missing": "🎣 Rod not in hands — taking it",
     "log_bait_icon": "🪱 Bait icon disappeared — checking the inventory",
@@ -620,6 +633,9 @@ STRINGS = {
     "nt_rod_tpl": "Немає шаблону rod.png — зніми його на сторінці «Зір»",
     "log_self_learn": "🧠 Шаблон {name}.png оновлено з екрана (збіг {s:.2f}) — пошук стане точнішим",
     "log_bait_notpl": "Немає шаблону bait.png — наживку не перевірено («Зір» → «Шаблон: наживка»)",
+    "log_rod_mem": "🎯 Клік по запам'ятованій клітинці вудки ({x}, {y}) — меню там уже підтверджувалось",
+    "log_rod_mem_lost": "🧭 Запам'ятовану клітинку не підтверджено ({s:.2f}) — шукаю по всьому екрану",
+    "log_rod_freeform": "⚠ Сітку предметів не знайдено — клік по вільній точці ({x}, {y}), збіг {s:.2f}",
     "log_rod_skip": "🎣 equip_on_start вимкнено — починаю з закидання (вудка вже в руках)", "log_bait": "🪱 Наживка: {state} (стеків на екрані: {n})",
     "bait_yes": "є", "bait_no": "НЕМАЄ", "log_rod_missing": "🎣 Вудки немає в руках — беру",
     "log_bait_icon": "🪱 Значок наживки зник — перевіряю інвентар",
@@ -1669,12 +1685,17 @@ def find(name, thr=None):
 # --- низкоуровневый ввод через SendInput (без DPI-нормализации pydirectinput) ---
 _SM_CXSCREEN = 0
 _SM_CYSCREEN = 1
+_SM_XVIRTUALSCREEN = 76               # левая граница виртуального рабочего стола
+_SM_YVIRTUALSCREEN = 77
+_SM_CXVIRTUALSCREEN = 78              # размер ВСЕГО рабочего стола (все мониторы)
+_SM_CYVIRTUALSCREEN = 79
 MOUSEEVENTF_MOVE        = 0x0001
 MOUSEEVENTF_LEFTDOWN    = 0x0002
 MOUSEEVENTF_LEFTUP      = 0x0004
 MOUSEEVENTF_RIGHTDOWN   = 0x0008
 MOUSEEVENTF_RIGHTUP     = 0x0010
 MOUSEEVENTF_ABSOLUTE    = 0x8000
+MOUSEEVENTF_VIRTUALDESK = 0x4000      # абсолютные координаты всего рабочего стола
 
 class _MOUSEINPUT(ctypes.Structure):
     _fields_ = [("dx", ctypes.c_long), ("dy", ctypes.c_long),
@@ -1712,18 +1733,33 @@ def logical_to_physical(lx, ly):
 
 
 def mouse_move_abs(x, y):
-    """Перемещает мышь в абсолютные экранные координаты через SendInput.
-    Берёт физические размеры монитора из ScreenCapture, чтобы не зависеть от DPI-масштаба Windows.
-    """
+    """Перемещает мышь в точку (x, y) КООРДИНАТ ЗАХВАТА (физические пиксели монитора,
+    который снимает ScreenCapture). Отрисовка и клик всегда в одной системе координат:
+    координаты кадра складываются с origin монитора захвата и маппятся на ВЕСЬ
+    виртуальный рабочий стол (MOUSEEVENTF_VIRTUALDESK) — на мультимониторе курсор
+    встаёт именно туда, куда смотрит бот, а не «куда-то» на первом экране."""
     try:
         m = monitor()
-        sw = m["width"]   # физические пиксели — совпадают с тем, что видит ScreenCapture
-        sh = m["height"]
+        ml, mt = int(m["left"]), int(m["top"])
+        mw, mh = int(m["width"]), int(m["height"])
     except Exception:
-        sw = ctypes.windll.user32.GetSystemMetrics(_SM_CXSCREEN)
-        sh = ctypes.windll.user32.GetSystemMetrics(_SM_CYSCREEN)
-    nx = int(x * 65535 / max(sw - 1, 1))
-    ny = int(y * 65535 / max(sh - 1, 1))
+        ml = mt = 0
+        mw = ctypes.windll.user32.GetSystemMetrics(_SM_CXSCREEN)
+        mh = ctypes.windll.user32.GetSystemMetrics(_SM_CYSCREEN)
+    try:
+        vx = ctypes.windll.user32.GetSystemMetrics(_SM_XVIRTUALSCREEN)
+        vy = ctypes.windll.user32.GetSystemMetrics(_SM_YVIRTUALSCREEN)
+        vw = ctypes.windll.user32.GetSystemMetrics(_SM_CXVIRTUALSCREEN)
+        vh = ctypes.windll.user32.GetSystemMetrics(_SM_CYVIRTUALSCREEN)
+    except Exception:
+        vx, vy, vw, vh = 0, 0, mw, mh
+    if vw > mw + 2 or vh > mh + 2 or vx != 0 or vy != 0:      # несколько мониторов
+        nx = int((ml + int(x)) * 65535 / max(vw - 1, 1))
+        ny = int((mt + int(y)) * 65535 / max(vh - 1, 1))
+        _send_mouse(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK, nx, ny)
+        return
+    nx = int(int(x) * 65535 / max(mw - 1, 1))
+    ny = int(int(y) * 65535 / max(mh - 1, 1))
     _send_mouse(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, nx, ny)
 
 def mouse_lmb_down():
@@ -2604,11 +2640,18 @@ def wait_inventory_open():
 # «Настройках») лишь ПЕРЕОПРЕДЕЛЯЮТ автопоиск; пусто = автопоиск.
 
 def cursor_pos():
-    """Текущая позиция курсора в физических пикселях экрана захвата."""
+    """Текущая позиция курсора в координатах кадра захвата (физические пиксели
+    монитора, минус его origin) — та же система координат, что у поиска и кликов."""
     from ctypes import wintypes
     pt = wintypes.POINT()
     ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
-    return logical_to_physical(pt.x, pt.y)
+    lx, ly = logical_to_physical(pt.x, pt.y)
+    try:
+        m = monitor()
+        return (max(0, min(int(m["width"]) - 1, lx - int(m["left"]))),
+                max(0, min(int(m["height"]) - 1, ly - int(m["top"]))))
+    except Exception:
+        return lx, ly
 
 
 def smooth_move(x, y):
@@ -2624,7 +2667,7 @@ def smooth_move(x, y):
     if dist < 2:
         mouse_move_abs(int(x), int(y))
         return
-    steps = int(max(6, min(36, dist // 24)))
+    steps = int(max(4, min(18, dist // 32)))
     for i in range(1, steps + 1):
         check_stop()
         tt = i / steps
@@ -2672,21 +2715,11 @@ def _self_learn(name, frame, x, y, fw, fh, score):
         pass                                    # шаблон — не критично, не роняем поиск
 
 
-def _match_scales(gray, t_, max_n=1, thr=0.60, with_f=False):
-    """МУЛЬТИ-МАСШТАБНЫЙ ПОИСК шаблона по кадру — «вижу весь экран»:
-      1) ГРУБАЯ лестница масштабов 0.40-2.0 (шаг ~12%) на ПОЛУКАДРЕ (пирамида) —
-         дёшево покрывает любое разрешение/DPI/масштаб интерфейса;
-      2) ТОЧНЫЙ подбор масштаба (шаг ~3%) вокруг двух лучших кандидатов на полном
-         кадре — итоговая точность масштаба ~1.5%, position ±1 px.
-    Поэтому шаблон не обязан быть идеального размера: обрезка полей + точная стадия
-    компенсируют кривой кроп. max_n=1 -> (score, (x, y), f); max_n>1 -> список
-    [(score, x, y), ...] (NMS, score >= thr) — столько, сколько целей на экране."""
+def _coarse_hits(gray, t_, k=2):
+    """ГРУБАЯ лестница масштабов 0.40-2.0 (шаг ~12%) на ПОЛУКАДРЕ (пирамида, быстро):
+    топ-k попаданий [(score, topleft_small, f), ...] по убыванию."""
     H, W = gray.shape
     th, tw = t_.shape
-    if min(th, tw) < 8 or H <= th or W <= tw:
-        return (0.0, None, None) if max_n == 1 else []
-    if with_f and max_n == 1:
-        raise ValueError("with_f используется только с max_n>1")
     small = cv2.resize(gray, (max(1, W // 2), max(1, H // 2)), interpolation=cv2.INTER_AREA)
     coarse = []
     f = 0.40
@@ -2698,46 +2731,63 @@ def _match_scales(gray, t_, max_n=1, thr=0.60, with_f=False):
             _, mv, _, ml = cv2.minMaxLoc(r)
             coarse.append((float(mv), ml, f))
         f *= 1.12
+    coarse.sort(key=lambda z: -z[0])
+    return coarse[:k]
+
+
+def _fine_match(gray, t_, entry):
+    """ТОЧНАЯ стадия вокруг одного грубого попадания: масштаб уточняется шагами ~3%
+    на полном кадре (ROI +-48 px). Возвращает (score, topleft, f); topleft=None, если
+    ни один масштаб не влез."""
+    H, W = gray.shape
+    th, tw = t_.shape
+    _, ml0, f0 = entry
+    best = (0.0, None, f0)
+    seen = set()
+    for df in (0.88, 0.91, 0.94, 0.97, 1.0, 1.03, 1.06, 1.09, 1.12):
+        ff = f0 * df
+        k = round(ff, 3)
+        if k in seen:
+            continue
+        seen.add(k)
+        fh, fw = int(th * ff), int(tw * ff)
+        if not (12 <= fh < H and 12 <= fw < W):
+            continue
+        t2 = cv2.resize(t_, (fw, fh), interpolation=cv2.INTER_AREA)
+        cx, cy = ml0[0] * 2, ml0[1] * 2
+        x0, y0 = max(0, cx - 48), max(0, cy - 48)
+        x1, y1 = min(W, cx + fw + 48), min(H, cy + fh + 48)
+        roi = gray[y0:y1, x0:x1]
+        if roi.shape[0] < fh or roi.shape[1] < fw:
+            continue
+        r = np.nan_to_num(cv2.matchTemplate(roi, t2, cv2.TM_CCOEFF_NORMED))
+        _, mv, _, ml = cv2.minMaxLoc(r)
+        if mv > best[0]:
+            best = (float(mv), (x0 + ml[0], y0 + ml[1]), ff)
+    return best
+
+
+def _match_scales(gray, t_, max_n=1, thr=0.60, with_f=False):
+    """МУЛЬТИ-МАСШТАБНЫЙ ПОИСК шаблона по кадру — «вижу весь экран»:
+    грубая лестница на полукадре (_coarse_hits) + точный подбор масштаба на полном
+    кадре (_fine_match, итоговая точность масштаба ~1.5%). max_n=1 -> (score, (x, y), f);
+    max_n>1 -> [(score, x, y[, f]), ...] (NMS, score >= thr)."""
+    H, W = gray.shape
+    th, tw = t_.shape
+    if min(th, tw) < 8 or H <= th or W <= tw:
+        return (0.0, None, None) if max_n == 1 else []
+    coarse = _coarse_hits(gray, t_, 2)
     if not coarse:
         return (0.0, None, None) if max_n == 1 else []
-    coarse.sort(key=lambda z: -z[0])
-
-    def fine(entry):
-        """Точная стадия вокруг одного грубого попадания: лучший (score, topleft, f)."""
-        _, ml0, f0 = entry
-        best = (0.0, None, f0)
-        seen = set()
-        for df in (0.88, 0.91, 0.94, 0.97, 1.0, 1.03, 1.06, 1.09, 1.12):
-            ff = f0 * df
-            k = round(ff, 3)
-            if k in seen:
-                continue
-            seen.add(k)
-            fh, fw = int(th * ff), int(tw * ff)
-            if not (12 <= fh < H and 12 <= fw < W):
-                continue
-            t2 = cv2.resize(t_, (fw, fh), interpolation=cv2.INTER_AREA)
-            cx, cy = ml0[0] * 2, ml0[1] * 2
-            x0, y0 = max(0, cx - 48), max(0, cy - 48)
-            x1, y1 = min(W, cx + fw + 48), min(H, cy + fh + 48)
-            roi = gray[y0:y1, x0:x1]
-            if roi.shape[0] < fh or roi.shape[1] < fw:
-                continue
-            r = np.nan_to_num(cv2.matchTemplate(roi, t2, cv2.TM_CCOEFF_NORMED))
-            _, mv, _, ml = cv2.minMaxLoc(r)
-            if mv > best[0]:
-                best = (float(mv), (x0 + ml[0], y0 + ml[1]), ff)
-        return best
-
     if max_n == 1:
         best = (0.0, None, None)
-        for entry in coarse[:2]:
-            s_, tl, ff = fine(entry)
+        for entry in coarse:
+            s_, tl, ff = _fine_match(gray, t_, entry)
             if tl is not None and s_ > best[0]:
                 best = (s_, (tl[0] + int(tw * ff) // 2, tl[1] + int(th * ff) // 2), ff)
         return best
     # --- несколько целей: точный масштаб по лучшему, затем NMS на полной карте ---
-    _, _, fbest = fine(coarse[0])
+    _, _, fbest = _fine_match(gray, t_, coarse[0])
     fh, fw = int(th * fbest), int(tw * fbest)
     if fh >= H or fw >= W or fh < 12 or fw < 12:
         return []
@@ -2748,19 +2798,89 @@ def _match_scales(gray, t_, max_n=1, thr=0.60, with_f=False):
     min_dist = max(40, int(max(fw, fh) * 0.6))
     out = []
     for s_, x, y in pts:
-        if all((x - a) ** 2 + (y - b) ** 2 > min_dist ** 2 for _, a, b, *r in out):
+        if all((x - a) ** 2 + (y - b) ** 2 > min_dist ** 2 for _, a, b, *r_ in out):
             out.append((float(s_), x + fw // 2, y + fh // 2) + ((fbest,) if with_f else ()))
             if len(out) >= max_n:
                 break
     return out
 
 
+def _item_centers(gray):
+    """СЕТКА ПРЕДМЕТОВ на кадре: в тёмной панели инвентаря ищем светлые пятна-иконки.
+    Даёт СПИСОК РЕАЛЬНЫХ предметов на экране: в них можно прицелиться, в пустоту — нет.
+    Возвращает [(x, y), ...] — центры иконок в координатах кадра."""
+    dark = (gray < 64).astype(np.uint8)
+    panel = cv2.morphologyEx(dark, cv2.MORPH_CLOSE, np.ones((31, 31), np.uint8))
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(panel, 8)
+    pm = np.zeros_like(dark)
+    for i in range(1, n):
+        if stats[i, cv2.CC_STAT_AREA] >= 40000:
+            pm[labels == i] = 1
+    bright = ((gray > 60) & (pm > 0)).astype(np.uint8)
+    bright = cv2.morphologyEx(bright, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+    n2, _l2, st2, cent2 = cv2.connectedComponentsWithStats(bright, 8)
+    out = []
+    for i in range(1, n2):
+        w, h, area = int(st2[i, 2]), int(st2[i, 3]), int(st2[i, 4])
+        if 12 <= w <= 150 and 12 <= h <= 150 and area >= 60:
+            out.append((int(cent2[i][0]), int(cent2[i][1])))
+    return out
+
+
+def _item_radius(centers):
+    """Радиус привязки к предмету: половина типичного шага сетки (медиана расстояний
+    до ближайшего соседа); на пустом наборе — консервативные 40 px."""
+    if len(centers) < 2:
+        return 40
+    d = []
+    for i, (x, y) in enumerate(centers):
+        best = min((x - a) ** 2 + (y - b) ** 2
+                   for j, (a, b) in enumerate(centers) if j != i)
+        d.append(best ** 0.5)
+    return max(30, int(float(np.median(d)) * 0.55))
+
+
+def rod_candidates(frame, n=3):
+    """ТОП-N кандидатов в удочку (v1.11 — прицел «чётко в предмет»):
+      1) мульти-масштабный поиск даёт точные попадания шаблона;
+      2) каждое попадание ПРОВЕРЯЕТСЯ по сетке предметов: рядом (<= половины шага
+         сетки) обязана лежать реальная иконка. Совпадение «в пустоте» отбрасывается —
+         в молоко бот не кликает НИКОГДА.
+    Возвращает [(score, x, y, f), ...] по убыванию score; [] — целей нет."""
+    t_ = _tpl_trimmed("rod")
+    if t_ is None or frame is None or frame.size == 0:
+        return []
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    H, W = gray.shape
+    th, tw = t_.shape
+    if min(th, tw) < 8 or H <= th or W <= tw:
+        return []
+    centers = _item_centers(gray)
+    if not centers:
+        return []
+    snap = _item_radius(centers)
+    snap2 = snap * snap
+    cands = []
+    for entry in _coarse_hits(gray, t_, 4):
+        s_, tl, ff = _fine_match(gray, t_, entry)
+        if tl is None:
+            continue
+        px, py = tl[0] + int(tw * ff) // 2, tl[1] + int(th * ff) // 2
+        if not any((cx - px) ** 2 + (cy - py) ** 2 <= snap2 for cx, cy in centers):
+            continue                                   # мимо сетки предметов
+        if any((px - a) ** 2 + (py - b) ** 2 < 24 * 24 for _, a, b, _ in cands):
+            continue                                   # дубликат той же цели
+        cands.append((float(s_), int(px), int(py), float(ff)))
+        if len(cands) >= n:
+            break
+    cands.sort(key=lambda z: -z[0])
+    return cands
+
+
 def _rod_locate(frame):
-    """ИЩЕТ иконку удочки на ПРИСЛАННОМ кадре (как мини-игра ищет шкалу):
-    мульти-масштабный _match_scales + шаблон с обрезанными полями.
-    Возвращает (x, y, score, f, t_): центр лучшего совпадения в физических
-    пикселях, его масштаб и шаблон; x=None, если порог rod_match_min не
-    достигнут или шаблона нет (тогда t_=None)."""
+    """ИЩЕТ иконку удочки на ПРИСЛАННОМ кадре: мульти-масштабный поиск + шаблон с
+    обрезанными полями. Возвращает (x, y, score, f, t_); x=None, если порог
+    rod_match_min не достигнут или шаблона нет (тогда t_=None)."""
     t_ = _tpl_trimmed("rod")
     if t_ is None:
         return None, None, None, None, None
@@ -2828,73 +2948,144 @@ def context_menu_info(x, y):
     return use_x, use_y
 
 
-def use_rod():
+ROD_MEM = {"pos": None, "f": None}        # ячейка удочки, подтверждённая меню (эта сессия)
+
+
+def _rod_mem_score(frame, x, y, f, t_):
+    """Одиночная проверка запомненной ячейки: шаблон в запомненном масштабе на ROI
+    вокруг (x, y). Возвращает score либо None (нет данных)."""
+    if t_ is None or frame is None or frame.size == 0:
+        return None
+    H, W = frame.shape[:2]
+    th, tw = t_.shape
+    ff = float(f or 1.0)
+    fh, fw = int(th * ff), int(tw * ff)
+    if fh < 12 or fw < 12:
+        return None
+    x0, y0 = max(0, int(x) - 64), max(0, int(y) - 64)
+    x1, y1 = min(W, int(x) + 64), min(H, int(y) + 64)
+    roi = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
+    if roi.shape[0] < fh or roi.shape[1] < fw:
+        return None
+    t2 = cv2.resize(t_, (fw, fh), interpolation=cv2.INTER_AREA)
+    r = np.nan_to_num(cv2.matchTemplate(roi, t2, cv2.TM_CCOEFF_NORMED))
+    return float(r.max())
+
+
+def use_rod(select=0):
     """
-    ВИЗУАЛЬНОЕ ВЗЯТИЕ УДОЧКИ (v1.9.0, полностью вместо авто-кликера v1.8.0):
+    ВИЗУАЛЬНОЕ ВЗЯТИЕ УДОЧКИ (v1.11.0 — прицел «чётко в предмет»):
       1) инвентарь открыт человеком (бот ждёт, сам TAB/ESC не жмёт);
-      2) ищем иконку удочки НА ВСЁМ ЭКРАНЕ (rod_on_screen: мульти-масштабный шаблон);
-         ручная точка rod_click_pos (📍) заменяет поиск;
-      3) плавно ПЕРЕТАСКИВАЕМ курсор к иконке, ОДНО ПКМ — открылось меню;
-      4) выжидаем use_menu_delay — игра дорисовывает меню;
-      5) находим пункт «Использовать» по красной строке «Выбросить» (context_menu_info);
-         ручная точка use_click_pos (📍) заменяет поиск;
-      6) плавно ведём курсор на пункт, ОДНА ЛКМ; проверяем, что меню закрылось
-         (второй клик — только если меню зависло, максимум 2 ЛКМ, без спама).
-    Цель не найдена — НИ ОДНОГО клика (клики вслепую по углам и были проблемой v1.8):
-    статус «УДОЧКА НЕ НАЙДЕНА», причина в журнале, False. Инвентарь бот не закрывает.
+      2) ГДЕ УДОЧКА (в порядке надёжности):
+         a) ручная точка rod_click_pos (📍 на «Настройках»);
+         b) ЗАПОМНЕННАЯ ячейка — место, где меню уже подтверждалось (проверяется на
+            кадре одиночным сравнением; инвентарь не двигается -> клик в ту же точку);
+         c) ПОИСК по всему кадру: топ совпадений шаблона, но каждое принимается
+            ТОЛЬКО если рядом лежит реальная иконка предмета (_item_centers) —
+            кликать «в пустоту» бот не может. select=1/2 — следующий/следующий
+            кандидат (equip_cycle так перебирает цели при неудачной попытке);
+         d) сетка предметов не нашлась (нестандартный UI) — свободная точка, но с
+            повышенным порогом rod_match_min + 0.05;
+      3) плавный короткий ход курсора к цели, ОДНО ПКМ;
+      4) меню ждём ТЕРПЕЛИВО: use_menu_delay + до 1.5 с поллинга (каждые 0.15 с);
+      5) «Использовать» по красной строке «Выбросить» (или ручная use_click_pos),
+         плавный ход, ОДНА ЛКМ; меню закрылось -> успех (зависло — максимум 2 ЛКМ).
+    Цели нет / меню не открылось — НИ ОДНОГО лишнего клика, False. После
+    подтверждённого меню: запоминаем ячейку (ROD_MEM) и, если шаблон был неидеален
+    (0.70-0.93), обновляем его свежим снимком (самообучение, tpl_selflearn).
     """
     wait_inventory_open()
     set_state("st_rod_find", "st_rod_find_d", "busy")
-    # --- где удочка: ручная точка (📍) или автопоиск по всему экрану ---
-    hit = None                                  # (frame, f, t_, score) — для самообучения
+    rx = ry = None
+    score = 0.0
+    f_hit = None
+    t_hit = None
+    hit_frame = None                            # кадр попытки — для самообучения
+    mem_used = False
+    # --- a) ручная точка ---
     if CFG.get("rod_click_pos"):
         rx, ry = int(CFG["rod_click_pos"][0]), int(CFG["rod_click_pos"][1])
         log(t("log_rod_manual", x=rx, y=ry))
     else:
-        frame = grab()                          # один кадр на попытку: поиск и самообучение
-        rx, ry, score, f, t_ = _rod_locate(frame)
+        frame = grab()
+        # --- b) запомненная подтверждённая ячейка ---
+        if ROD_MEM.get("pos"):
+            s_mem = _rod_mem_score(frame, ROD_MEM["pos"][0], ROD_MEM["pos"][1],
+                                   ROD_MEM.get("f"), _tpl_trimmed("rod"))
+            if s_mem is not None and s_mem >= float(CFG.get("rod_match_min", 0.70)):
+                rx, ry = int(ROD_MEM["pos"][0]), int(ROD_MEM["pos"][1])
+                score, f_hit = float(s_mem), ROD_MEM.get("f")
+                t_hit = _tpl_trimmed("rod")
+                hit_frame = frame
+                mem_used = True
+                log(t("log_rod_mem", x=rx, y=ry))
+            else:
+                log(t("log_rod_mem_lost", s=s_mem if s_mem is not None else 0.0))
+                ROD_MEM["pos"] = None
+        # --- c) поиск по всему кадру с проверкой по сетке предметов ---
         if rx is None:
-            if t_ is None:                     # шаблона нет вовсе
+            cands = rod_candidates(frame, 3)
+            if cands:
+                s_, px, py, ff = cands[min(max(0, int(select)), len(cands) - 1)]
+                rx, ry, score, f_hit = px, py, s_, ff
+                t_hit = _tpl_trimmed("rod")
+                hit_frame = frame
+                log(t("log_rod_found", x=rx, y=ry, s=score))
+        # --- d) сетки нет — свободная точка с повышенным порогом ---
+        if rx is None:
+            fx, fy, fs, ff, ft = _rod_locate(frame)
+            if fx is not None and fs >= float(CFG.get("rod_match_min", 0.70)) + 0.05:
+                rx, ry, score, f_hit, t_hit = fx, fy, fs, ff, ft
+                hit_frame = frame
+                log(t("log_rod_freeform", x=rx, y=ry, s=score))
+        if rx is None:
+            fx, fy, fs, _ff, ft = _rod_locate(frame)
+            if ft is None:
                 notify("nt_rod_tpl", "warn")
                 log(t("fail_rod_tpl"))
             else:
-                log(t("fail_rod_score", s=score, min=float(CFG.get("rod_match_min", 0.70))))
+                log(t("fail_rod_score", s=fs, min=float(CFG.get("rod_match_min", 0.70))))
             set_state("st_rod_fail", "st_rod_fail_d", "busy")
             return False
-        log(t("log_rod_found", x=rx, y=ry, s=score))
-        hit = (frame, f, t_, score)
     # --- шаг 1: плавно к удочке, одно ПКМ ---
     log(t("log_step1"))
     smooth_move(rx, ry)
-    nap(0.5)                                     # игровой курсор должен встать на слот
+    nap(0.45)                                    # игровой курсор должен встать на слот
     _send_mouse(MOUSEEVENTF_RIGHTDOWN)
     nap(0.15)
     _send_mouse(MOUSEEVENTF_RIGHTUP)
-    # --- шаг 2: меню дорисовывается, находим «Использовать» ---
+    # --- шаг 2: ждём меню (терпеливо: use_menu_delay + до 1.5 с поллинга) ---
     log(t("log_step2"))
     nap(float(CFG.get("use_menu_delay", 1.0)))
     tries = 1 if CFG.get("use_click_pos") else 2
     for attempt in range(1, tries + 1):
+        info = None
         if CFG.get("use_click_pos"):
             ux, uy = int(CFG["use_click_pos"][0]), int(CFG["use_click_pos"][1])
             log(t("log_use_manual", ux=ux, uy=uy))
         else:
+            deadline = time.perf_counter() + 1.5
             info = context_menu_info(rx, ry)
+            while info is None and time.perf_counter() < deadline:
+                check_stop()
+                nap(0.15)
+                info = context_menu_info(rx, ry)
             if info is None:
                 log(t("log_menu_missing"))
                 set_state("st_rod_fail", "st_rod_fail_d", "busy")
                 return False                     # меню не открылось — кликать наугад нельзя
             ux, uy = int(info[0]), int(info[1])
             log(t("log_use_found", ux=ux, uy=uy))
-            # меню появилось -> игра ПОДТВЕРДИЛА: клик был по удочке. Теперь можно
-            # учиться: mediocre-шаблон (0.70-0.93) заменяется свежим снимком иконки
-            # с кадра этой же попытки (до ПКМ, без меню в кадре). Мусорный шаблон,
-            # совпавший не с удочкой, меню не подтвердит — и шаблон не испортится.
-            if hit is not None and attempt == 1 and hit[3] < 0.93 \
-                    and CFG.get("tpl_selflearn", True):
-                hframe, hf, ht_, hscore = hit
-                _self_learn("rod", hframe, rx, ry,
-                            max(8, int(ht_.shape[1] * hf)), max(8, int(ht_.shape[0] * hf)), hscore)
+            # меню появилось -> игра ПОДТВЕРДИЛА: клик был по удочке. Запоминаем ячейку
+            # и, если шаблон был неидеален (0.70-0.93), учимся на кадре этой попытки
+            # (он снят ДО ПКМ — меню в нём не мешает). Мусорный шаблон, совпавший не
+            # с удочкой, меню не подтвердит — и ничего не испортит.
+            if not mem_used and f_hit and score < 0.93 and CFG.get("tpl_selflearn", True):
+                _self_learn("rod", hit_frame, rx, ry,
+                            max(8, int(t_hit.shape[1] * f_hit)),
+                            max(8, int(t_hit.shape[0] * f_hit)), score)
+            ROD_MEM["pos"] = (rx, ry)
+            ROD_MEM["f"] = f_hit
         # --- шаг 3: плавно на «Использовать», одна ЛКМ ---
         smooth_move(ux, uy)
         nap(0.35)                                # курсор встал на пункт меню
@@ -2917,17 +3108,19 @@ def use_rod():
 
 def equip_cycle():
     """Взять удочку: визуальные попытки use_rod() с безопасной паузой rod_retry_delay
-    между ними — пока не получится (или ты не остановишь бота F8/F10 и не поправишь
-    шаблон/точку 📍). Неудачная попытка НЕ КЛИКАЕТ вовсе, поэтому спама нет: бот просто
-    ищет взглядом и ждёт. Причина — в журнале и в тосте (один раз за серию)."""
+    между ними. Первая неудача НЕ значит «нет удочки»: на следующей попытке бот берёт
+    СЛЕДУЮЩЕГО кандидата (select=1, 2, ...), затем ищет заново. Неудачная попытка
+    НЕ КЛИКАЕТ мимо — потому спама нет. Причина — в журнале и в тосте (один раз)."""
     first = True
+    k = 0
     while True:
-        if use_rod():
+        if use_rod(select=k):
             return True
         if first:
             first = False
             notify("nt_rod_fail", "warn")
         nap(float(CFG.get("rod_retry_delay", 3.0)))
+        k += 1
 
 
 def bait_check():

@@ -127,6 +127,8 @@ def install_stubs():
     ef.nap = lambda sec: None
     ef.check_stop = lambda: 0.0
     ef.CFG["tpl_selflearn"] = False             # тесты не должны переписывать шаблоны
+    ef.ROD_MEM["pos"] = None                    # память ячейки — не переносить между секциями
+    ef.ROD_MEM["f"] = None
     ef.learn_game_window = lambda timeout=15.0: "Skyrim"
     ef.game_focused = lambda: True
     ef.GAME_TITLE = "Skyrim"
@@ -214,7 +216,31 @@ check("ровно одно ПКМ и одна ЛКМ",
 check("ПКМ строго раньше ЛКМ", flags_seq.index(ef.MOUSEEVENTF_RIGHTDOWN) < flags_seq.index(ef.MOUSEEVENTF_LEFTDOWN))
 check("бот не трогал клавиатуру (TAB/ESC)", not [k for k in sent if k[0] in ("keydown", "keyup")])
 check("плавное перетаскивание: к удочке несколько промежуточных точек, не телепорт",
-      len([k for k in sent if k[0] == "move"]) >= 20, str(len([k for k in sent if k[0] == "move"])))
+      len([k for k in sent if k[0] == "move"]) >= 4, str(len([k for k in sent if k[0] == "move"])))
+check("успех запомнил подтверждённую ячейку удочки",
+      ef.ROD_MEM["pos"] is not None and abs(ef.ROD_MEM["pos"][0] - 126) <= 6,
+      str(ef.ROD_MEM["pos"]))
+
+print("== 3c. Память ячейки: повторный заброс без поиска, ровно в ту же точку ==")
+_real_cands = ef.rod_candidates
+
+
+def no_search(*a, **k):
+    raise AssertionError("поиск не нужен: ячейка подтверждена и проверена")
+
+
+ef.rod_candidates = no_search
+sent.clear()
+screens["cur"] = INV
+_saved_send = ef._send_mouse
+ef._send_mouse = send_switch               # тот же переключатель экранов, что в §3
+ok_mem = ef.use_rod()
+ef._send_mouse = _saved_send
+check("повторный use_rod прошёл по памяти", ok_mem is True)
+check("клик ровно в запомненную точку", ("move", ef.ROD_MEM["pos"][0], ef.ROD_MEM["pos"][1]) in sent)
+ef.rod_candidates = _real_cands
+ef.ROD_MEM["pos"] = None
+ef.ROD_MEM["f"] = None
 
 print("== 3b. Не нашли цель — ни одного клика (никаких слепых кликов по углам) ==")
 _real_inv_open = ef.inventory_open
@@ -268,7 +294,7 @@ _real_use_rod = ef.use_rod
 _real_notify = ef.notify
 
 
-def flaky_use_rod():
+def flaky_use_rod(*a, **k):
     calls4["n"] += 1
     return calls4["n"] >= 3                # две неудачи, третья — успех
 
