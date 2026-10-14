@@ -125,6 +125,8 @@ def read_version():
 DEFAULT_CFG = {
     "lang": "ru",                      # ru | en | ua — язык интерфейса (RU/EN/UA на странице «Настройки»)
     "bind_toggle": "f8", "bind_panic": "f10", "bind_gui": "insert", "bind_debug": "f9",
+    "bind_macro": "f6",                  # старт/стоп записи макро закидывания (1-е нажатие —
+                                         # старт, повторное — стоп; F10 отменяет без записи)
     "bar": [913, 471, 50, 529],          # область шкалы мини-игры (x, y, w, h) для 1920x1080
     "bar_pad": 22,                       # расширить кадр вокруг шкалы — нужен для красной рамки «РЫБА СРЫВАЕТСЯ»
     "bar_refine": True,                  # каждое измерение сверяется с РЕАЛЬНОЙ шкалой на кадре
@@ -331,7 +333,7 @@ STRINGS = {
     "m_maxhold": "Макс. удержание, с",
     "m_lostms": "Потеря зоны, мс", "m_fishthr": "Порог контраста рыбы", "m_fishdet": "Поиск рыбы",
     "m_barpad": "Отступ рамки, px", "m_slipthr": "Порог красной рамки",
-    "s_sec_lang": "ЯЗЫК / LANGUAGE / МОВА", "s_sec_binds": "Горячие клавиши", "s_lang": "Язык интерфейса", "s_bind_toggle": "Старт / Стоп", "s_bind_panic": "Аварийный стоп",
+    "s_sec_lang": "ЯЗЫК / LANGUAGE / МОВА", "s_sec_binds": "Горячие клавиши", "s_lang": "Язык интерфейса", "s_bind_toggle": "Старт / Стоп", "s_bind_panic": "Аварийный стоп", "s_bind_macro": "Запись макро (старт/стоп)",
     "s_bind_gui": "Показать / скрыть окно", "s_volume": "Громкость звуков, %", "s_cast_delay": "Задержка заброса, сек",
     "s_game_none": "Окно игры определяется при старте (F8 в игре)", "s_game": "Окно игры: «{title}»",
     "s_version": "Версия {v} · захват: {b}", "s_capture_backend": "Захват при старте",
@@ -345,7 +347,7 @@ STRINGS = {
     "toast_rec_on": "⏺ ПИШУ: сделай ПКМ по удочке → пауза → клик по «Использовать», потом 2 с не трогай мышь",
     "toast_rec_done": "Макро сохранено: {d:.1f} с, кликов {n}",
     "toast_rec_empty": "В записи нет кликов — макро не сохранено",
-    "toast_rec_running": "Сначала останови бота (F8)",
+    "toast_rec_running": "Сначала останови бота (F8)", "toast_rec_cancel": "⏹ Запись отменена — ничего не сохранено",
     "toast_macro_cleared": "Макро стёрто",
     "toast_macro_need_inv": "Открой инвентарь в игре — потом «▷ Проверить»",
     "log_macro_play": "▶ Макро закидывания: повторяю запись ({d:.1f} с, {n} событий)",
@@ -448,7 +450,7 @@ STRINGS = {
     "m_maxhold": "Max hold, s",
     "m_lostms": "Zone lost, ms", "m_fishthr": "Fish contrast threshold", "m_fishdet": "Fish detection",
     "m_barpad": "Bar border pad, px", "m_slipthr": "Red frame threshold",
-    "s_sec_lang": "ЯЗЫК / LANGUAGE / МОВА", "s_sec_binds": "Hotkeys", "s_lang": "Interface language", "s_bind_toggle": "Start / Stop", "s_bind_panic": "Panic stop",
+    "s_sec_lang": "ЯЗЫК / LANGUAGE / МОВА", "s_sec_binds": "Hotkeys", "s_lang": "Interface language", "s_bind_toggle": "Start / Stop", "s_bind_panic": "Panic stop", "s_bind_macro": "Macro record (start/stop)",
     "s_bind_gui": "Show / hide window", "s_volume": "Sound volume, %", "s_cast_delay": "Cast delay, s",
     "s_game_none": "Game window is detected on start (press F8 inside the game)", "s_game": "Game window: “{title}”",
     "s_version": "Version {v} · capture: {b}", "s_capture_backend": "Capture on start",
@@ -462,7 +464,7 @@ STRINGS = {
     "toast_rec_on": "⏺ RECORDING: RMB on the rod → pause → click “Use”, then keep the mouse still for 2 s",
     "toast_rec_done": "Macro saved: {d:.1f} s, {n} clicks",
     "toast_rec_empty": "No clicks recorded — macro not saved",
-    "toast_rec_running": "Stop the bot first (F8)",
+    "toast_rec_running": "Stop the bot first (F8)", "toast_rec_cancel": "⏹ Recording cancelled — nothing saved",
     "toast_macro_cleared": "Macro cleared",
     "toast_macro_need_inv": "Open the in-game inventory — then “▷ Test”",
     "log_macro_play": "▶ Cast macro: replaying the recording ({d:.1f} s, {n} events)",
@@ -565,7 +567,7 @@ STRINGS = {
     "m_maxhold": "Макс. утримання, с",
     "m_lostms": "Втрата зони, мс", "m_fishthr": "Поріг контрасту риби", "m_fishdet": "Пошук риби",
     "m_barpad": "Відступ рамки, px", "m_slipthr": "Поріг червоної рамки",
-    "s_sec_lang": "ЯЗЫК / LANGUAGE / МОВА", "s_sec_binds": "Гарячі клавіші", "s_lang": "Мова інтерфейсу", "s_bind_toggle": "Старт / Стоп", "s_bind_panic": "Аварійний стоп",
+    "s_sec_lang": "ЯЗЫК / LANGUAGE / МОВА", "s_sec_binds": "Гарячі клавіші", "s_lang": "Мова інтерфейсу", "s_bind_toggle": "Старт / Стоп", "s_bind_panic": "Аварійний стоп", "s_bind_macro": "Запис макро (старт/стоп)",
     "s_bind_gui": "Показати / сховати вікно", "s_volume": "Гучність звуків, %", "s_cast_delay": "Затримка закидання, с",
     "s_game_none": "Вікно гри визначається на старті (F8 у грі)", "s_game": "Вікно гри: «{title}»",
     "s_version": "Версія {v} · захват: {b}", "s_capture_backend": "Захват на старті",
@@ -579,7 +581,7 @@ STRINGS = {
     "toast_rec_on": "⏺ ПИШУ: зроби ПКМ по вудці → пауза → клік по «Використати», потім 2 с не рухай мишею",
     "toast_rec_done": "Макро збережено: {d:.1f} с, кліків {n}",
     "toast_rec_empty": "У записі немає кліків — макро не збережено",
-    "toast_rec_running": "Спочатку зупини бота (F8)",
+    "toast_rec_running": "Спочатку зупини бота (F8)", "toast_rec_cancel": "⏹ Запис скасовано — нічого не збережено",
     "toast_macro_cleared": "Макро стерто",
     "toast_macro_need_inv": "Відкрий інвентар у грі — потім «▷ Перевірити»",
     "log_macro_play": "▶ Макро закидання: повторюю запис ({d:.1f} с, {n} подій)",
@@ -2757,81 +2759,121 @@ def _match_scales(gray, t_, max_n=1, thr=0.60, with_f=False):
 # Никакого распознавания при закиде: запись уже «работает», повторять её надёжнее,
 # чем искать заново. (Шаблоны остаются только для пассивной проверки наживки.)
 
-MACRO_STATE = {"rec": False}              # идёт ли запись макро прямо сейчас
+MACRO_STATE = {"rec": False, "stop": False, "cancel": False}
+# rec — запись идёт; stop — досрочно завершить И СОХРАНИТЬ; cancel — отменить без записи
+
+
+def macro_cancel():
+    """АВАРИЙНАЯ ОТМЕНА записи (вызывается из panic/F10): всё, что успело записаться,
+    выбрасывается — в конфиг не попадёт ничего. Безопаснее «недописанного» макро."""
+    if MACRO_STATE["rec"]:
+        MACRO_STATE["cancel"] = True
 
 
 def macro_record():
-    """Записывает движения мыши и нажатия (ПКМ/ЛКМ) в CFG["cast_macro"]:
-      * отсчёт 3 с -> запись -> автоматический стоп после 2.0 с тишины, если оба
-        клика уже сделаны (4.0 с при одном клике; потолок 30 с);
-      * движения пишутся шагом >= 3 px, кнопки — по переходам down/up (VK-поллинг
-        50 Гц), время — относительно старта записи;
+    """ЗАПИСЬ МАКРО (бинд bind_macro или кнопка «⏺ Записать») — ТУМБЛЕР:
+      * 1-е нажатие: отсчёт 3 с -> запись;
+      * повторное нажатие: досрочный СТОП с сохранением;
+      * F10 (panic): отмена БЕЗ сохранения;
+      * авто-стоп: после обоих кликов 2 с тишины (один клик — 4 с; потолок 30 с).
+    Надёжность записи:
+      * ПЕРВОЕ событие всегда ставит мышь в точку, где запись началась, — при
+        повторе курсор гарантированно стартует оттуда же;
+      * кнопки пишутся по переходам down/up (VK-поллинг 100 Гц), движения — шагом
+        >= 2 px, время — от t0 записи (monotonic);
       * координаты — в системе кадра захвата (те же, что у кликов бота), поэтому
-        повтор точно попадает в записанные точки даже на мультимониторе.
-    Вызов из GUI («⏺ Записать»); повторная запись и запись при работающем боте
-    отклоняются с тостом."""
-    if MACRO_STATE["rec"]:
+        повтор точно попадает в записанные точки даже на мультимониторе;
+      * при работающем боте запись отклоняется с тостом (конфликт ввода).
+    Все флаги сбрасываются в finally — запись не может «залипнуть»."""
+    if MACRO_STATE["rec"]:                  # тумблер: повторное нажатие = стоп и сохранить
+        MACRO_STATE["stop"] = True
         return
     if STATE.get("running"):
         notify("toast_rec_running", "warn")
         return
+    MACRO_STATE["stop"] = False              # чистый старт: чужие флаги не наследуем
+    MACRO_STATE["cancel"] = False
     MACRO_STATE["rec"] = True
 
     def worker():
+        events = []
+        clicks = 0
+        cancelled = False
         try:
             for i in (3, 2, 1):
+                if MACRO_STATE["cancel"] or MACRO_STATE["stop"]:
+                    break
                 notify("toast_rec_go", "ok", i=i)
                 time.sleep(1.0)
-            notify("toast_rec_on", "ok")
-            log(t("toast_rec_on"))
-            events = []
-            clicks = 0
-            t0 = time.perf_counter()
-            prev = {"l": False, "r": False}
-            last_act = t0
-            last_pos = None
-            while True:
-                now = time.perf_counter()
-                for name, vk in (("l", 0x01), ("r", 0x02)):      # VK_LBUTTON, VK_RBUTTON
-                    down = bool(ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000)
-                    if down != prev[name]:
-                        events.append([round(now - t0, 3), "down" if down else "up", name])
-                        prev[name] = down
-                        if down:
-                            clicks += 1
-                        last_act = now
-                try:
-                    pos = cursor_pos()
+            if MACRO_STATE["stop"]:          # стоп в отсчёте = записи ещё нет, это отмена
+                MACRO_STATE["cancel"] = True
+            if not MACRO_STATE["cancel"]:
+                notify("toast_rec_on", "ok")
+                log(t("toast_rec_on"))
+                t0 = time.perf_counter()
+                prev = {"l": False, "r": False}
+                last_act = t0
+                last_pos = None
+                try:                        # СТАРТОВАЯ ТОЧКА записи
+                    p0 = cursor_pos()
+                    events.append([0.0, "move", int(p0[0]), int(p0[1])])
+                    last_pos = p0
                 except Exception:
-                    pos = None
-                if pos is not None and (last_pos is None
-                                        or abs(pos[0] - last_pos[0]) + abs(pos[1] - last_pos[1]) >= 3):
-                    events.append([round(now - t0, 3), "move", int(pos[0]), int(pos[1])])
-                    last_pos = pos
-                    last_act = now
-                if clicks >= 2 and now - last_act >= 2.0:
-                    break                          # ПКМ и ЛКМ есть, 2 с тишины — хватит
-                if clicks >= 1 and now - last_act >= 4.0:
-                    break                          # один клик и долгая тишина
-                if now - t0 >= 30.0:
-                    break                          # потолок записи
-                time.sleep(0.02)
-            dur = float(events[-1][0]) if events else 0.0
-            if clicks < 1 or not events:
-                notify("toast_rec_empty", "warn")
-                log(t("log_rec_fail", e="no clicks"))
-                return
-            CFG["cast_macro"] = events
-            save_cfg()
-            notify("toast_rec_done", "ok", d=dur, n=clicks)
-            log(t("log_macro_saved", d=dur, n=len(events)))
+                    pass
+                while True:
+                    now = time.perf_counter()
+                    for name, vk in (("l", 0x01), ("r", 0x02)):   # VK_LBUTTON, VK_RBUTTON
+                        down = bool(ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000)
+                        if down != prev[name]:
+                            events.append([round(now - t0, 3), "down" if down else "up", name])
+                            prev[name] = down
+                            if down:
+                                clicks += 1
+                            last_act = now
+                    try:
+                        pos = cursor_pos()
+                    except Exception:
+                        pos = None
+                    if pos is not None and (last_pos is None
+                                            or abs(pos[0] - last_pos[0]) + abs(pos[1] - last_pos[1]) >= 2):
+                        events.append([round(now - t0, 3), "move", int(pos[0]), int(pos[1])])
+                        last_pos = pos
+                        last_act = now
+                    if MACRO_STATE["cancel"] or MACRO_STATE["stop"]:
+                        break               # бинд/кнопка: стоп (cancel решит судьбу записи)
+                    if clicks >= 2 and now - last_act >= 2.0:
+                        break               # ПКМ и ЛКМ есть, 2 с тишины — хватит
+                    if clicks >= 1 and now - last_act >= 4.0:
+                        break               # один клик и долгая тишина
+                    if now - t0 >= 30.0:
+                        break               # потолок записи
+                    time.sleep(0.01)        # 100 Гц — точные тайминги
         except Exception as e:
             try:
                 log(t("log_rec_fail", e=f"{type(e).__name__}: {e}"))
             except Exception:
                 pass
         finally:
+            cancelled = bool(MACRO_STATE["cancel"])
             MACRO_STATE["rec"] = False
+            MACRO_STATE["stop"] = False
+            MACRO_STATE["cancel"] = False
+            if cancelled:
+                notify("toast_rec_cancel", "warn")
+                log(t("toast_rec_cancel"))
+            elif clicks < 1 or not events:
+                notify("toast_rec_empty", "warn")
+                log(t("log_rec_fail", e="no clicks"))
+            else:
+                dur = float(events[-1][0]) if events else 0.0
+                CFG["cast_macro"] = events
+                save_cfg()
+                notify("toast_rec_done", "ok", d=dur, n=clicks)
+                log(t("log_macro_saved", d=dur, n=len(events)))
+            try:
+                EVENTS.put(("refresh_page",))   # обновить статус макро в GUI
+            except Exception:
+                pass
     threading.Thread(target=worker, daemon=True).start()
 
 
@@ -3061,6 +3103,7 @@ def toggle_bot():
 
 
 def panic():
+    macro_cancel()                          # запись макро не должна переживать аварийный стоп
     stop_event.set()
     release_all()
 
@@ -3658,9 +3701,10 @@ class App:
         self.dyn["cap"] = self.txt(PANEL_X + 700, PANEL_Y + 136, "", 10, C_DIM, False, "e", ("page",), True)
         # --- клавиши ---
         self.txt(PANEL_X + 56, PANEL_Y + 168, t("s_sec_binds"), 10, C_DIM, True)
-        rows = [("s_bind_toggle", "bind_toggle"), ("s_bind_panic", "bind_panic"), ("s_bind_gui", "bind_gui")]
+        rows = [("s_bind_toggle", "bind_toggle"), ("s_bind_panic", "bind_panic"),
+                ("s_bind_macro", "bind_macro"), ("s_bind_gui", "bind_gui")]
         for k, (lab, key) in enumerate(rows):
-            y = 184 + k * 38
+            y = 182 + k * 30
             self.txt(PANEL_X + 56, PANEL_Y + y + 8, t(lab), 12, C_TEXT)
             self.dyn[f"k_{key}"] = self.txt(PANEL_X + 300, PANEL_Y + y + 8, CFG[key].upper(), 13, "#ffffff", True, "e")
             self.button(320, y, 140, 30, t("b_change"), lambda key=key: self.rebind(key), "gray", 10)
@@ -4026,6 +4070,7 @@ def register_hotkeys():
     HK.append(keyboard.add_hotkey(CFG["bind_panic"], panic))
     HK.append(keyboard.add_hotkey(CFG["bind_gui"], lambda: EVENTS.put(("gui",))))
     HK.append(keyboard.add_hotkey(CFG["bind_debug"], lambda: EVENTS.put(("debug",))))
+    HK.append(keyboard.add_hotkey(CFG.get("bind_macro", "f6"), lambda: macro_record()))
 
 
 def shutdown():

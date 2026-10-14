@@ -223,7 +223,71 @@ ef.STATS.update({"catches": 0, "t0": time.time(), "t_end": None, "mg": [], "chec
 check("fishing_run без макро возвращает no_macro", ef.fishing_run() == "no_macro")
 check("причина no_macro переводится", "макро" in ef.reason_text("no_macro", "").lower(),
       ef.reason_text("no_macro", ""))
+print("== 3c. Бинд записи: тумблер, защита от бота, отмена F10 ==")
+_real_notify3c = ef.notify
+nt3c = []
+ef.notify = lambda k, tone="ok", **kw: nt3c.append(k)
+# тумблер: запись идёт -> нажатие просит стоп, не роняя флаг
+ef.MACRO_STATE.update(rec=True, stop=False, cancel=False)
+ef.macro_record()
+check("повторное нажатие бинда = стоп с сохранением",
+      ef.MACRO_STATE["stop"] is True and ef.MACRO_STATE["rec"] is True)
+# при работающем боте запись не стартует
+ef.MACRO_STATE.update(rec=False, stop=False, cancel=False)
+ef.STATE["running"] = True
+ef.macro_record()
+check("при работающем боте запись отклонена с тостом",
+      nt3c.count("toast_rec_running") == 1 and ef.MACRO_STATE["rec"] is False)
+ef.STATE["running"] = False
+# F10-отмена: флаг ставится, при простое — no-op
+ef.MACRO_STATE.update(rec=True, stop=False, cancel=False)
+ef.macro_cancel()
+check("panic-отмена ставит cancel", ef.MACRO_STATE["cancel"] is True)
+ef.MACRO_STATE.update(rec=False, stop=False, cancel=False)
+ef.macro_cancel()
+check("отмена в простое — no-op", ef.MACRO_STATE["cancel"] is False)
+# panic() вызывает отмену записи
+ef.MACRO_STATE.update(rec=True, stop=False, cancel=False)
+cancels = []
+cancels = []
+ef.macro_cancel, _bak = (lambda: cancels.append(1)), ef.macro_cancel
+ef.release_all, _bak_ra = (lambda: None), ef.release_all
+_ev_bak = ef.stop_event
+class _FakeEv:
+    def set(self):
+        pass
+
+    def clear(self):
+        pass
+
+    def is_set(self):
+        return False
+ef.stop_event = _FakeEv()
+ef.panic()
+ef.macro_cancel = _bak
+ef.release_all = _bak_ra
+ef.stop_event = _ev_bak
+check("panic() отменяет запись макро", cancels == [1])
+# регистрация хоткея записи
+import types as _types
+_reg = []
+ef.keyboard = _types.SimpleNamespace(add_hotkey=lambda key, cb: _reg.append(key),
+                                     remove_hotkey=lambda h: None, unhook_all=lambda: None)
+ef.HK.clear()
+ef.register_hotkeys()
+check("бинд записи зарегистрирован (bind_macro)", ef.CFG["bind_macro"] in _reg, str(_reg))
+ef.notify = _real_notify3c
+ef.MACRO_STATE.update(rec=False, stop=False, cancel=False)
 ef.CFG["cast_macro"] = [[0.0, "down", "r"], [0.2, "up", "r"], [0.5, "down", "l"], [0.7, "up", "l"]]
+
+print("== 3d. Стартовая точка: макро всегда начинается с постановки мыши ==")
+sent.clear()
+start_macro = [[0.0, "move", 340, 512], [0.3, "down", "r"], [0.45, "up", "r"],
+               [1.4, "move", 205, 286], [1.7, "down", "l"], [1.85, "up", "l"]]
+ef.macro_run(start_macro)
+first_out = sent[0] if sent else None
+check("первое событие повтора — мышь в точке начала записи (340, 512)",
+      first_out == ("move", 340, 512), str(sent[:2]))
 
 print("== 4. macro_run: произвольные кнопки и порядок (ПКМ-режим без движений) ==")
 sent.clear()
