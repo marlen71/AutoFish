@@ -54,7 +54,7 @@ RELEASE_NAME_RE = re.compile(r"^## \[(\d+)\.(\d+)\.(\d+)\]")
 # из checkout, где .gitattributes уже отработал.
 INCLUDE_FILES = ["eternal_fishmod.py", "launch.py", "start.bat", "start_admin.bat", "start.vbs",
                  "requirements.txt", "README.md", "VERSION"]
-INCLUDE_DIRS = [("templates", False), ("sounds", True)]
+INCLUDE_DIRS = [("templates", False), ("sounds", True), ("ai", False)]
 EXCLUDE_EXT = {".pyc", ".log", ".tmp"}          # мусор; sounds/auto исключается отдельно
 EXCLUDE_DIRS = {"auto", "__pycache__", ".git"}
 

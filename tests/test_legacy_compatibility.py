@@ -217,6 +217,37 @@ for name in sorted(os.listdir(os.path.join(ROOT, "ai"))):
             bad.append((name, token))
 check("в ai/ нет ни мыши, ни клавиатуры, ни сообщений окну", not bad, str(bad))
 
+print("== 6. Встроенный payload ai/ синхронен с каталогом ai/ ==")
+import subprocess
+r = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "embed_ai.py"), "--check"],
+                   capture_output=True, text=True, cwd=ROOT)
+check("scripts/embed_ai.py --check: payload == ai/ на диске", r.returncode == 0,
+      (r.stdout + r.stderr).strip()[:120])
+
+print("== 7. ОДИН файл eternal_fishmod.py самодостаточен (сценарий поля 1.24) ==")
+tmpf = tempfile.mkdtemp()
+try:
+    shutil.copy(os.path.join(ROOT, "eternal_fishmod.py"),
+                os.path.join(tmpf, "eternal_fishmod.py"))
+    code = (
+        "import sys\n"
+        "sys.path.insert(0, r'%s')\n"
+        "import eternal_fishmod as ef\n"
+        "import ai.config, ai.pipeline, ai.detector\n"
+        "print('AI_KEYS', len([k for k in ef.DEFAULT_CFG if k.startswith('ai_')]))\n"
+        "print('EMBED', len(ef._AI_EMBED_SRC))\n"
+        "print('NO_DISK_AI', __import__('os').path.isdir(r'%s/ai'))\n"
+    ) % (tmpf, tmpf)
+    r2 = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                        text=True, cwd=tmpf, timeout=120)
+    check("импорт одним файлом БЕЗ каталога ai/ проходит", r2.returncode == 0,
+          (r2.stderr or "").strip()[-160:])
+    check("из payload поднялись ai-ключи и 14 модулей",
+          "AI_KEYS 14" in r2.stdout and "EMBED 14" in r2.stdout and
+          "NO_DISK_AI False" in r2.stdout, r2.stdout.strip())
+finally:
+    shutil.rmtree(tmpf, ignore_errors=True)
+
 print()
 if fails:
     print("FAILED:", len(fails))
