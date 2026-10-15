@@ -202,8 +202,6 @@ REMOVED_CFG_KEYS = ("pid_mode", "pid_kp", "pid_ki", "pid_kd", "pid_ilim", "pid_d
                     "inv_wheel_center", "rod_click_pos", "use_click_pos", "rod_match_min",
                     "move_time", "use_menu_delay", "rod_retry_delay", "idle_cursor",
                     "cast_macro", "macro_click_window", "bind_macro")
-CFG = dict(DEFAULT_CFG)
-
 THR = {"rod": 0.90, "rod2": 0.90, "bait": 0.90, "inv_header": 0.80,
        "hud_fish": 0.85, "hud_bait": 0.85, "hud_shield": 0.85}
 REGIONS = {
@@ -565,6 +563,10 @@ sys.meta_path.append(_AiEmbFinder())
 # [AI-EMBED-END]
 from ai.config import AI_DEFAULTS as _AI_DEFAULTS          # noqa: E402
 DEFAULT_CFG.update(_AI_DEFAULTS)
+# ВАЖНО: копия конфига — СТРОГО после пополнения DEFAULT_CFG ai-ключами
+# (в 1.24.0/1.24.1 копия бралась раньше и CFG жил без ai_*: страница
+# «AI-ЗРЕНИЕ» падала с KeyError: 'ai_mode').
+CFG = dict(DEFAULT_CFG)
 
 
 def load_cfg():
@@ -589,10 +591,13 @@ def load_cfg():
             if str(CFG.get("capture_backend", "")).lower().strip() in ("mss", "no", "dxgpu-dxs"):
                 CFG["capture_backend"] = DEFAULT_CFG["capture_backend"]
                 CFG_MIGRATED.append("capture_backend")
-            if int(data.get("cfg_version", 1) or 1) < CFG_VERSION:
-                # аддитивная миграция: недостающие ключи (в т.ч. ui_click_window,
-                # rod_thr) добавляем дефолтами; устаревшие чистит REMOVED_CFG_KEYS выше
-                CFG.update({k: v for k, v in DEFAULT_CFG.items() if k not in known})
+            # Аддитивные ключи добавляем ВСЕГДА (сверяемся с ФАЙЛОМ, не с CFG:
+            # CFG уже содержит дефолты), а не только при миграции версии —
+            # конфиг v1.23 (cfg_version=11) не трогался и остался без ai_*.
+            missing = {k: v for k, v in DEFAULT_CFG.items() if k not in data}
+            if missing:
+                CFG.update(missing)
+            if int(data.get("cfg_version", 1) or 1) < CFG_VERSION or missing:
                 save_cfg()
             return True
         except Exception as e:
@@ -4159,10 +4164,10 @@ class App:
         on_i = self.img(("sw", 1), lambda: switch_img(self.u(52), self.u(28), True))
         off_i = self.img(("sw", 0), lambda: switch_img(self.u(52), self.u(28), False))
         tag = f"t{next(self.ids)}"
-        it = self.put(on_i if CFG[key] else off_i, PANEL_X + x, PANEL_Y + y, ("page", tag))
+        it = self.put(on_i if CFG.get(key) else off_i, PANEL_X + x, PANEL_Y + y, ("page", tag))
 
         def flip(_e=None):
-            CFG[key] = not CFG[key]
+            CFG[key] = not CFG.get(key, False)
             self.safe_itemconfig(it, image=on_i if CFG[key] else off_i)
             save_cfg()
             if on_change:
@@ -4214,13 +4219,14 @@ class App:
 
         def cycle(_e=None):
             try:
-                i = (options.index(CFG[key]) + 1) % len(options)
+                i = (options.index(CFG.get(key, options[0])) + 1) % len(options)
             except ValueError:
                 i = 0
             CFG[key] = options[i]
             save_cfg()
             self.show_page(self.page)
-        self.button(x, y, w, h, lbl.get(CFG[key], str(CFG[key])), cycle, "gray", size)
+        cur = CFG.get(key, options[0])               # ключа нет — показываем первый
+        self.button(x, y, w, h, lbl.get(cur, str(cur)), cycle, "gray", size)
 
     def lang_switcher(self, x, y):
         """Три плитки RU / EN / UA — язык меняется мгновенно, без перезапуска."""

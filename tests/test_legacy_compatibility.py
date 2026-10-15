@@ -133,6 +133,22 @@ saved = json.load(open(ef.CFG_PATH, encoding="utf-8"))
 check("save_cfg записал ai-ключи (следующий старт их увидит)", "ai_enabled" in saved and
       "ai_mode" in saved)
 
+print("== 1c. Конфиг РАВНОЙ версии без ai_* (сценарий поля 1.24.1: KeyError ai_mode) ==")
+old11 = {"cfg_version": ef.CFG_VERSION, "lang": "ua", "rod_thr": 0.82}
+with open(ef.CFG_PATH, "w", encoding="utf-8") as f:
+    json.dump(old11, f)
+ef.CFG.clear()
+ef.CFG.update(ef.DEFAULT_CFG)
+ef.CFG_DROPPED.clear()
+ok11 = ef.load_cfg()
+check("конфиг v11 (версия совпадает) загрузился", ok11 is True)
+check("ai-ключи добавлены БЕЗ миграции версии (фикс load_cfg)",
+      "ai_mode" in ef.CFG and "ai_enabled" in ef.CFG and
+      ef.CFG["ai_mode"] == "legacy" and ef.CFG["ai_enabled"] is False,
+      str(ef.CFG.get("ai_mode")))
+check("пользовательские значения не тронуты", ef.CFG["lang"] == "ua" and
+      ef.CFG["rod_thr"] == 0.82)
+
 print("== 2. vision_equip: режим ai БЕЗ модели -> честный фолбэк в шаблоны ==")
 ef.CFG["lang"] = "ru"
 ef.CFG["ai_mode"] = "ai"
@@ -237,6 +253,7 @@ try:
         "print('AI_KEYS', len([k for k in ef.DEFAULT_CFG if k.startswith('ai_')]))\n"
         "print('EMBED', len(ef._AI_EMBED_SRC))\n"
         "print('NO_DISK_AI', __import__('os').path.isdir(r'%s/ai'))\n"
+        "print('CFG_AI', 'ai_mode' in ef.CFG and 'ai_enabled' in ef.CFG)\n"
     ) % (tmpf, tmpf)
     r2 = subprocess.run([sys.executable, "-c", code], capture_output=True,
                         text=True, cwd=tmpf, timeout=120)
@@ -245,6 +262,8 @@ try:
     check("из payload поднялись ai-ключи и 14 модулей",
           "AI_KEYS 14" in r2.stdout and "EMBED 14" in r2.stdout and
           "NO_DISK_AI False" in r2.stdout, r2.stdout.strip())
+    check("ai-ключи в CFG СРАЗУ после импорта (копия после пополнения дефолтов)",
+          "CFG_AI True" in r2.stdout, r2.stdout.strip())
 finally:
     shutil.rmtree(tmpf, ignore_errors=True)
 
