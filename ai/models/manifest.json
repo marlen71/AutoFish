@@ -1,5 +1,21 @@
 {
   "version": 1,
-  "comment": "Модели НЕ поставляются с ботом. Кладёте свой .onnx в этот каталог, считаете sha256 и вписываете запись. Формат и обучение: docs/AI_VISION.md и datasets/README.md. Приложение полностью работает и без моделей (легаси-зрение).",
-  "models": {}
+  "models": {
+    "detector": {
+      "file": "rod_detector.onnx",
+      "sha256": "1381170a0ffaa6e90db906d53e687dc7183089b4c99d410997ba46bbebc89a6e",
+      "version": "1.0.0-owner-records",
+      "input": [
+        1,
+        3,
+        448,
+        448
+      ],
+      "layout": "yolov8",
+      "classes": [
+        "fishing_rod",
+        "inventory_window"
+      ]
+    }
+  }
 }

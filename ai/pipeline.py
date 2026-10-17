@@ -34,7 +34,8 @@ def _ema(old, new, k=0.2):
 
 class VisionPipeline(object):
     def __init__(self, frame_source, hints_source=None, base_dir=".",
-                 cfg_getter=None, status_cb=None, log_cb=None):
+                 cfg_getter=None, status_cb=None, log_cb=None,
+                 models_dir=None):
         """frame_source() -> ai.frame_router.Frame (кадр + метаданные) или None.
         hints_source() -> дешёвые легаси-подсказки (dict).
         cfg_getter() -> свежий срез ai_cfg (настройки применяются на лету).
@@ -51,7 +52,7 @@ class VisionPipeline(object):
         self.change = ChangeDetector()
         self.classifier = StateClassifier()
         self.fusion = EventFusion()
-        self.manager = ModelManager(aicfg.ai_models_dir(None))
+        self.manager = ModelManager(aicfg.ai_models_dir(models_dir))
         self.detector, self.det_status = make_detector(self.manager)
         self.ocr, self.ocr_status = make_ocr()
         self._stop = threading.Event()

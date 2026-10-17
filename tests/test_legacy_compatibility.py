@@ -193,8 +193,12 @@ def push(img):
 
 ai_def = dict(ef.DEFAULT_CFG)
 ai_def.update({"ai_change_detect": True, "ai_detect_fps": 10.0, "ai_ocr_enabled": False})
+os.makedirs(os.path.join(tmpd, "models"), exist_ok=True)
+open(os.path.join(tmpd, "models", "manifest.json"), "w").write(
+    '{"version": 1, "models": {}}')
 pipe = VisionPipeline(lambda: None, lambda: {}, base_dir=tmpd,
-                      cfg_getter=lambda: ai_def)
+                      cfg_getter=lambda: ai_def,
+                      models_dir=os.path.join(tmpd, "models"))
 pipe.start()
 pipe.submit(push(np.full((1080, 1920, 3), 40, np.uint8)))
 img2 = np.full((1080, 1920, 3), 40, np.uint8)
