@@ -259,8 +259,8 @@ try:
                         text=True, cwd=tmpf, timeout=120)
     check("импорт одним файлом БЕЗ каталога ai/ проходит", r2.returncode == 0,
           (r2.stderr or "").strip()[-160:])
-    check("из payload поднялись ai-ключи и 14 модулей",
-          "AI_KEYS 14" in r2.stdout and "EMBED 14" in r2.stdout and
+    check("из payload поднялись ai-ключи (19) и 16 модулей",
+          "AI_KEYS 19" in r2.stdout and "EMBED 16" in r2.stdout and
           "NO_DISK_AI False" in r2.stdout, r2.stdout.strip())
     check("ai-ключи в CFG СРАЗУ после импорта (копия после пополнения дефолтов)",
           "CFG_AI True" in r2.stdout, r2.stdout.strip())

@@ -40,6 +40,13 @@ AI_DEFAULTS = {
     # каталог моделей ("" = ai/models рядом с ботом). Модели НИКОГДА не скачиваются
     # автоматически — только вручную, по инструкции docs/AI_VISION.md
     "ai_model_dir": "",
+    # ЗАПИСЬ СЕССИЙ (v1.25): «ИИ учится на твоих действиях» — пишем кадры + твои
+    # клики/клавиши, потом export_dataset собирает датасет для обучения модели.
+    "ai_rec_fps": 5.0,                   # кадров в секунду (1-10 достаточно)
+    "ai_rec_quality": 80,                # JPEG-качество кадров
+    "ai_rec_max_width": 960,             # кадры уменьшаются до этой ширины
+    "ai_rec_max_mb": 500,                # предел объёма одной сессии (автостоп)
+    "ai_rec_keys": True,                 # логировать нажатия клавиш (TAB, G, ...)
 }
 
 
@@ -67,8 +74,25 @@ def ai_cfg(cfg):
         out["ai_snap_max_mb"] = max(20, int(out["ai_snap_max_mb"]))
     except (TypeError, ValueError):
         out[k] = int(d["ai_snap_max_mb"])
-    for k in ("ai_enabled", "ai_fullscreen", "ai_change_detect", "ai_ocr_enabled", "ai_snapshots"):
+    for k in ("ai_enabled", "ai_fullscreen", "ai_change_detect", "ai_ocr_enabled",
+              "ai_snapshots", "ai_rec_keys"):
         out[k] = bool(out[k])
+    try:
+        out["ai_rec_quality"] = min(95, max(40, int(out["ai_rec_quality"])))
+    except (TypeError, ValueError):
+        out["ai_rec_quality"] = 80
+    try:
+        out["ai_rec_max_width"] = min(1920, max(480, int(out["ai_rec_max_width"])))
+    except (TypeError, ValueError):
+        out["ai_rec_max_width"] = 960
+    try:
+        out["ai_rec_max_mb"] = max(50, int(out["ai_rec_max_mb"]))
+    except (TypeError, ValueError):
+        out["ai_rec_max_mb"] = 500
+    try:
+        out["ai_rec_fps"] = min(10.0, max(1.0, float(out["ai_rec_fps"])))
+    except (TypeError, ValueError):
+        out["ai_rec_fps"] = 5.0
     return out
 
 

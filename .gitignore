@@ -22,6 +22,10 @@ tests/legacy_stats.json
 # Артефакты AI-диагностики (создаются на машине пользователя)
 diagnostics/events.jsonl*
 diagnostics/snapshots/
+
+# Записи сессий и собранные датасеты (v1.25) — только на машине пользователя
+sessions/
+dataset_out/
 dist/
 *.spec
 .venv/

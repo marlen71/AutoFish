@@ -410,6 +410,58 @@ check("переключатель режима меняет ai_mode",
 check("кнопка «Журнал AI» не падает при выключенном конвейере", True)
 app.refresh()
 check("refresh() на странице AI не падает (ai_status без конвейера)", True)
+print("== 5c. Запись сессий (v1.25): кнопки страницы AI ==")
+
+
+class _FakeRec:
+    def __init__(self, *a, **k):
+        self.started = False
+        self.reason = ""
+
+    def start(self):
+        self.started = True
+        return True
+
+    def stop(self, **k):
+        self.started = False
+        self.reason = "user"
+        return {"recording": False, "frames": 3, "clicks": 1, "mb": 0.4,
+                "cursor_hits": 2, "dir": "sess", "reason": self.reason, "error": "",
+                "actions": 5}
+
+    def status(self):
+        return {"recording": self.started, "frames": 3, "clicks": 1, "mb": 0.4,
+                "cursor_hits": 2, "dir": "sess", "reason": self.reason, "error": "",
+                "actions": 5}
+
+
+_real_rec_cls = ef._AiRec
+ef._AiRec = _FakeRec
+app.show_page(5)
+btn_txt = [it.get("text") for it in app.cv.items.values()
+           if isinstance(it.get("text"), str) and it.get("text") in
+           ("⏺ Записать сессию", "Собрать датасет")]
+check("кнопки записи и датасета отрисованы", len(btn_txt) == 2, str(btn_txt))
+mark = len(app.cv.binds)
+app.show_page(5)
+rec_clicks = [cb for tag, seq, cb in app.cv.binds[mark:] if seq == "<Button-1>"]
+err5c = ""
+try:
+    for cb in rec_clicks:                      # вкл/выкл записи + экспорт без сессий
+        cb(None)
+except Exception as e:
+    err5c = f"{type(e).__name__}: {e}"
+check("клики по кнопкам записи/экспорта безопасны", err5c == "", err5c)
+check("рекордер создан кнопкой (фейковый класс, без потока)",
+      ef._REC["rec"] is not None and ef._REC["rec"].started is True)
+app.do_rec_toggle()                                # второй клик: остановка записи
+check("повторный клик остановил запись", ef._REC["rec"].started is False and
+      ef.ai_record_status()["reason"] == "user")
+app.refresh()
+check("refresh показывает статус записи", any(isinstance(it.get("text"), str) and
+      ("Триває запис" in it["text"] or "Идёт запись" in it["text"] or "Запись не" in it["text"])
+      for it in app.cv.items.values()))
+ef._AiRec = _real_rec_cls
 ef.CFG.clear()
 ef.CFG.update(ef.DEFAULT_CFG)
 app.show_page(4)
