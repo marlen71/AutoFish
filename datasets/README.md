@@ -63,6 +63,18 @@ YOLO("best.pt").export(format="onnx", imgsz=448, opset=12)
 строка `[cx, cy, w, h, obj, cls...]`, все значения после sigmoid, координаты —
 доли входа. Практический путь — обёртка-экспорт:
 
+```python
+# export_nms5.py — оборачиваем YOLO-голову в постобработку прямо в графе ONNX
+import torch, sys
+from models.common import DetectMultiBackend          # или свой экспорт YOLO→ONNX
+# ... экспорт базовой модели в ONNX, затем наш постпроцесс (см. docs) ...
+```
+
+Структура `ai/detector.py` рассчитана на новые layout'ы (ветка `layout == "…"`
+рядом с `yolov8`/`nms5`; реестр классов и NMS уже готовы). Проверь себя:
+`python tests/test_ai_detector_onnx.py` — там генерируется эталонная синтетическая
+модель под `nms5` и проверяется вся цепочка.
+
 ## 6. Подключение
 
 ```bash
