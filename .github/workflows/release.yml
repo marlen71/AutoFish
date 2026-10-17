@@ -1,0 +1,139 @@
+# =============================================================================
+#  Eternal FishMod — публикация GitHub Release по тегу v*.*.*
+#
+#  Релиз можно делать двумя способами (оба дают одинаковый результат):
+#    1) локально:  python scripts/release.py patch|minor|major
+#       (нужен авторизованный gh CLI ИЛИ переменная GITHUB_TOKEN для REST-пути);
+#    2) на GitHub: просто пушнуть тег — workflow соберёт архив и опубликует релиз.
+#       Отдельные credentials НЕ нужны: хватает встроенного secrets.GITHUB_TOKEN
+#       (права на публикацию release заданы ниже в permissions: contents: write).
+#
+#  Ручной запуск возможен с вкладки Actions -> "Release build" -> Run workflow
+#  (можно указать существующий тег, чтобы пересоздать/дообновить релиз).
+# =============================================================================
+name: Release build
+
+on:
+  push:
+    tags:                       # триггеримся только на теги вида v1.2.3
+      - "v*.*.*"
+  workflow_dispatch:            # ручной запуск
+    inputs:
+      tag:
+        description: "Существующий тег для (пере)публикации релиза, напр. v1.3.0"
+        required: false
+        default: ""
+
+permissions:
+  contents: write               # нужно, чтобы создать/обновить релиз через GITHUB_TOKEN
+
+jobs:
+  release:
+    name: Собрать архив и опубликовать релиз
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (все теги, чтобы найти нужный)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -euo pipefail
+          if [ -n "$INPUT_TAG" ]; then
+            TAG="$INPUT_TAG"                       # ручной запуск: тег указан в форме
+          elif [ "$REF_TYPE" = "tag" ]; then
+            TAG="$REF"                            # обычный путь: пуш тега v1.2.3
+          else
+            TAG="v$(cat VERSION)"                 # ручной запуск без ввода — берём VERSION из репозитория
+          fi
+          echo "TAG=$TAG" >> "$GITHUB_OUTPUT"
+          echo "VERSION=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "Релиз будет опубликован для тега $TAG (версия ${TAG#v})"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check version files are in sync
+        run: |
+          echo "VERSION file: $(cat VERSION)"
+          grep -m1 '^APP_VERSION' eternal_fishmod.py
+          if [ "$(cat VERSION)" != "${{ steps.tag.outputs.VERSION }}" ]; then
+            echo "::warning::VERSION ($(cat VERSION)) не совпадает с тегом v${{ steps.tag.outputs.VERSION }}"
+          fi
+
+      - name: Syntax check (не даём опубликовать битый файл)
+        run: |
+          python -m py_compile eternal_fishmod.py launch.py scripts/release.py
+          python - <<'PY'
+          import io, re
+          src = io.open("eternal_fishmod.py", encoding="utf-8").read()
+          for lang in ('"ru"', '"en"', '"ua"'):
+              assert lang in src, "в STRINGS нет блока %s" % lang
+          print("STRINGS: ru/en/ua на месте")
+          PY
+
+      - name: Build release archive
+        run: python scripts/release.py --zip-only "${{ steps.tag.outputs.VERSION }}" --out "dist/eternal_fishmod_v${{ steps.tag.outputs.VERSION }}.zip"
+
+      - name: Write release notes from CHANGELOG
+        run: |
+          python - <<'PY'
+          # Точно тот же код, что у локального `python scripts/release.py`, —
+          # иначе описание релиза из CI и из-под Windows разъезжалось бы.
+          import io, importlib.util, os
+          spec = importlib.util.spec_from_file_location("efm_release", os.path.join("scripts", "release.py"))
+          mod = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(mod)
+          body = mod.render_release_notes("${{ steps.tag.outputs.VERSION }}")
+          io.open("release_notes.md", "w", encoding="utf-8").write(body)
+          print(body[:400])
+          PY
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.TAG }}
+          ZIP: dist/eternal_fishmod_v${{ steps.tag.outputs.VERSION }}.zip
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Релиз $TAG уже существует — обновляю текст и переприкрепляю архив"
+            gh release edit "$TAG" --title "$TAG" --notes-file release_notes.md
+          else
+            gh release create "$TAG" --title "$TAG" --notes-file release_notes.md
+          fi
+          # Архив — отдельным шагом и с повторами: gh release create <tag> ... file.zip
+          # при обрыве загрузки ассета умеет оставить релиз вообще без архива.
+          for i in 1 2 3; do
+            if gh release upload "$TAG" "$ZIP" --clobber; then break; fi
+            echo "попытка $i не удалась, повторяю"; sleep $((i * 5))
+          done
+
+      - name: Verify the archive is attached
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.TAG }}
+          ZIPNAME: eternal_fishmod_v${{ steps.tag.outputs.VERSION }}.zip
+        run: |
+          set -euo pipefail
+          names=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+          echo "ассеты релиза: ${names:-<нет>}"
+          if ! grep -qx "$ZIPNAME" <<<"$names"; then
+            echo "::error::$ZIPNAME не прикреплён к релизу $TAG — скачивай исходники тега"
+            exit 1
+          fi
+          echo "URL: $(gh release view "$TAG" --json assets --jq ".assets[] | select(.name==\"$ZIPNAME\") | .url")" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Summary
+        run: |
+          echo "### Eternal FishMod ${{ steps.tag.outputs.TAG }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Архив: \`eternal_fishmod_v${{ steps.tag.outputs.VERSION }}.zip\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Релиз: https://github.com/${{ github.repository }}/releases/tag/${{ steps.tag.outputs.TAG }}" >> "$GITHUB_STEP_SUMMARY"

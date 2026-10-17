@@ -1,0 +1,39 @@
+# Артефакты работы бота (создаются на машине пользователя)
+fishmod_config.json
+fishmod_stats.json
+fishmod.log
+debug_screen.png
+debug_bar.png
+__pycache__/
+*.pyc
+*.pyo
+
+# Автосгенерированные звуки (клади свои wav в sounds/ — они главнее)
+sounds/auto/
+
+# Локальные служебные каталоги сборки/тестов
+build/
+tests/test.log
+tests/fishmod_config.json
+tests/legacy.log
+tests/legacy_config.json
+tests/legacy_stats.json
+
+# Артефакты AI-диагностики (создаются на машине пользователя)
+diagnostics/events.jsonl*
+diagnostics/snapshots/
+
+# Записи сессий и собранные датасеты (v1.25) — только на машине пользователя
+sessions/
+dataset_out/
+dist/
+*.spec
+.venv/
+venv/
+.idea/
+.vscode/
+
+# Временные артефакты релизов (собирает scripts/release.py)
+eternal_fishmod_v*.zip
+.release_tmp/
+.release_notes.md

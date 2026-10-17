@@ -1,0 +1,27 @@
+# Eternal FishMod dependencies
+# Screen capture = DXGI Desktop Duplication ONLY. BOTH libraries are installed on purpose:
+# they are alternative wrappers over the same API, so if one fails to import or to create
+# a duplication on your GPU/driver, the bot uses the other one automatically.
+dxcam>=0.0.5; platform_system == "Windows"
+bettercam>=0.4.0; platform_system == "Windows"
+
+# There is deliberately NO screen-capture fallback package here. It used to be an
+# invisible ~12 ms-per-frame fallback that broke the minigame PWM (the button stuck
+# down, the zone flew to the top). If DXGI cannot start at all (RDP, VM without 3D,
+# capture-protected window), the bot switches to its own GDI capture (ctypes BitBlt,
+# no dependency) and says so in the log, the header and the Vision page. Nothing is
+# ever swapped silently anymore.
+
+# Computer vision & numerical processing:
+opencv-python>=4.8.0
+numpy>=1.24.0
+
+# Low-level input & global hotkeys:
+pydirectinput>=1.0.4; platform_system == "Windows"
+keyboard>=0.13.5
+
+# OPTIONAL AI vision (v1.24) — install only if you need the local AI detector/OCR.
+# The bot is fully functional WITHOUT these; models are never downloaded.
+#   pip install onnxruntime==1.20.*          # local ONNX detector (CPU)
+#   pip install rapidocr-onnxruntime         # local OCR for interface text
+# See docs/AI_VISION.md and datasets/README.md (training your own model).
