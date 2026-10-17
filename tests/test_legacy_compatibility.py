@@ -123,8 +123,8 @@ check("старый конфиг загрузился", ok_load is True)
 check("значения пользователя НЕ потеряны (lang/rod_thr/bar/sound_start)",
       ef.CFG["lang"] == "en" and ef.CFG["rod_thr"] == 0.85 and
       ef.CFG["bar"] == [900, 460, 60, 520] and ef.CFG["sound_start"] is True)
-check("ai-ключи получили дефолты (AI выключен, режим legacy)",
-      ef.CFG["ai_enabled"] is False and ef.CFG["ai_mode"] == "legacy" and
+check("ai-ключи получили дефолты v1.26 (наблюдение ON, гибрид)",
+      ef.CFG["ai_enabled"] is True and ef.CFG["ai_mode"] == "hybrid" and
       ef.CFG["ai_conf"] == 0.45)
 check("устаревший ключ cast_macro чистится", "cast_macro" not in ef.CFG and
       "cast_macro" in ef.CFG_DROPPED)
@@ -144,7 +144,7 @@ ok11 = ef.load_cfg()
 check("конфиг v11 (версия совпадает) загрузился", ok11 is True)
 check("ai-ключи добавлены БЕЗ миграции версии (фикс load_cfg)",
       "ai_mode" in ef.CFG and "ai_enabled" in ef.CFG and
-      ef.CFG["ai_mode"] == "legacy" and ef.CFG["ai_enabled"] is False,
+      ef.CFG["ai_mode"] == "hybrid" and ef.CFG["ai_enabled"] is True,
       str(ef.CFG.get("ai_mode")))
 check("пользовательские значения не тронуты", ef.CFG["lang"] == "ua" and
       ef.CFG["rod_thr"] == 0.82)

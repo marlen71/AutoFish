@@ -133,12 +133,56 @@ class OnnxDetector(BaseDetector):
         if out is None or not out:
             return []
         pred = np.asarray(out[0])
-        if pred.ndim == 3:
-            pred = pred[0]
-        if pred.ndim != 2 or pred.shape[1] < 6:
+        if self.entry is not None and self.entry.layout == "yolov8":
+            return self._decode_yolov8(pred, frame_bgr, (px, py), gain, frame_id, ts)
+        return self._decode_nms5(pred, frame_bgr, (px, py), gain, frame_id, ts)
+
+    def _decode_yolov8(self, pred, frame_bgr, pad, gain, frame_id, ts):
+        """Ultralytics-экспорт: [1, 4+C, N] (или [N, 4+C]); строка =
+        cx, cy, w, h в ПИКСЕЛЯХ входа (голова уже декодировала, без sigmoid),
+        далее C скоров классов (obj нет). Порог по классу + NMS."""
+        px, py = pad
+        p = np.asarray(pred, np.float32)
+        if p.ndim == 3:
+            p = p[0]
+        if p.ndim != 2:
             return []
-        obj = _sigmoid(pred[:, 4])
-        cls = _sigmoid(pred[:, 5:]) if pred.shape[1] > 5 else obj[:, None]
+        if p.shape[0] < p.shape[1]:          # [4+C, N] -> [N, 4+C]
+            p = p.T
+        if p.shape[1] < 5:
+            return []
+        best_cls = p[:, 4:].argmax(axis=1)
+        best_score = p[:, 4:].max(axis=1)
+        keep = np.where(best_score >= self.conf)[0]
+        if not len(keep):
+            return []
+        H, W = frame_bgr.shape[:2]
+        cx = (p[keep, 0] - px) / gain
+        cy = (p[keep, 1] - py) / gain
+        ww = np.maximum(2.0, p[keep, 2] / gain)
+        hh = np.maximum(2.0, p[keep, 3] / gain)
+        boxes = np.stack([cx - ww / 2, cy - hh / 2, ww, hh], axis=1)
+        boxes[:, 0::2] = np.clip(boxes[:, 0::2], 0, W)
+        boxes[:, 1::2] = np.clip(boxes[:, 1::2], 0, H)
+        order = _nms(boxes, best_score[keep], self.nms_thr)
+        dets = []
+        for i in order:
+            k = int(keep[i])
+            cid = int(best_cls[k])
+            nm = self.classes[cid] if 0 <= cid < len(self.classes) else ("class_%d" % cid)
+            dets.append(Detection(cid, nm, float(best_score[k]),
+                                  [float(v) for v in boxes[i]], frame_id, ts, self.name))
+        return dets
+
+    def _decode_nms5(self, pred, frame_bgr, pad, gain, frame_id, ts):
+        px, py = pad
+        p = np.asarray(pred)
+        if p.ndim == 3:
+            p = p[0]
+        if p.ndim != 2 or p.shape[1] < 6:
+            return []
+        obj = _sigmoid(p[:, 4])
+        cls = _sigmoid(p[:, 5:]) if p.shape[1] > 5 else obj[:, None]
         best_cls = cls.argmax(axis=1)
         best_score = cls.max(axis=1) * obj
         keep = np.where(best_score >= self.conf)[0]
@@ -147,8 +191,8 @@ class OnnxDetector(BaseDetector):
         ih, iw = self.rt.input_shape()[2], self.rt.input_shape()[3]
         # сигмоидные координаты живут во ВХОДНОМ пространстве модели (letterbox):
         # пиксели входа -> вычет пада -> деление на gain -> пиксели кадра
-        boxes_wh = _sigmoid(pred[keep, 2:4]) * np.array([iw, ih], np.float32)
-        centers = _sigmoid(pred[keep, 0:2]) * np.array([iw, ih], np.float32)
+        boxes_wh = _sigmoid(p[keep, 2:4]) * np.array([iw, ih], np.float32)
+        centers = _sigmoid(p[keep, 0:2]) * np.array([iw, ih], np.float32)
         cx = (centers[:, 0] - px) / gain
         cy = (centers[:, 1] - py) / gain
         ww = np.maximum(2.0, boxes_wh[:, 0] / gain)
