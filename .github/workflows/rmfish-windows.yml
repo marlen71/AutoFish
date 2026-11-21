@@ -24,7 +24,7 @@ jobs:
           RMFISH_TEST_NATIVE_KEYS: '1'
         run: .\tests\Run-Tests.ps1
 
-      - name: Check hotkeys with the WinForms UI blocked
+      - name: Check custom window, controls, and blocked-UI hotkeys
         shell: powershell
         env:
           RMFISH_TEST_NATIVE_KEYS: '1'

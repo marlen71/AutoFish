@@ -22,15 +22,15 @@ namespace RMFish
         private readonly System.Windows.Forms.Timer refreshTimer = new System.Windows.Forms.Timer();
         private readonly System.Windows.Forms.Timer probeTimer = new System.Windows.Forms.Timer();
         private Label statusTitle, statusDetail, castValue, reelValue, timeValue, detectionLabel, probeLabel, hotkeyLabel;
-        private Label powerCaption, speedValue;
+        private Label powerCaption, speedValue, settingsFeedback;
         private PowerButton powerButton;
-        private SoftButton stopButton, sideStopButton;
+        private SoftButton stopButton, sideStopButton, copyLogButton;
         private StageStrip stages;
         private SpeedSlider speedSlider;
         private Image brandImage;
-        private NumericUpDown pollInput, clickInput, timeoutInput, sessionInput;
+        private DarkNumberInput pollInput, clickInput, timeoutInput, sessionInput;
         private CheckBox minimizeInput;
-        private TextBox logBox;
+        private DarkLogBox logBox;
         private bool hotF8, hotF9, hotF10;
         private string lastLogText = "";
         private const int HotF8 = 101, HotF9 = 102, HotF10 = 103;
@@ -55,10 +55,15 @@ namespace RMFish
 
             Text = "RMFish — авторыбалка для RMRP";
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(980, 630);
-            FormBorderStyle = FormBorderStyle.FixedSingle;
+            // A slim branded frame replaces the native Windows caption. Keep
+            // the existing 980×630 content area below a 36px title bar.
+            FormBorderStyle = FormBorderStyle.None;
+            ClientSize = new Size(982, 668);
             MaximizeBox = false;
-            BackColor = Theme.Background;
+            MinimizeBox = true;
+            ShowInTaskbar = true;
+            DoubleBuffered = true;
+            BackColor = Theme.Accent;
             ForeColor = Theme.Text;
             Font = new Font("Segoe UI", 9f);
             AutoScaleMode = AutoScaleMode.Font;
@@ -72,6 +77,7 @@ namespace RMFish
             }
             catch (Exception) { }
 
+            BuildWindowChrome();
             BuildSidebar();
             BuildDashboard();
             BuildSettings();
@@ -152,7 +158,7 @@ namespace RMFish
         {
             Panel page = new Panel();
             page.Name = "page" + index;
-            page.Location = new Point(190, 0);
+            page.Location = new Point(191, 37);
             page.Size = new Size(790, 630);
             page.BackColor = Theme.Background;
             Controls.Add(page);
@@ -179,11 +185,29 @@ namespace RMFish
             return null;
         }
 
+        private void BuildWindowChrome()
+        {
+            WindowHeader header = new WindowHeader(Icon);
+            header.Name = "windowHeader";
+            header.SetBounds(1, 1, 980, 36);
+            Controls.Add(header);
+            WindowButton minimize = new WindowButton(WindowAction.Minimize);
+            minimize.Name = "minimizeWindow";
+            minimize.SetBounds(898, 1, 40, 33);
+            minimize.Click += delegate { WindowState = FormWindowState.Minimized; };
+            header.Controls.Add(minimize);
+            WindowButton close = new WindowButton(WindowAction.Close);
+            close.Name = "closeWindow";
+            close.SetBounds(939, 1, 40, 33);
+            close.Click += delegate { Close(); };
+            header.Controls.Add(close);
+        }
+
         private void BuildSidebar()
         {
             Panel sidebar = new Panel();
             sidebar.Name = "sidebar";
-            sidebar.SetBounds(0, 0, 190, 630);
+            sidebar.SetBounds(1, 37, 190, 630);
             sidebar.BackColor = Theme.Sidebar;
             sidebar.Paint += delegate(object sender, PaintEventArgs e)
             {
@@ -235,7 +259,7 @@ namespace RMFish
             AddLabel(shortcut, "Esc  ·  держать 2 сек", 12, 57, 139, 20, 8f, Theme.Muted, FontStyle.Regular);
             AddLabel(shortcut, "ЛКМ + ПКМ  ·  2 сек", 12, 80, 139, 20, 8f, Theme.Muted, FontStyle.Regular);
             AddLabel(shortcut, "Проверьте F10 в игре", 12, 111, 139, 21, 7.8f, Theme.Text, FontStyle.Regular);
-            hotkeyLabel = AddLabel(sidebar, "F8  ·  старт / стоп\nF9  ·  проверка экрана\nВерсия 1.27 beta.4", 19, 560, 154, 55, 8f, Theme.Muted, FontStyle.Regular);
+            hotkeyLabel = AddLabel(sidebar, "F8  ·  старт / стоп\nF9  ·  проверка экрана\nВерсия 1.27 beta.5", 19, 560, 154, 55, 8f, Theme.Muted, FontStyle.Regular);
         }
 
         private void BuildDashboard()
@@ -322,15 +346,11 @@ namespace RMFish
             AddLabel(page, "Перед стартом проверьте F10 в игре и журнал в разделе «Диагностика».", 30, 593, 730, 19, 8.1f, Theme.Muted, FontStyle.Regular);
         }
 
-        private static NumericUpDown Number(Control parent, int x, int y, int min, int max, int step)
+        private static DarkNumberInput Number(Control parent, int x, int y, int min, int max, int step, string label)
         {
-            NumericUpDown number = new NumericUpDown();
+            DarkNumberInput number = new DarkNumberInput(min, max, step);
             number.SetBounds(x, y, 112, 30);
-            number.Minimum = min; number.Maximum = max; number.Increment = step;
-            number.BackColor = Theme.Raised; number.ForeColor = Theme.Text;
-            number.BorderStyle = BorderStyle.FixedSingle;
-            number.Font = new Font("Segoe UI", 10f);
-            number.TextAlign = HorizontalAlignment.Center;
+            number.SetAccessibleLabel(label);
             parent.Controls.Add(number);
             return number;
         }
@@ -344,35 +364,34 @@ namespace RMFish
             SoftCard settings = Card(page, 30, 109, 730, 340);
             AddLabel(settings, "Частота проверки экрана", 21, 12, 440, 25, 10f, Theme.Text, FontStyle.Bold);
             AddLabel(settings, "Интервал между снимками, мс (меньше — быстрее).", 21, 36, 520, 24, 8.7f, Theme.Muted, FontStyle.Regular);
-            pollInput = Number(settings, 585, 20, 20, 200, 5);
+            pollInput = Number(settings, 585, 20, 20, 200, 5, "Частота проверки экрана, миллисекунды");
             pollInput.Name = "pollInput";
             AddLabel(settings, "Интервал ЛКМ при вываживании", 21, 72, 470, 25, 10f, Theme.Text, FontStyle.Bold);
             AddLabel(settings, "Время между нажатиями, мс.", 21, 96, 510, 24, 8.7f, Theme.Muted, FontStyle.Regular);
-            clickInput = Number(settings, 585, 80, 35, 250, 5);
+            clickInput = Number(settings, 585, 80, 35, 250, 5, "Интервал ЛКМ при вываживании, миллисекунды");
             clickInput.Name = "clickInput";
             AddLabel(settings, "Максимальное ожидание шкалы", 21, 132, 470, 25, 10f, Theme.Text, FontStyle.Bold);
             AddLabel(settings, "В секундах; 0 — без отдельного лимита ожидания.", 21, 156, 520, 24, 8.7f, Theme.Muted, FontStyle.Regular);
-            timeoutInput = Number(settings, 585, 140, 0, 3600, 30);
+            timeoutInput = Number(settings, 585, 140, 0, 3600, 30, "Максимальное ожидание шкалы, секунды");
             timeoutInput.Name = "timeoutInput";
             AddLabel(settings, "Лимит всей сессии, сек", 21, 192, 470, 25, 10f, Theme.Text, FontStyle.Bold);
             AddLabel(settings, "Автостоп даже на паузе; по умолчанию 120 секунд.", 21, 216, 520, 24, 8.7f, Theme.Muted, FontStyle.Regular);
-            sessionInput = Number(settings, 585, 200, 1, 1800, 30);
+            sessionInput = Number(settings, 585, 200, 1, 1800, 30, "Лимит всей сессии, секунды");
             sessionInput.Name = "sessionInput";
-            minimizeInput = new CheckBox();
+            minimizeInput = new DarkToggle();
             minimizeInput.Name = "minimizeInput";
             minimizeInput.Text = "Сворачивать RMFish при запуске";
             minimizeInput.SetBounds(21, 261, 490, 28);
             minimizeInput.Font = new Font("Segoe UI", 9.7f, FontStyle.Bold);
             minimizeInput.ForeColor = Theme.Text;
-            minimizeInput.BackColor = Color.Transparent;
-            minimizeInput.FlatStyle = FlatStyle.Flat;
-            minimizeInput.FlatAppearance.BorderColor = Theme.Muted;
             settings.Controls.Add(minimizeInput);
-            AddLabel(settings, "Вернитесь в игру после нажатия «Включить».", 43, 292, 520, 22, 8.7f, Theme.Muted, FontStyle.Regular);
+            AddLabel(settings, "Вернитесь в игру после нажатия «Включить».", 69, 292, 520, 22, 8.7f, Theme.Muted, FontStyle.Regular);
 
             SoftButton save = Button(page, "Сохранить настройки", 30, 466, 220, 42, true);
+            save.Name = "saveSettings";
             save.Click += delegate { SaveSettings(true); };
-            AddLabel(page, "Новые параметры применяются при следующем запуске.", 266, 469, 490, 35, 8.8f, Theme.Muted, FontStyle.Regular);
+            settingsFeedback = AddLabel(page, "Новые параметры применяются при следующем запуске.", 266, 469, 490, 35, 8.8f, Theme.Muted, FontStyle.Regular);
+            settingsFeedback.Name = "settingsFeedback";
             SoftCard safety = Card(page, 30, 527, 730, 80);
             safety.Fill = Color.FromArgb(42, 39, 29);
             safety.Stroke = Color.FromArgb(98, 82, 54);
@@ -426,19 +445,22 @@ namespace RMFish
             SoftCard detected = Card(page, 30, 292, 730, 59);
             detectionLabel = AddLabel(detected, "Кадр ещё не проверен.", 18, 7, 690, 44, 8.9f, Theme.Text, FontStyle.Regular);
             AddLabel(page, "ЖУРНАЛ СОБЫТИЙ", 30, 366, 400, 20, 8f, Theme.Muted, FontStyle.Bold);
+            copyLogButton = Button(page, "Копировать", 632, 359, 128, 28, false);
+            copyLogButton.Name = "copyLog";
+            copyLogButton.Font = new Font("Segoe UI", 8.2f, FontStyle.Bold);
+            copyLogButton.Click += delegate
+            {
+                try
+                {
+                    if (!String.IsNullOrEmpty(lastLogText)) Clipboard.SetText(lastLogText);
+                    copyLogButton.Text = "Скопировано";
+                }
+                catch (Exception ex) { engine.Log("Не удалось скопировать журнал: " + ex.Message); }
+            };
             SoftCard logPanel = Card(page, 30, 391, 730, 216);
-            logBox = new TextBox();
+            logBox = new DarkLogBox();
             logBox.Name = "eventLog";
-            logBox.AccessibleName = "Журнал событий";
             logBox.SetBounds(18, 15, 694, 185);
-            logBox.Multiline = true;
-            logBox.ReadOnly = true;
-            logBox.ScrollBars = ScrollBars.Vertical;
-            logBox.BorderStyle = BorderStyle.None;
-            logBox.BackColor = Theme.Card;
-            logBox.ForeColor = Theme.Muted;
-            logBox.Font = new Font("Consolas", 9f);
-            logBox.TabStop = false;
             logPanel.Controls.Add(logBox);
         }
 
@@ -474,6 +496,9 @@ namespace RMFish
 
         private EngineOptions GetOptions()
         {
+            // F8 can start while an editable field still has focus.
+            pollInput.CommitEdit(); clickInput.CommitEdit();
+            timeoutInput.CommitEdit(); sessionInput.CommitEdit();
             return new EngineOptions
             {
                 PollMilliseconds = (int)pollInput.Value,
@@ -524,13 +549,21 @@ namespace RMFish
                     "\r\nwait_seconds=" + options.WaitTimeoutSeconds + "\r\nsession_seconds=" + options.SessionLimitSeconds +
                     "\r\nminimize=" + options.MinimizeOnStart + "\r\n";
                 File.WriteAllText(settingsPath, text, Encoding.UTF8);
-                if (inform) MessageBox.Show(this, "Настройки сохранены. Они применятся при следующем запуске.", "RMFish", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                if (inform)
+                {
+                    settingsFeedback.Text = "Сохранено. Изменения применятся при следующем запуске.";
+                    settingsFeedback.ForeColor = Theme.Accent;
+                }
                 return true;
             }
             catch (Exception ex)
             {
                 engine.Log("Не удалось сохранить настройки: " + ex.Message);
-                if (inform) MessageBox.Show(this, "Не удалось сохранить настройки: " + ex.Message, "RMFish", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                if (inform)
+                {
+                    settingsFeedback.Text = "Не удалось сохранить настройки. Подробности — в диагностике.";
+                    settingsFeedback.ForeColor = Theme.Warn;
+                }
                 return false;
             }
         }
@@ -617,9 +650,8 @@ namespace RMFish
             if (text != lastLogText)
             {
                 lastLogText = text;
-                logBox.Text = text;
-                logBox.SelectionStart = logBox.TextLength;
-                logBox.ScrollToCaret();
+                logBox.SetContent(text);
+                copyLogButton.Text = "Копировать";
             }
         }
 
@@ -713,7 +745,7 @@ namespace RMFish
             hotF9 = WindowsNative.RegisterHotKey(Handle, HotF9, NoRepeat, 0x78);
             hotF10 = WindowsNative.RegisterHotKey(Handle, HotF10, NoRepeat, 0x79);
             if (hotF8 && hotF9 && hotF10)
-                hotkeyLabel.Text = "F8  ·  старт / стоп\nF9  ·  проверка экрана\nВерсия 1.27 beta.4";
+                hotkeyLabel.Text = "F8  ·  старт / стоп\nF9  ·  проверка экрана\nВерсия 1.27 beta.5";
             else
             {
                 hotkeyLabel.Text = "Часть клавиш занята.\nПроверьте F10 в игре.";
@@ -728,6 +760,13 @@ namespace RMFish
             if (hotF9) WindowsNative.UnregisterHotKey(Handle, HotF9);
             if (hotF10) WindowsNative.UnregisterHotKey(Handle, HotF10);
             hotF8 = hotF9 = hotF10 = false;
+        }
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            // Borderless windows must retain the familiar keyboard close path.
+            if (keyData == (Keys.Alt | Keys.F4)) { Close(); return true; }
+            return base.ProcessCmdKey(ref msg, keyData);
         }
 
         protected override void WndProc(ref Message m)

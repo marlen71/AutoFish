@@ -18,6 +18,7 @@ try {
         (Join-Path $root 'src\Safety.cs'),
         (Join-Path $root 'src\WindowsGame.cs'),
         (Join-Path $root 'src\UiComponents.cs'),
+        (Join-Path $root 'src\ChromeControls.cs'),
         (Join-Path $root 'src\MainForm.cs'),
         (Join-Path $root 'tests\GuiSafetyRunner.cs')
     )
