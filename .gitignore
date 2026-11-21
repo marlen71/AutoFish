@@ -1,0 +1,5 @@
+# Local stop signal and temporary developer files
+STOP.txt
+.cache/
+dist/
+/release-artifacts/

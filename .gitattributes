@@ -1,0 +1,4 @@
+# Preserve Windows-compatible line endings for launchers and C# sources.
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+*.cs text eol=crlf
