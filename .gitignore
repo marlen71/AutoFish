@@ -3,3 +3,14 @@ STOP.txt
 .cache/
 dist/
 /release-artifacts/
+# RMacro server state, secrets, certificates and local client configuration
+/rmacro/server/data/
+/rmacro/server/*.db*
+/rmacro/server/*.pem
+/rmacro/server/*.key
+/rmacro/server/*.pfx
+/rmacro/server/*.p12
+
+# Python bytecode is generated locally
+__pycache__/
+*.py[cod]

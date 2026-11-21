@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>RMacro · Панель управления</title>
+  <link rel="stylesheet" href="/admin/style.css">
+  <script src="/admin/app.js" defer></script>
+</head>
+<body>
+  <div class="ambient ambient-one"></div><div class="ambient ambient-two"></div>
+  <main id="login-view" class="auth-shell">
+    <section class="auth-aside">
+      <div class="brand"><span>R</span>Macro<i>•</i></div>
+      <span class="eyebrow">ПАНЕЛЬ УПРАВЛЕНИЯ</span>
+      <div class="auth-art"><div class="orbit orbit-a"></div><div class="orbit orbit-b"></div><span>R</span></div>
+      <h1>Доступ под<br><em>вашим контролем.</em></h1>
+      <p>Пользователи, устройства и подписки — в одном защищённом пространстве.</p>
+      <div class="aside-note"><span class="status-dot"></span> Ваш личный сервер RMacro</div>
+    </section>
+    <section class="auth-form">
+      <div class="eyebrow">ДОБРО ПОЖАЛОВАТЬ</div>
+      <h2>Вход для администратора</h2>
+      <p>Используйте данные, созданные на сервере.</p>
+      <form id="login-form" autocomplete="on">
+        <label for="admin-login">Логин</label>
+        <input id="admin-login" name="username" autocomplete="username" required placeholder="Ваш логин">
+        <label for="admin-password">Пароль</label>
+        <input id="admin-password" name="password" type="password" autocomplete="current-password" required placeholder="Ваш пароль">
+        <button class="button primary" type="submit">Войти в панель <span>↗</span></button>
+      </form>
+      <div id="login-message" class="message" role="alert"></div>
+      <div class="security-note"><strong>◈ &nbsp; Безопасное подключение</strong><br>Для удалённого входа используйте только HTTPS.</div>
+    </section>
+  </main>
+
+  <div id="app-view" class="app-shell" hidden>
+    <aside class="sidebar">
+      <div class="brand"><span>R</span>Macro<i>•</i></div>
+      <div class="eyebrow menu-label">УПРАВЛЕНИЕ</div>
+      <a href="#users" class="nav-item active"><b>◉</b> Пользователи</a>
+      <a href="#products" class="nav-item"><b>◇</b> Продукты</a>
+      <a href="#audit" class="nav-item"><b>≡</b> Журнал действий</a>
+      <div class="sidebar-bottom">
+        <div class="server-state"><span class="status-dot"></span><span>Сервер работает<small>Данные хранятся у вас</small></span></div>
+        <button id="logout" class="button quiet" type="button">Выйти из панели</button>
+      </div>
+    </aside>
+    <section class="main-content">
+      <header class="topbar"><span>РАБОЧЕЕ ПРОСТРАНСТВО <b>/</b> ОБЗОР</span><div class="admin-badge"><span class="avatar">A</span><span id="admin-name">Администратор</span></div></header>
+      <div class="page-heading" id="users"><div><div class="eyebrow">RMacro CONTROL CENTER</div><h1>Пользователи <span>.</span></h1><p>Управляйте доступом к продуктам и привязкой устройств.</p></div><button id="refresh" class="button outline" type="button">↻ &nbsp; Обновить</button></div>
+      <div id="app-message" class="message" role="status"></div>
+      <div class="content-grid">
+        <section class="card user-card">
+          <div class="card-heading"><div><div class="eyebrow">БАЗА ПОЛЬЗОВАТЕЛЕЙ</div><h2>Аккаунты</h2></div><span id="user-count" class="count">0</span></div>
+          <label class="search"><span>⌕</span><input id="search" placeholder="Поиск по логину или UID" aria-label="Поиск по логину или UID"></label>
+          <div class="table-header"><span>ПОЛЬЗОВАТЕЛЬ</span><span>ДОСТУП RMFISH</span></div>
+          <div id="user-list" class="user-list"><p class="empty">Нет пользователей</p></div>
+          <div class="list-foot">Показаны до 500 совпадений. Нажмите на аккаунт для управления.</div>
+        </section>
+        <section class="card detail-card">
+          <div class="card-heading"><div><div class="eyebrow">УПРАВЛЕНИЕ ДОСТУПОМ</div><h2>Карточка пользователя</h2></div><span class="icon-box">↗</span></div>
+          <div id="detail-empty" class="detail-empty"><div class="empty-icon">◎</div><strong>Выберите пользователя</strong><p>Его UID, устройство и подписки появятся здесь.</p></div>
+          <div id="detail" hidden>
+            <div class="person"><div class="person-avatar">R</div><div><strong id="detail-name"></strong><small id="detail-uid"></small></div><span id="detail-state" class="pill"></span></div>
+            <div class="device-row"><span>Привязка устройства</span><strong id="detail-device"></strong></div>
+            <div class="section-label">ДОБАВИТЬ ВРЕМЯ</div>
+            <label for="grant-product">Продукт</label><select id="grant-product"></select>
+            <div class="inline-fields"><div><label for="grant-amount">Количество</label><input id="grant-amount" type="number" min="1" max="87600" value="30"></div><div><label for="grant-unit">Единица</label><select id="grant-unit"><option value="86400">Дней</option><option value="3600">Часов</option><option value="60">Минут</option></select></div></div>
+            <button id="grant" class="button primary full" type="button">＋ &nbsp; Добавить подписку</button>
+            <div id="current-subscriptions" class="subscriptions"></div>
+            <div class="divider"></div>
+            <div class="actions"><button id="reset-hwid" class="button outline" type="button">Сбросить HWID</button><button id="toggle-user" class="button outline" type="button">Заблокировать</button><button id="revoke" class="button danger" type="button">Отозвать выбранную подписку</button></div>
+            <form id="password-form" class="password-form"><label for="new-password">Сменить пароль пользователя</label><div class="password-line"><input id="new-password" type="password" minlength="8" maxlength="256" autocomplete="new-password" placeholder="Новый пароль" required><button class="button outline" type="submit">Сменить</button></div></form>
+          </div>
+        </section>
+        <section class="card create-card">
+          <div class="card-heading"><div><div class="eyebrow">НОВЫЙ АККАУНТ</div><h2>Добавить пользователя</h2></div><span class="icon-box">＋</span></div>
+          <p class="hint">UID присваивается автоматически. Пароль сообщите пользователю по защищённому каналу.</p>
+          <form id="create-user" class="create-form"><div><label for="new-user">Логин</label><input id="new-user" minlength="3" maxlength="32" placeholder="Например, user123" autocomplete="off" required></div><div><label for="user-password">Пароль</label><input id="user-password" type="password" minlength="8" maxlength="256" placeholder="Не менее 8 символов" autocomplete="new-password" required></div><button type="submit" class="button primary">Создать аккаунт &nbsp; ↗</button></form>
+        </section>
+        <section id="products" class="card create-card">
+          <div class="card-heading"><div><div class="eyebrow">КАТАЛОГ</div><h2>Продукты</h2></div><span class="icon-box">◇</span></div>
+          <div id="product-list" class="product-list"></div>
+          <p class="hint">Новый продукт можно выдать уже сейчас, но запуск появится только в поддерживающей его сборке лоадера.</p>
+          <form id="create-product" class="create-form"><div><label for="product-code">Код (латиница)</label><input id="product-code" maxlength="48" placeholder="product-name" required></div><div><label for="product-name">Название</label><input id="product-name" maxlength="80" placeholder="Название продукта" required></div><button type="submit" class="button outline">Добавить продукт</button></form>
+        </section>
+        <section id="audit" class="card audit-card"><div class="card-heading"><div><div class="eyebrow">ПОСЛЕДНИЕ СОБЫТИЯ</div><h2>Журнал действий</h2></div><span class="icon-box">≡</span></div><div id="audit-list" class="audit-list"></div></section>
+      </div>
+      <footer>RMacro <span>·</span> Ваши данные остаются на вашем сервере</footer>
+    </section>
+  </div>
+</body>
+</html>

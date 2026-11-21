@@ -11,6 +11,7 @@ namespace RMFish
     {
         private readonly string baseDirectory, stopFile, settingsPath;
         private readonly FishingEngine engine;
+        private readonly Func<bool> accessAllowed;
         private readonly SafetyKeyMonitor safetyKeys;
         private readonly BackgroundProbe probeWorker;
         private readonly Stopwatch hotkeyClock = Stopwatch.StartNew();
@@ -35,11 +36,16 @@ namespace RMFish
         private string lastLogText = "";
         private const int HotF8 = 101, HotF9 = 102, HotF10 = 103;
 
-        public MainForm(string directory) : this(directory, null) { }
+        public MainForm(string directory) : this(directory, null, null) { }
 
         // The second path lets GUI tests isolate settings from a real profile.
-        internal MainForm(string directory, string settingsRoot)
+        internal MainForm(string directory, string settingsRoot) : this(directory, settingsRoot, null) { }
+
+        // The loader can supply an independent, fail-closed subscription gate.
+        // A standalone RMFish build passes no gate and retains its prior behavior.
+        internal MainForm(string directory, string settingsRoot, Func<bool> authorization)
         {
+            accessAllowed = authorization;
             baseDirectory = directory;
             stopFile = Path.Combine(directory, "STOP.txt");
             string local = settingsRoot;
@@ -568,12 +574,49 @@ namespace RMFish
             }
         }
 
+        private bool AccessAllowed()
+        {
+            try { return accessAllowed == null || accessAllowed(); }
+            catch { return false; }
+        }
+
+        // A loader must keep the single-instance mutex until a blocked worker
+        // has really exited, even if its window has already closed.
+        internal bool FinishWorkerShutdown()
+        {
+            if (!engine.WaitForStop(0)) return false;
+            engine.Dispose();
+            return true;
+        }
+
+        // Safe to call from the loader's independent lease-monitor thread,
+        // including while the UI is busy. This is a stop request; native calls
+        // cannot be forcibly interrupted, exactly like the emergency hotkeys.
+        internal void RevokeAuthorization(string reason)
+        {
+            engine.RequestStop(reason);
+            engine.Log(reason);
+            try
+            {
+                if (IsHandleCreated && !IsDisposed && !Disposing)
+                    BeginInvoke((MethodInvoker)delegate { if (!IsDisposed) RefreshView(); });
+            }
+            catch (InvalidOperationException) { }
+        }
+
         private void StartFishing()
         {
             if (closing || engine.Snapshot().Running) return;
-            // Record intent before any settings/file IO; a stop arriving while
-            // Start is being prepared must cancel this attempt even if released.
+            // Record intent before checking the lease: a concurrent revocation
+            // increments StopVersion and must win over this start attempt.
             long stopVersion = engine.StopVersion;
+            if (!AccessAllowed())
+            {
+                engine.Log("Доступ не подтверждён. Откройте продукт снова через RMacro.");
+                RefreshView();
+                return;
+            }
+            // A stop arriving during settings/file IO cancels this attempt.
             if (safetyFailed)
             {
                 MessageBox.Show(this, "Аварийный монитор недоступен. Перезапустите RMFish и проверьте F10 до начала работы.",
@@ -603,7 +646,9 @@ namespace RMFish
                 if (engine.Start(options, stopVersion))
                 {
                     // A fault or held emergency key must win over Start.
-                    if (safetyFailed || safetyKeys.StopHeld || engine.StopVersion != stopVersion ||
+                    if (!AccessAllowed())
+                        engine.RequestStop("Запуск отменён: доступ к продукту больше не подтверждён.");
+                    else if (safetyFailed || safetyKeys.StopHeld || engine.StopVersion != stopVersion ||
                         (WindowsNative.GetAsyncKeyState(SafetyKeyMonitor.F10) & 0x8000) != 0)
                         engine.RequestStop("Запуск отменён: аварийная остановка или ошибка контроля клавиш.");
                     else if (options.MinimizeOnStart) WindowState = FormWindowState.Minimized;
@@ -629,10 +674,17 @@ namespace RMFish
                 "Запуск заблокирован. Перезапустите RMFish и проверьте F10 до начала работы." : state.Detail;
             statusTitle.ForeColor = safetyFailed || state.Stopping || state.Phase == FishingPhase.Paused ? Theme.Warn :
                 state.Running ? Theme.Accent : Theme.Muted;
-            powerButton.Enabled = state.Running ? !state.Stopping : !safetyFailed;
+            bool authorized = AccessAllowed();
+            if (!authorized && !state.Running)
+            {
+                statusTitle.Text = "Доступ не подтверждён";
+                statusDetail.Text = "Откройте продукт снова через RMacro после проверки подписки.";
+                statusTitle.ForeColor = Theme.Warn;
+            }
+            powerButton.Enabled = state.Running ? !state.Stopping : !safetyFailed && authorized;
             powerButton.Working = state.Running && !state.Stopping;
             powerCaption.Text = state.Stopping ? "ОСТАНОВКА…" : state.Running ? "ОСТАНОВИТЬ" :
-                safetyFailed ? "ЗАПУСК ЗАБЛОКИРОВАН" : "ВКЛЮЧИТЬ";
+                !authorized || safetyFailed ? "ЗАПУСК ЗАБЛОКИРОВАН" : "ВКЛЮЧИТЬ";
             powerButton.AccessibleName = state.Running ? "Остановить рыбалку" : "Запустить рыбалку";
             powerButton.AccessibleDescription = statusDetail.Text;
             stopButton.Enabled = state.Running && !state.Stopping;

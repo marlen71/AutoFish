@@ -1,0 +1,209 @@
+"""HTTP and SQLite integration tests; no external packages or real credentials."""
+import importlib.util
+import json
+from pathlib import Path
+import sqlite3
+import tempfile
+import threading
+import unittest
+import urllib.error
+import urllib.request
+
+SERVER_PATH = Path(__file__).resolve().parents[1] / "server" / "server.py"
+spec = importlib.util.spec_from_file_location("rmacro_server", SERVER_PATH)
+srv = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(srv)
+
+
+class ServerTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.db = srv.Database(Path(self.temp.name) / "private" / "test.db")
+        self.assertFalse(self.db.has_admin())
+        self.db.init_admin("owner", "administrator password")
+        self.httpd = srv.Server(("127.0.0.1", 0), self.db)
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.thread.start()
+        self.base = "http://127.0.0.1:%s" % self.httpd.server_address[1]
+        status, result, _ = self.request("/api/admin/login", {"username": "owner", "password": "administrator password"})
+        self.assertEqual(status, 200)
+        self.admin = result["token"]
+        self.device_a, self.device_b = "a" * 64, "b" * 64
+
+    def tearDown(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+        self.thread.join(3)
+        self.temp.cleanup()
+
+    def request(self, path, body=None, token=None, device=None, extra_headers=None):
+        headers = dict(extra_headers or {})
+        data = None
+        if body is not None:
+            data = json.dumps(body).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+        if token:
+            headers["Authorization"] = "Bearer " + token
+        if device:
+            headers["X-RMacro-Device"] = device
+        req = urllib.request.Request(self.base + path, data=data, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=5) as response:
+                return response.status, json.loads(response.read()), response.headers
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read()), exc.headers
+
+    def create(self, name="fisher", password="password-for-test"):
+        status, data, _ = self.request("/api/admin/users", {"username": name, "password": password}, self.admin)
+        self.assertEqual(status, 201, data)
+        return data["uid"]
+
+    def login(self, name="fisher", password="password-for-test", device=None):
+        return self.request("/api/login", {"username": name, "password": password, "device": device or self.device_a})
+
+    def admin_action(self, uid, action, body=None):
+        return self.request("/api/admin/users/%s/%s" % (uid, action), body or {}, self.admin)
+
+    def test_subscription_hwid_reset_revoke_and_persistence(self):
+        uid = self.create()
+        self.assertEqual(self.create("fisher2"), uid + 1)
+        status, login, _ = self.login()
+        self.assertEqual(status, 200)
+        token = login["token"]
+        self.assertEqual(login["user"]["uid"], uid)
+        self.assertFalse(login["products"][0]["active"])
+        self.assertEqual(self.request("/api/authorize", {"product": "rmfish"}, token, self.device_a)[0], 403)
+        status, first, _ = self.admin_action(uid, "grant", {"product": "rmfish", "seconds": 7200})
+        self.assertEqual(status, 200)
+        status, second, _ = self.admin_action(uid, "grant", {"product": "rmfish", "seconds": 86400})
+        self.assertEqual(second["expires_at"] - first["expires_at"], 86400)
+        status, allowed, _ = self.request("/api/authorize", {"product": "rmfish"}, token, self.device_a)
+        self.assertEqual(status, 200)
+        self.assertEqual(allowed["expires_at"], second["expires_at"])
+        self.assertEqual(self.login(device=self.device_b)[1]["code"], "DEVICE_MISMATCH")
+        self.assertEqual(self.request("/api/me", token=token, device=self.device_b)[0], 401)
+        self.assertEqual(self.admin_action(uid, "reset-hwid")[0], 200)
+        self.assertEqual(self.request("/api/me", token=token, device=self.device_a)[0], 401)
+        status, login_b, _ = self.login(device=self.device_b)
+        self.assertEqual(status, 200)
+        self.assertEqual(self.login(device=self.device_a)[1]["code"], "DEVICE_MISMATCH")
+        self.assertEqual(self.admin_action(uid, "revoke", {"product": "rmfish"})[0], 200)
+        self.assertEqual(self.request("/api/authorize", {"product": "rmfish"}, login_b["token"], self.device_b)[0], 403)
+        users = self.request("/api/admin/users?q=fisher", token=self.admin)[1]["users"]
+        self.assertEqual(len(users), 2)
+        self.assertEqual(self.request("/api/admin/users?q=00000001", token=self.admin)[1]["users"][0]["uid"], uid)
+        self.assertTrue(any(u["uid"] == uid and u["hwid_bound"] for u in users))
+        reopened = srv.Database(self.db.path)
+        self.assertEqual(len(reopened.admin_users()["users"]), 2)
+        self.assertEqual(reopened.user_info(uid)["user"]["username"], "fisher")
+        backup = self.db.backup(Path(self.temp.name) / "backup.db")
+        self.assertEqual(len(srv.Database(backup).admin_users()["users"]), 2)
+        with self.assertRaises(ValueError):
+            self.db.backup(backup)
+
+    def test_admin_products_password_and_disable(self):
+        uid = self.create()
+        status, created, _ = self.request("/api/admin/products", {"code": "another", "name": "Другой продукт"}, self.admin)
+        self.assertEqual(status, 201)
+        self.assertEqual(created["code"], "another")
+        self.assertEqual(self.admin_action(uid, "grant", {"product": "another", "seconds": 1800})[0], 200)
+        status, user, _ = self.login()
+        token = user["token"]
+        self.assertEqual(len(user["products"]), 2)
+        self.assertEqual(self.request("/api/admin/users", token=token)[0], 401)
+        self.assertEqual(self.request("/api/me", token=self.admin, device=self.device_a)[0], 401)
+        self.assertEqual(self.admin_action(uid, "password", {"password": "new-password"})[0], 200)
+        self.assertEqual(self.request("/api/me", token=token, device=self.device_a)[0], 401)
+        self.assertEqual(self.login()[0], 401)
+        status, login, _ = self.login(password="new-password")
+        self.assertEqual(status, 200)
+        self.assertEqual(self.admin_action(uid, "status", {"enabled": False})[0], 200)
+        self.assertEqual(self.request("/api/me", token=login["token"], device=self.device_a)[0], 401)
+        self.assertEqual(self.login(password="new-password")[0], 401)
+        self.assertEqual(self.admin_action(uid, "status", {"enabled": True})[0], 200)
+        self.assertEqual(self.login(password="new-password")[0], 200)
+        events = self.request("/api/admin/audit", token=self.admin)[1]["events"]
+        self.assertTrue(any(e["action"] == "password" for e in events))
+        self.assertNotIn("new-password", json.dumps(events))
+
+    def test_concurrent_first_login_binds_only_one_device(self):
+        self.create()
+        barrier = threading.Barrier(2)
+        results = []
+        def worker(device):
+            barrier.wait()
+            results.append(self.login(device=device)[0])
+        threads = [threading.Thread(target=worker, args=(d,)) for d in (self.device_a, self.device_b)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(10)
+        self.assertEqual(sorted(results), [200, 403])
+
+    def test_concurrent_grants_do_not_lose_time(self):
+        uid = self.create()
+        barrier = threading.Barrier(6)
+        results = []
+        def worker():
+            barrier.wait()
+            results.append(self.admin_action(uid, "grant", {"product": "rmfish", "seconds": 3600}))
+        threads = [threading.Thread(target=worker) for _ in range(6)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(10)
+        self.assertEqual(len(results), 6)
+        self.assertTrue(all(result[0] == 200 for result in results))
+        expiries = sorted(result[1]["expires_at"] for result in results)
+        self.assertEqual([expiries[i + 1] - expiries[i] for i in range(5)], [3600] * 5)
+        self.assertEqual(self.db.user_info(uid)["products"][0]["expires_at"], expiries[-1])
+
+    def test_validation_and_no_sensitive_storage(self):
+        uid = self.create()
+        status, login, _ = self.login()
+        token = login["token"]
+        self.assertEqual(status, 200)
+        self.assertEqual(self.create("different"), uid + 1)
+        self.assertEqual(self.request("/api/admin/users", {"username": "FISHER", "password": "12345678"}, self.admin)[0], 409)
+        self.assertEqual(self.admin_action(uid, "grant", {"product": "rmfish", "seconds": -1})[0], 400)
+        self.assertEqual(self.admin_action(uid, "grant", {"product": "missing", "seconds": 60})[0], 404)
+        self.assertEqual(self.admin_action(uid, "status", {"enabled": 1})[0], 400)
+        self.assertEqual(self.request("/api/me", token=token, device="invalid")[0], 401)
+        self.assertEqual(self.request("/api/health", extra_headers={"Host": "attacker.example"})[0], 400)
+        self.assertNotIn("Access-Control-Allow-Origin", self.request("/api/health")[2])
+        with self.db.connect() as db:
+            row = db.execute("SELECT password_hash,salt,rounds FROM users WHERE uid=?", (uid,)).fetchone()
+            self.assertNotEqual(bytes(row["password_hash"]), b"password-for-test")
+            self.assertGreaterEqual(row["rounds"], 300000)
+            session = db.execute("SELECT token_hash FROM sessions WHERE uid=?", (uid,)).fetchone()
+            self.assertEqual(session["token_hash"], srv.token_hash(token))
+            self.assertNotEqual(session["token_hash"], token)
+        self.assertTrue(srv.loopback_bind("127.0.0.1"))
+        self.assertFalse(srv.loopback_bind("0.0.0.0"))
+        self.assertFalse(srv.loopback_bind("192.168.1.5"))
+
+    def test_expired_tokens_and_subscriptions(self):
+        uid = self.create()
+        self.admin_action(uid, "grant", {"product": "rmfish", "seconds": 60})
+        status, user, _ = self.login()
+        token = user["token"]
+        self.assertEqual(status, 200)
+        with self.db.connect() as db:
+            db.execute("UPDATE subscriptions SET expires_at=? WHERE uid=?", (srv.unix_now() - 1, uid))
+        self.assertEqual(self.request("/api/authorize", {"product": "rmfish"}, token, self.device_a)[0], 403)
+        self.assertFalse(self.request("/api/me", token=token, device=self.device_a)[1]["products"][0]["active"])
+        with self.db.connect() as db:
+            db.execute("UPDATE sessions SET expires_at=? WHERE uid=?", (srv.unix_now() - 1, uid))
+        self.assertEqual(self.request("/api/me", token=token, device=self.device_a)[0], 401)
+
+    def test_rate_limit_and_admin_reset(self):
+        for _ in range(8):
+            self.assertEqual(self.login("missing", "some-password")[0], 401)
+        self.assertEqual(self.login("missing", "some-password")[0], 429)
+        self.db.reset_admin("owner", "new administrator password")
+        self.assertEqual(self.request("/api/admin/users", token=self.admin)[0], 401)
+        self.assertEqual(self.request("/api/admin/login", {"username": "owner", "password": "new administrator password"})[0], 200)
+
+
+if __name__ == "__main__":
+    unittest.main()
