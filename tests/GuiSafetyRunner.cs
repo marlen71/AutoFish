@@ -29,7 +29,7 @@ public static class GuiSafetyRunner
         return false;
     }
 
-    public static int Main(string directory)
+    public static int Run(string directory)
     {
         ManualResetEvent shown = new ManualResetEvent(false);
         ManualResetEvent uiBlocked = new ManualResetEvent(false);

@@ -24,7 +24,7 @@ try {
         [System.Windows.Forms.Form].Assembly.Location
     ) | Select-Object -Unique
     Add-Type -LiteralPath $sources -ReferencedAssemblies $references
-    $exitCode = [GuiSafetyRunner]::Main($directory)
+    $exitCode = [GuiSafetyRunner]::Run($directory)
     if ($exitCode -ne 0) { throw "GUI safety test failed with exit code $exitCode." }
 }
 catch {
