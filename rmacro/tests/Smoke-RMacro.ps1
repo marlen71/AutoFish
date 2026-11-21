@@ -53,11 +53,14 @@ try {
     $guiOut = Join-Path $directory 'gui-out.txt'
     $guiErr = Join-Path $directory 'gui-err.txt'
     $guiProcess = Start-Process -FilePath $testExe -RedirectStandardOutput $guiOut -RedirectStandardError $guiErr -PassThru
+    # Keep a handle so Windows PowerShell can reliably report ExitCode.
+    $null = $guiProcess.Handle
     if (-not $guiProcess.WaitForExit(60000)) {
         Stop-Process -Id $guiProcess.Id -Force -ErrorAction SilentlyContinue
         $detail = ((Get-Content $guiOut -Raw -ErrorAction SilentlyContinue) + "`n" + (Get-Content $guiErr -Raw -ErrorAction SilentlyContinue) + "`nServer:" + (Get-Content $stderr -Raw -ErrorAction SilentlyContinue))
         throw "GUI test timed out. $detail"
     }
+    $guiProcess.Refresh()
     $guiOutput = (Get-Content $guiOut -Raw -ErrorAction SilentlyContinue)
     $guiError = (Get-Content $guiErr -Raw -ErrorAction SilentlyContinue)
     Write-Host $guiOutput

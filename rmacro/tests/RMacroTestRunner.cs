@@ -140,6 +140,8 @@ internal static class RMacroTestRunner
             WaitUntil(delegate { return Find<Control>(first, "dashboardPage").Visible; }, 12000,
                 "login: " + Find<Label>(first, "loginMessage").Text);
             Check(Find<TextBox>(first, "passwordEditor").Text.Length == 0, "password remains in input");
+            WaitUntil(delegate { return Find<Label>(first, "warningText").Text.Contains("RMFish"); }, 5000,
+                "expiry warning; banner=" + Find<Label>(first, "warningText").Text + "; login=" + Find<Label>(first, "loginMessage").Text);
             Check(Find<Label>(first, "warningText").Text.Contains("RMFish"), "soon-expiring subscription warning");
             Check(Find<Label>(first, "uidValue").Text.Length >= 8, "UID shown");
             Check(new SessionStore(local).Load() != null, "remembered login saved");

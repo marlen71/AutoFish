@@ -485,7 +485,7 @@ namespace RMacro
             profileList.SetContent(list.Length == 0 ? "Нет продуктов." : list.ToString());
             if (!String.IsNullOrEmpty(persistentNotice))
             {
-                warningText.Text = "!   " + persistentNotice;
+                warningText.Text = "!   " + persistentNotice + (soonCount > 0 ? " · Скоро закончится: " + warning : "");
                 warningText.ForeColor = Theme.Warn; warningCard.Stroke = Color.FromArgb(110, 88, 53);
             }
             else if (soonCount > 0)
