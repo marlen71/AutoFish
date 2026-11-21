@@ -6,6 +6,9 @@ $root = Split-Path -Parent $PSScriptRoot
 $directory = Join-Path ([IO.Path]::GetTempPath()) ('rmfish-gui-test-' + [Guid]::NewGuid().ToString('N'))
 try {
     New-Item -ItemType Directory -Path $directory | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $directory 'assets') | Out-Null
+    Copy-Item (Join-Path $root 'assets\rmfish-logo.png') (Join-Path $directory 'assets\rmfish-logo.png')
+    Copy-Item (Join-Path $root 'assets\rmfish.ico') (Join-Path $directory 'assets\rmfish.ico')
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
     $sources = @(
@@ -14,6 +17,7 @@ try {
         (Join-Path $root 'src\Engine.cs'),
         (Join-Path $root 'src\Safety.cs'),
         (Join-Path $root 'src\WindowsGame.cs'),
+        (Join-Path $root 'src\UiComponents.cs'),
         (Join-Path $root 'src\MainForm.cs'),
         (Join-Path $root 'tests\GuiSafetyRunner.cs')
     )

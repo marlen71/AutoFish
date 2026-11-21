@@ -28,11 +28,25 @@ jobs:
         shell: powershell
         env:
           RMFISH_TEST_NATIVE_KEYS: '1'
+          RMFISH_UI_SCREENSHOT_DIR: ${{ runner.temp }}/rmfish-ui-screenshots
         run: .\tests\Smoke-GuiSafety.ps1
+
+      - name: Keep menu screenshots for review
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rmfish-menu-screenshots
+          path: ${{ runner.temp }}/rmfish-ui-screenshots/*.png
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Build EXE with .NET Framework
         shell: powershell
         run: .\Build-RMFish.ps1
+
+      - name: Check standalone logo and icon
+        shell: powershell
+        run: .\tests\Smoke-Assets.ps1
 
       - name: Check that the EXE opens its main window
         shell: powershell

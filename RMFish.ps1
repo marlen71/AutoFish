@@ -25,6 +25,7 @@ try {
         (Join-Path $PSScriptRoot 'src\Engine.cs'),
         (Join-Path $PSScriptRoot 'src\Safety.cs'),
         (Join-Path $PSScriptRoot 'src\WindowsGame.cs'),
+        (Join-Path $PSScriptRoot 'src\UiComponents.cs'),
         (Join-Path $PSScriptRoot 'src\MainForm.cs')
     )
     $references = @(

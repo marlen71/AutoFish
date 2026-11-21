@@ -56,7 +56,7 @@ namespace RMFish
             current = new EngineSnapshot
             {
                 Running = false, Phase = FishingPhase.Stopped, Title = "Готов к запуску",
-                Detail = "Выберите удочку и наживку в игре, затем нажмите «Старт».",
+                Detail = "Выберите удочку и наживку в игре, затем нажмите «Включить».",
                 Detection = "Кадр ещё не проверен."
             };
             Log("RMFish готов к работе.");
@@ -239,7 +239,7 @@ namespace RMFish
                     }
                     if (port.StopFileExists())
                     {
-                        finalReason = "Обнаружен STOP.txt. Для нового запуска нажмите «Старт».";
+                        finalReason = "Обнаружен STOP.txt. Для нового запуска нажмите «Включить».";
                         break;
                     }
                     GameBounds bounds;
@@ -278,7 +278,7 @@ namespace RMFish
                         }
                         if (port.StopFileExists())
                         {
-                            finalReason = "Обнаружен STOP.txt. Для нового запуска нажмите «Старт».";
+                            finalReason = "Обнаружен STOP.txt. Для нового запуска нажмите «Включить».";
                             break;
                         }
                         if (!port.IsForeground(bounds))
@@ -299,7 +299,7 @@ namespace RMFish
                             if (stop.WaitOne(0)) break;
                             if (port.StopFileExists())
                             {
-                                finalReason = "Обнаружен STOP.txt. Для нового запуска нажмите «Старт».";
+                                finalReason = "Обнаружен STOP.txt. Для нового запуска нажмите «Включить».";
                                 break;
                             }
                             if (!port.IsForeground(bounds))

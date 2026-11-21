@@ -22,6 +22,7 @@ $sources = @(
     (Join-Path $PSScriptRoot 'src\Engine.cs'),
     (Join-Path $PSScriptRoot 'src\Safety.cs'),
     (Join-Path $PSScriptRoot 'src\WindowsGame.cs'),
+    (Join-Path $PSScriptRoot 'src\UiComponents.cs'),
     (Join-Path $PSScriptRoot 'src\MainForm.cs'),
     (Join-Path $PSScriptRoot 'src\Program.cs')
 )
@@ -35,6 +36,7 @@ $arguments = @(
     '/nologo', '/noconfig', '/target:winexe', '/platform:anycpu', '/optimize+', '/utf8output',
     "/win32icon:$(Join-Path $PSScriptRoot 'assets\rmfish.ico')",
     "/win32manifest:$(Join-Path $PSScriptRoot 'assets\app.manifest')",
+    "/resource:$(Join-Path $PSScriptRoot 'assets\rmfish-logo.png'),RMFish.BrandLogo.png",
     "/out:$output"
 )
 foreach ($reference in $references) { $arguments += "/reference:$reference" }
