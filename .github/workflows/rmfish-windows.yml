@@ -103,6 +103,16 @@ jobs:
           $zipHash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
           $checksums = "$exeHash  RMFish.exe`r`n$zipHash  $zipName`r`n"
           [IO.File]::WriteAllText((Join-Path $assets 'SHA256SUMS.txt'), $checksums, [Text.Encoding]::ASCII)
+          $verify = Join-Path $env:RUNNER_TEMP 'rmfish-verify'
+          Expand-Archive -Path $zip -DestinationPath $verify
+          $expected = @('RMFish.exe', 'RMFish.bat', 'STOP.bat', 'EMERGENCY-STOP.bat', 'INSTRUCTIONS.txt')
+          foreach ($name in $expected) {
+            if (-not (Test-Path -LiteralPath (Join-Path $verify $name) -PathType Leaf)) { throw "Package is missing $name." }
+          }
+          if (@(Get-ChildItem $verify -File).Count -ne $expected.Count) { throw 'Unexpected files in package.' }
+          $unpackedHash = (Get-FileHash (Join-Path $verify 'RMFish.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($unpackedHash -ne $exeHash) { throw 'Packaged EXE does not match the standalone EXE.' }
+          Write-Output "::notice title=Verified Windows package::Five required files; standalone and packaged EXE SHA-256 match. EXE $exeHash; ZIP $zipHash"
           Write-Host $checksums
 
       # Only update a matching *draft* prerelease for this branch. Publishing is
