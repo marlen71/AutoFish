@@ -53,6 +53,35 @@ jobs:
             }
           }
 
+      - name: Check the PowerShell source launcher
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $script = Join-Path $PWD 'RMFish.ps1'
+          $arguments = '-NoLogo -NoProfile -ExecutionPolicy Bypass -STA -File "' + $script + '"'
+          $process = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList $arguments -WindowStyle Hidden -PassThru
+          try {
+            $opened = $false
+            for ($i = 0; $i -lt 60; $i++) {
+              Start-Sleep -Milliseconds 500
+              $process.Refresh()
+              if ($process.HasExited) { throw "Source launcher exited early: $($process.ExitCode)" }
+              if ($process.MainWindowHandle -ne 0 -and $process.MainWindowTitle -like 'RMFish*RMRP') {
+                $opened = $true
+                break
+              }
+            }
+            if (-not $opened) { throw "Source launcher main window was not found; title: $($process.MainWindowTitle)" }
+            Write-Host 'PASS: PowerShell source launcher opened its main window on Windows.'
+          }
+          finally {
+            $process.Refresh()
+            if (-not $process.HasExited) {
+              $null = $process.CloseMainWindow()
+              if (-not $process.WaitForExit(5000)) { Stop-Process -Id $process.Id -Force }
+            }
+          }
+
       - name: Package Windows files
         shell: powershell
         run: |
@@ -61,6 +90,7 @@ jobs:
           if ($version -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') {
             throw "Unexpected product version: $version"
           }
+          Write-Output "::notice title=RMFish version::Product version $version"
           $stage = Join-Path $env:RUNNER_TEMP 'rmfish-package'
           $assets = Join-Path $env:RUNNER_TEMP 'rmfish-assets'
           New-Item -ItemType Directory -Path $stage, $assets -Force | Out-Null
@@ -91,11 +121,19 @@ jobs:
           $tag = "v$version"
           $json = & gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100"
           if ($LASTEXITCODE -ne 0) { throw 'Could not list releases.' }
-          $release = $json | ConvertFrom-Json | Where-Object { $_.tag_name -eq $tag } | Select-Object -First 1
-          if (-not $release -or -not $release.draft -or -not $release.prerelease -or $release.target_commitish -ne $env:GITHUB_REF_NAME) {
-            Write-Host "No matching draft prerelease for $tag on this branch; skipping upload."
+          # Assign the JSON array before filtering: Windows PowerShell's
+          # ConvertFrom-Json can pass the entire array as one pipeline object.
+          $releases = $json | ConvertFrom-Json
+          $release = $releases | Where-Object { $_.tag_name -eq $tag } | Select-Object -First 1
+          if (-not $release) {
+            Write-Output "::notice title=Release upload::No release found for $tag; skipping upload."
             exit 0
           }
+          if (-not $release.draft -or -not $release.prerelease -or $release.target_commitish -ne $env:GITHUB_REF_NAME) {
+            Write-Output "::notice title=Release upload::Not a matching draft prerelease: $tag, target $($release.target_commitish); skipping upload."
+            exit 0
+          }
+          Write-Output "::notice title=Release upload::Uploading $tag from $env:GITHUB_REF_NAME."
           $remote = & git ls-remote origin "refs/heads/$env:GITHUB_REF_NAME"
           if ($LASTEXITCODE -ne 0 -or -not $remote) { throw 'Could not verify the remote branch.' }
           if (($remote -split '\s+')[0] -ne $env:GITHUB_SHA) { throw 'Branch moved; refusing to upload a stale build.' }
