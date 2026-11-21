@@ -176,15 +176,22 @@ internal static class RMacroTestRunner
             Trace("revoke worker from server");
             string admin = AdminToken(api); long uid = Field<Profile>(restored, "profile").Uid;
             Reset(api, admin, uid);
+            Trace("reset returned");
             MethodInfo renew = typeof(ProductLease).GetMethod("Renew", BindingFlags.Instance | BindingFlags.NonPublic);
             Check(renew != null, "lease renew method");
             Thread renewal = new Thread(delegate() { renew.Invoke(lease, null); }); renewal.IsBackground = true; renewal.Start();
+            Trace("renewal started; UI blocked");
             // Do not pump the UI: the lease callback must stop the worker independently.
             Check(renewal.Join(7000), "lease renewal while UI blocked");
+            Trace("renewal returned");
             Check(!lease.IsValid, "reset revokes lease while UI is blocked");
             Check(engine.WaitForStop(5000), "revocation requested an independent worker stop");
+            Trace("worker stopped");
             MethodInfo startFishing = typeof(MainForm).GetMethod("StartFishing", BindingFlags.Instance | BindingFlags.NonPublic);
-            startFishing.Invoke(product, null); Application.DoEvents();
+            startFishing.Invoke(product, null);
+            Trace("revoked F8 path returned");
+            Application.DoEvents();
+            Trace("UI messages processed after revoke");
             Check(!engine.Snapshot().Running, "revoked F8/start path cannot restart");
             Trace("logout and close");
             product.Close(); Application.DoEvents();
