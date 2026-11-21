@@ -57,6 +57,10 @@ jobs:
         shell: powershell
         run: .\tests\Smoke-Source.ps1
 
+      - name: Check the BAT source launcher
+        shell: powershell
+        run: .\tests\Smoke-Source.ps1 -ViaBat
+
       - name: Package Windows files
         shell: powershell
         run: |

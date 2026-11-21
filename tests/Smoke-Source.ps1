@@ -1,4 +1,6 @@
-﻿$ErrorActionPreference = 'Stop'
+﻿param([switch]$ViaBat)
+
+$ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 
 Add-Type -TypeDefinition @'
@@ -11,6 +13,7 @@ public sealed class SmokeWindow {
     public IntPtr Handle;
     public string Title;
     public bool Visible;
+    public bool Minimized;
 }
 public static class SmokeWindows {
     private delegate bool Callback(IntPtr h, IntPtr state);
@@ -18,6 +21,7 @@ public static class SmokeWindows {
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr h, StringBuilder text, int length);
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr h);
     [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
 
     public static SmokeWindow[] ForProcess(int processId) {
@@ -28,7 +32,7 @@ public static class SmokeWindows {
             if (pid == processId) {
                 StringBuilder title = new StringBuilder(2048);
                 GetWindowText(h, title, title.Capacity);
-                found.Add(new SmokeWindow { Handle = h, Title = title.ToString(), Visible = IsWindowVisible(h) });
+                found.Add(new SmokeWindow { Handle = h, Title = title.ToString(), Visible = IsWindowVisible(h), Minimized = IsIconic(h) });
             }
             return true;
         }, IntPtr.Zero);
@@ -39,18 +43,45 @@ public static class SmokeWindows {
 '@
 
 $launcher = Join-Path $root 'RMFish.ps1'
-$arguments = '-NoLogo -NoProfile -ExecutionPolicy Bypass -STA -File "' + $launcher + '"'
-$process = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList $arguments -WindowStyle Normal -PassThru
+$process = $null
 $main = $null
 try {
+    if ($ViaBat) {
+        # The BAT starts a separate PowerShell process and exits immediately.
+        # Find that process by its script path, not by an unrelated console.
+        $existing = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
+            Where-Object { $_.CommandLine -like "*$launcher*" } | Select-Object -ExpandProperty ProcessId)
+        $bat = Join-Path $root 'RMFish.bat'
+        $cmd = Start-Process -FilePath $env:ComSpec -ArgumentList ('/d /c "' + $bat + '"') -WorkingDirectory $root -PassThru
+        try {
+            if (-not $cmd.WaitForExit(10000)) { throw 'RMFish.bat did not return.' }
+            if ($cmd.ExitCode -ne 0) { throw "RMFish.bat exited with code $($cmd.ExitCode)." }
+        }
+        finally {
+            $cmd.Refresh()
+            if (-not $cmd.HasExited) { Stop-Process -Id $cmd.Id -Force }
+        }
+        for ($i = 0; $i -lt 40; $i++) {
+            $child = Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
+                Where-Object { $_.CommandLine -like "*$launcher*" -and $existing -notcontains $_.ProcessId } |
+                Select-Object -First 1
+            if ($child) { $process = [Diagnostics.Process]::GetProcessById($child.ProcessId); break }
+            Start-Sleep -Milliseconds 250
+        }
+        if (-not $process) { throw 'RMFish.bat did not start the PowerShell launcher.' }
+    }
+    else {
+        $arguments = '-NoLogo -NoProfile -ExecutionPolicy Bypass -STA -File "' + $launcher + '"'
+        $process = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList $arguments -WindowStyle Normal -PassThru
+    }
     for ($i = 0; $i -lt 60; $i++) {
         Start-Sleep -Milliseconds 500
         $process.Refresh()
         if ($process.HasExited) { throw "Source launcher exited early: $($process.ExitCode)" }
         $windows = @([SmokeWindows]::ForProcess($process.Id))
-        $main = $windows | Where-Object { $_.Visible -and $_.Title -like 'RMFish*RMRP' } | Select-Object -First 1
+        $main = $windows | Where-Object { $_.Visible -and -not $_.Minimized -and $_.Title -like 'RMFish*RMRP' } | Select-Object -First 1
         if ($main) { break }
-        $errorWindow = $windows | Where-Object { $_.Visible -and $_.Title -like 'RMFish*' } | Select-Object -First 1
+        $errorWindow = $windows | Where-Object { $_.Visible -and $_.Title -like 'RMFish*' -and $_.Title -notlike 'RMFish*RMRP' } | Select-Object -First 1
         if ($errorWindow) {
             $details = ''
             try {
@@ -64,10 +95,11 @@ try {
         }
     }
     if (-not $main) {
-        $titles = ($windows | ForEach-Object { "[$($_.Visible)] $($_.Title)" }) -join ' | '
+        $titles = ($windows | ForEach-Object { "[visible=$($_.Visible), minimized=$($_.Minimized)] $($_.Title)" }) -join ' | '
         throw "Source main window not detected. Windows: $titles"
     }
-    Write-Host 'PASS: PowerShell source launcher opened its visible main window on Windows.'
+    $kind = if ($ViaBat) { "BAT" } else { "PowerShell" }
+    Write-Host "PASS: $kind source launcher opened its visible main window on Windows."
 }
 catch {
     $message = $_.Exception.Message.Replace('%','%25').Replace("`r",'%0D').Replace("`n",'%0A')
@@ -77,8 +109,10 @@ catch {
 }
 finally {
     if ($main) { [SmokeWindows]::Close($main.Handle) }
-    $process.Refresh()
-    if (-not $process.HasExited -and -not $process.WaitForExit(5000)) {
-        Stop-Process -Id $process.Id -Force
+    if ($process) {
+        $process.Refresh()
+        if (-not $process.HasExited -and -not $process.WaitForExit(5000)) {
+            Stop-Process -Id $process.Id -Force
+        }
     }
 }
