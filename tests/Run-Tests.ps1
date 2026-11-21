@@ -4,6 +4,7 @@ $sources = @(
     (Join-Path $root 'src\Vision.cs'),
     (Join-Path $root 'src\StateMachine.cs'),
     (Join-Path $root 'src\Engine.cs'),
+    (Join-Path $root 'src\Safety.cs'),
     (Join-Path $root 'tests\TestRunner.cs')
 )
 Add-Type -AssemblyName System.IO.Compression

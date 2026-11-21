@@ -23,6 +23,7 @@ try {
         (Join-Path $PSScriptRoot 'src\Vision.cs'),
         (Join-Path $PSScriptRoot 'src\StateMachine.cs'),
         (Join-Path $PSScriptRoot 'src\Engine.cs'),
+        (Join-Path $PSScriptRoot 'src\Safety.cs'),
         (Join-Path $PSScriptRoot 'src\WindowsGame.cs'),
         (Join-Path $PSScriptRoot 'src\MainForm.cs')
     )

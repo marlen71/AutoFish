@@ -9,7 +9,8 @@ namespace RMFish
     {
         public int PollMilliseconds = 20;
         public int ReelClickMilliseconds = 35;
-        public int WaitTimeoutSeconds = 300; // zero means unlimited
+        public int WaitTimeoutSeconds = 300; // zero means no separate waiting limit
+        public int SessionLimitSeconds = 120; // always bounded, including while paused
         public bool MinimizeOnStart = true;
 
         public EngineOptions CopyValidated()
@@ -18,6 +19,7 @@ namespace RMFish
             result.PollMilliseconds = Math.Max(20, Math.Min(200, PollMilliseconds));
             result.ReelClickMilliseconds = Math.Max(35, Math.Min(250, ReelClickMilliseconds));
             result.WaitTimeoutSeconds = Math.Max(0, Math.Min(3600, WaitTimeoutSeconds));
+            result.SessionLimitSeconds = Math.Max(1, Math.Min(1800, SessionLimitSeconds));
             result.MinimizeOnStart = MinimizeOnStart;
             return result;
         }

@@ -2,6 +2,7 @@
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
+using System.Runtime.InteropServices;
 using System.Threading;
 using RMFish;
 
@@ -147,6 +148,8 @@ public static class TestRunner
     {
         public volatile bool Focus, StopFile;
         public int Clicks, Captures, CaptureThread, ReleaseThread, Releases;
+        public int BlockAtCapture;
+        public ManualResetEvent CaptureEntered, ContinueCapture, ClickEntered, ContinueClick;
         public PixelFrame Frame;
         public bool TryGetForeground(out GameBounds bounds, out string reason)
         {
@@ -158,7 +161,12 @@ public static class TestRunner
         public PixelFrame Capture(GameBounds bounds)
         {
             CaptureThread = Thread.CurrentThread.ManagedThreadId;
-            Interlocked.Increment(ref Captures);
+            int captured = Interlocked.Increment(ref Captures);
+            if (captured == BlockAtCapture && CaptureEntered != null && ContinueCapture != null)
+            {
+                CaptureEntered.Set();
+                ContinueCapture.WaitOne();
+            }
             return Frame;
         }
         public bool Click(GameBounds bounds, WaitHandle stop, out string error)
@@ -166,6 +174,11 @@ public static class TestRunner
             error = "";
             if (!Focus || StopFile || stop.WaitOne(0)) return false;
             Interlocked.Increment(ref Clicks);
+            if (ClickEntered != null && ContinueClick != null)
+            {
+                ClickEntered.Set();
+                ContinueClick.WaitOne();
+            }
             return true;
         }
         public bool StopFileExists() { return StopFile; }
@@ -215,6 +228,304 @@ public static class TestRunner
         }
     }
 
+    private sealed class FakeKeys
+    {
+        private readonly int[] states = new int[256];
+        public volatile bool Fail;
+        public bool Read(int key)
+        {
+            if (Fail) throw new InvalidOperationException("simulated key-state failure");
+            return Interlocked.CompareExchange(ref states[key], 0, 0) != 0;
+        }
+        public void Set(int key, bool down) { Interlocked.Exchange(ref states[key], down ? 1 : 0); }
+    }
+
+    private static void KeySafetyTests()
+    {
+        CooldownGate debounce = new CooldownGate(300);
+        Check(debounce.TryClaim(0), "first diagnostic request is accepted");
+        Check(!debounce.TryClaim(50), "duplicate F9 messages are suppressed");
+        Check(debounce.TryClaim(301), "a later F9 request is accepted");
+
+        FakeKeys keys = new FakeKeys();
+        FakePort port = new FakePort { Frame = SyntheticCast(880, true), Focus = false };
+        int f9 = 0, f10 = 0, escape = 0, mouse = 0, faults = 0, callbackThread = 0;
+        using (FishingEngine engine = new FishingEngine(port))
+        using (SafetyKeyMonitor monitor = new SafetyKeyMonitor(keys.Read,
+            delegate(EmergencySignal signal, bool first)
+            {
+                callbackThread = Thread.CurrentThread.ManagedThreadId;
+                engine.RequestStop("emergency " + signal);
+                if (first && signal == EmergencySignal.F10) Interlocked.Increment(ref f10);
+                if (first && signal == EmergencySignal.EscapeHeld) Interlocked.Increment(ref escape);
+                if (first && signal == EmergencySignal.MouseButtonsHeld) Interlocked.Increment(ref mouse);
+            },
+            delegate { Interlocked.Increment(ref f9); },
+            delegate(Exception ex) { Interlocked.Increment(ref faults); engine.RequestStop("key monitor failed"); }, 5, 120))
+        {
+            monitor.Start();
+            keys.Set(SafetyKeyMonitor.F9, true);
+            Check(WaitUntil(delegate { return f9 == 1; }, 1000), "F9 is detected without WM_HOTKEY");
+            Thread.Sleep(60);
+            Check(f9 == 1, "holding F9 produces one diagnostic request");
+            keys.Set(SafetyKeyMonitor.F9, false);
+            Thread.Sleep(30);
+            keys.Set(SafetyKeyMonitor.F9, true);
+            Check(WaitUntil(delegate { return f9 == 2; }, 1000), "F9 works again after release");
+            keys.Set(SafetyKeyMonitor.F9, false);
+
+            Check(engine.Start(new EngineOptions()), "worker starts for F10 fallback test");
+            keys.Set(SafetyKeyMonitor.F10, true);
+            Check(WaitUntil(delegate { return !engine.Snapshot().Running; }, 1000), "F10 polling stops worker without UI messages");
+            Check(engine.WaitForStop(1000) && WaitUntil(delegate { return f10 == 1; }, 1000), "F10 press produces one first-press notification");
+            Check(callbackThread != Thread.CurrentThread.ManagedThreadId, "emergency callback runs independently of UI thread");
+            Check(monitor.StopHeld, "held F10 is exposed as a start blocker");
+            Check(engine.Start(new EngineOptions()), "test can force a restart while F10 remains held");
+            Check(WaitUntil(delegate { return !engine.Snapshot().Running; }, 1000), "held F10 reasserts stop after a forced restart");
+            Check(engine.WaitForStop(1000) && f10 == 1, "held F10 is not repeatedly reported as a new press");
+            keys.Set(SafetyKeyMonitor.F10, false);
+            Check(WaitUntil(delegate { return !monitor.StopHeld; }, 1000), "releasing F10 clears the hold blocker");
+
+            Check(engine.Start(new EngineOptions()), "worker starts for escape hold test");
+            keys.Set(SafetyKeyMonitor.Escape, true);
+            Thread.Sleep(50);
+            Check(engine.Snapshot().Running, "a short Escape press does not stop the worker");
+            Check(WaitUntil(delegate { return !engine.Snapshot().Running; }, 1000), "holding Escape stops the worker");
+            Check(engine.WaitForStop(1000) && WaitUntil(delegate { return escape == 1; }, 1000), "Escape hold triggers once");
+            keys.Set(SafetyKeyMonitor.Escape, false);
+            Check(WaitUntil(delegate { return !monitor.StopHeld; }, 1000), "releasing Escape clears the hold blocker");
+
+            Check(engine.Start(new EngineOptions()), "worker starts for mouse hold test");
+            keys.Set(SafetyKeyMonitor.LeftMouse, true);
+            Thread.Sleep(180);
+            Check(engine.Snapshot().Running, "holding left mouse alone is not an emergency stop");
+            keys.Set(SafetyKeyMonitor.RightMouse, true);
+            Check(WaitUntil(delegate { return !engine.Snapshot().Running; }, 1000), "holding both mouse buttons stops the worker");
+            Check(engine.WaitForStop(1000) && WaitUntil(delegate { return mouse == 1; }, 1000), "mouse hold triggers once");
+            keys.Set(SafetyKeyMonitor.LeftMouse, false);
+            keys.Set(SafetyKeyMonitor.RightMouse, false);
+            Check(WaitUntil(delegate { return !monitor.StopHeld; }, 1000), "releasing mouse buttons clears the hold blocker");
+            Check(faults == 0, "normal polling has no faults");
+
+            Check(engine.Start(new EngineOptions()), "worker starts for key monitor fault test");
+            keys.Fail = true;
+            Check(WaitUntil(delegate { return faults == 1 && !engine.Snapshot().Running; }, 1000), "key monitor fault requests a fail-closed stop");
+            Check(engine.WaitForStop(1000), "worker exits after monitor failure");
+        }
+    }
+
+    private static void BackgroundProbeSafetyTests()
+    {
+        using (ManualResetEvent entered = new ManualResetEvent(false))
+        using (ManualResetEvent proceed = new ManualResetEvent(false))
+        using (ManualResetEvent completed = new ManualResetEvent(false))
+        {
+            int calls = 0, faults = 0;
+            BackgroundProbe probe = new BackgroundProbe(
+                delegate
+                {
+                    Interlocked.Increment(ref calls);
+                    entered.Set();
+                    proceed.WaitOne();
+                    completed.Set();
+                },
+                delegate(Exception ex) { Interlocked.Increment(ref faults); });
+            FakeKeys keys = new FakeKeys();
+            FakePort port = new FakePort { Frame = SyntheticCast(880, true), Focus = false };
+            using (FishingEngine engine = new FishingEngine(port))
+            using (SafetyKeyMonitor monitor = new SafetyKeyMonitor(keys.Read,
+                delegate(EmergencySignal signal, bool first) { engine.RequestStop("emergency while probing"); },
+                delegate { probe.TryStart(); },
+                delegate(Exception ex) { Interlocked.Increment(ref faults); engine.RequestStop(); }, 5, 120))
+            {
+                try
+                {
+                    monitor.Start();
+                    Check(engine.Start(new EngineOptions()), "worker starts for blocked diagnostic test");
+                    keys.Set(SafetyKeyMonitor.F9, true);
+                    Check(entered.WaitOne(2000), "F9 starts a background capture");
+                    Check(!probe.TryStart() && calls == 1, "a blocked probe cannot spawn unlimited capture threads");
+                    keys.Set(SafetyKeyMonitor.F10, true);
+                    Check(WaitUntil(delegate { return !engine.Snapshot().Running; }, 2000), "F10 still stops while the diagnostic capture is blocked");
+                    Check(engine.WaitForStop(1000) && faults == 0, "the key monitor remains healthy during a blocked diagnostic");
+                }
+                finally { proceed.Set(); }
+                Check(completed.WaitOne(2000), "background diagnostic exits after being released");
+            }
+        }
+        using (ManualResetEvent failed = new ManualResetEvent(false))
+        {
+            BackgroundProbe failing = new BackgroundProbe(delegate { throw new InvalidOperationException("probe failure"); },
+                delegate(Exception ex) { if (ex.Message == "probe failure") failed.Set(); });
+            Check(failing.TryStart() && failed.WaitOne(2000), "diagnostic exceptions are contained and reported");
+        }
+    }
+
+    private static void InFlightStopTests()
+    {
+        FakePort idle = new FakePort { Frame = SyntheticCast(880, true), Focus = false };
+        using (FishingEngine engine = new FishingEngine(idle))
+        {
+            long beforeStop = engine.StopVersion;
+            engine.RequestStop("F10 during start preparation");
+            Check(!engine.Start(new EngineOptions(), beforeStop), "an emergency during start preparation cancels that start");
+            Check(engine.Start(new EngineOptions(), engine.StopVersion), "a fresh start after the stop is allowed");
+            engine.RequestStop();
+            Check(engine.WaitForStop(2000), "the fresh start stops normally");
+        }
+
+        // A signal cannot interrupt an arbitrary native call. The snapshot must
+        // say 'stopping' until it returns, and no further click may start.
+        using (ManualResetEvent entered = new ManualResetEvent(false))
+        using (ManualResetEvent proceed = new ManualResetEvent(false))
+        {
+            FakePort port = new FakePort { Frame = SyntheticCast(880, true), Focus = true,
+                ClickEntered = entered, ContinueClick = proceed };
+            using (FishingEngine engine = new FishingEngine(port))
+            {
+                try
+                {
+                    Check(engine.Start(new EngineOptions()), "worker starts before in-flight click");
+                    Check(entered.WaitOne(2000), "a simulated mouse call can be held");
+                    engine.RequestStop("F10 test");
+                    EngineSnapshot pending = engine.Snapshot();
+                    Check(pending.Running && pending.Stopping && pending.Detail.Contains("F10"), "in-flight click reports a pending stop");
+                    Check(port.Clicks == 1, "only the in-flight mouse call has begun");
+                }
+                finally { proceed.Set(); }
+                Check(engine.WaitForStop(2000), "worker stops when the in-flight mouse call returns");
+                Check(port.Clicks == 1 && !engine.Snapshot().Stopping, "no new click starts after the stop request");
+            }
+        }
+
+        using (ManualResetEvent entered = new ManualResetEvent(false))
+        using (ManualResetEvent proceed = new ManualResetEvent(false))
+        {
+            FakePort port = new FakePort { Frame = Fixture("bite", 1920, 1080), Focus = true,
+                BlockAtCapture = 2, CaptureEntered = entered, ContinueCapture = proceed };
+            FishingEngine engine = new FishingEngine(port);
+            Thread closer = null;
+            try
+            {
+                Check(engine.Start(new EngineOptions()), "worker starts before close-race test");
+                Check(entered.WaitOne(2000), "capture is blocked during close-race test");
+                closer = new Thread(engine.Dispose);
+                closer.IsBackground = true;
+                closer.Start();
+                Check(WaitUntil(delegate { return engine.Snapshot().Stopping; }, 2000), "close requests a stop before waiting");
+                bool refused = false;
+                try { engine.Start(new EngineOptions()); }
+                catch (ObjectDisposedException) { refused = true; }
+                Check(refused, "a concurrent restart is refused while disposal waits");
+            }
+            finally
+            {
+                proceed.Set();
+                if (closer != null) closer.Join(5000);
+                engine.Dispose();
+            }
+            Check(closer != null && !closer.IsAlive && port.Clicks == 0, "close completes without a stale click");
+        }
+    }
+
+    private static void SessionSafetyTests()
+    {
+        Check(new EngineOptions { SessionLimitSeconds = 0 }.CopyValidated().SessionLimitSeconds == 1,
+            "session limit cannot be disabled");
+        Check(new EngineOptions { SessionLimitSeconds = 9999 }.CopyValidated().SessionLimitSeconds == 1800,
+            "session limit has an upper bound");
+        FakePort paused = new FakePort { Frame = SyntheticCast(880, true), Focus = false };
+        using (FishingEngine engine = new FishingEngine(paused))
+        {
+            Check(engine.Start(new EngineOptions { SessionLimitSeconds = 1 }), "bounded session starts");
+            Check(WaitUntil(delegate { return !engine.Snapshot().Running; }, 2500), "session expires even while game is unfocused");
+            Check(engine.Snapshot().Detail.Contains("лимит"), "session timeout reason is visible");
+            Check(engine.WaitForStop(1000), "timed-out worker exits");
+            Check(engine.Start(new EngineOptions { SessionLimitSeconds = 1 }), "short session starts before manual stop");
+            Thread.Sleep(100);
+            engine.RequestStop();
+            Check(engine.WaitForStop(1000), "short session stops manually");
+            Check(engine.Start(new EngineOptions { SessionLimitSeconds = 5 }), "new session starts after previous timer");
+            Thread.Sleep(1200);
+            Check(engine.Snapshot().Running, "previous timer cannot stop a later session");
+            engine.RequestStop();
+            Check(engine.WaitForStop(1000), "later session stops on request");
+        }
+
+        using (ManualResetEvent entered = new ManualResetEvent(false))
+        using (ManualResetEvent proceed = new ManualResetEvent(false))
+        {
+            FakePort blocked = new FakePort { Frame = Fixture("bite", 1920, 1080), Focus = true,
+                BlockAtCapture = 2, CaptureEntered = entered, ContinueCapture = proceed };
+            using (FishingEngine engine = new FishingEngine(blocked))
+            {
+                try
+                {
+                    Check(engine.Start(new EngineOptions { SessionLimitSeconds = 1 }), "session starts before blocked capture");
+                    Check(entered.WaitOne(2000), "second capture can be held in the test");
+                    Check(WaitUntil(delegate { return engine.Snapshot().Stopping; }, 3500), "timer requests a stop while capture is blocked");
+                    EngineSnapshot pending = engine.Snapshot();
+                    Check(pending.Running && pending.Detail.Contains("лимит"), "a blocked worker is reported as stopping, not stopped");
+                    Check(blocked.Clicks == 0, "the blocked capture has not sent a click");
+                }
+                finally { proceed.Set(); }
+                Check(WaitUntil(delegate { return !engine.Snapshot().Running; }, 1500), "timer stops after a blocked capture returns");
+                Check(engine.WaitForStop(1000) && blocked.Clicks == 0, "no stale click is sent after the session limit");
+                Check(engine.Snapshot().Detail.Contains("лимит") && !engine.Snapshot().Stopping, "blocked capture reports the completed session stop");
+            }
+        }
+    }
+
+    [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int key);
+    [DllImport("user32.dll")] private static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
+    [DllImport("user32.dll")] private static extern bool RegisterHotKey(IntPtr window, int id, uint modifiers, uint key);
+    [DllImport("user32.dll")] private static extern bool UnregisterHotKey(IntPtr window, int id);
+
+    private static void WindowsKeyIntegrationTests()
+    {
+        // Synthetic system-wide keystrokes are opt-in for the isolated CI VM;
+        // the normal developer test command must not affect an active desktop.
+        if (Environment.GetEnvironmentVariable("RMFISH_TEST_NATIVE_KEYS") != "1") return;
+        Check(Environment.OSVersion.Platform == PlatformID.Win32NT, "native-key test runs only on Windows");
+        // Reserve the hotkeys on this thread without dispatching its messages.
+        // The monitor must still see the key state on its own thread.
+        bool reservedF9 = RegisterHotKey(IntPtr.Zero, 8501, 0, SafetyKeyMonitor.F9);
+        bool reservedF10 = RegisterHotKey(IntPtr.Zero, 8502, 0, SafetyKeyMonitor.F10);
+        int f9 = 0, faults = 0;
+        FakePort port = new FakePort { Frame = SyntheticCast(880, true), Focus = false };
+        using (FishingEngine engine = new FishingEngine(port))
+        using (SafetyKeyMonitor monitor = new SafetyKeyMonitor(
+            delegate(int key) { return (GetAsyncKeyState(key) & 0x8000) != 0; },
+            delegate(EmergencySignal signal, bool first) { engine.RequestStop("native key fallback"); },
+            delegate { Interlocked.Increment(ref f9); },
+            delegate(Exception ex) { Interlocked.Increment(ref faults); engine.RequestStop("native key failure"); }, 10, 200))
+        {
+            try
+            {
+                keybd_event(SafetyKeyMonitor.F9, 0, 2, UIntPtr.Zero);
+                keybd_event(SafetyKeyMonitor.F10, 0, 2, UIntPtr.Zero);
+                monitor.Start();
+                Thread.Sleep(80);
+                keybd_event(SafetyKeyMonitor.F9, 0, 0, UIntPtr.Zero);
+                Check(WaitUntil(delegate { return f9 > 0; }, 1000), "Windows key-state fallback receives F9 without a message pump");
+                keybd_event(SafetyKeyMonitor.F9, 0, 2, UIntPtr.Zero);
+                Check(engine.Start(new EngineOptions()), "worker starts for native F10 test");
+                keybd_event(SafetyKeyMonitor.F10, 0, 0, UIntPtr.Zero);
+                Check(WaitUntil(delegate { return !engine.Snapshot().Running; }, 1000), "Windows key-state fallback stops on F10 without a message pump");
+                Check(engine.WaitForStop(1000) && faults == 0, "native F10 stop completed without errors");
+                if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true")
+                    Console.WriteLine("::notice title=Synthetic Windows keys::F9 and F10 observed by key-state poller; registrations F9=" + reservedF9 + " F10=" + reservedF10 + ". This does not test GTA5 or a physical keyboard.");
+            }
+            finally
+            {
+                keybd_event(SafetyKeyMonitor.F9, 0, 2, UIntPtr.Zero);
+                keybd_event(SafetyKeyMonitor.F10, 0, 2, UIntPtr.Zero);
+                if (reservedF9) UnregisterHotKey(IntPtr.Zero, 8501);
+                if (reservedF10) UnregisterHotKey(IntPtr.Zero, 8502);
+            }
+        }
+    }
+
     public static int Main(string[] args)
     {
         try
@@ -223,12 +534,21 @@ public static class TestRunner
             VisionTests();
             StateTests();
             EngineTests();
-            Console.WriteLine("PASS: " + assertions + " assertions (vision, state machine, worker safety). ");
+            KeySafetyTests();
+            BackgroundProbeSafetyTests();
+            InFlightStopTests();
+            SessionSafetyTests();
+            WindowsKeyIntegrationTests();
+            Console.WriteLine("PASS: " + assertions + " assertions (vision, state machine, keyboard and stop safety). ");
+            if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true")
+                Console.WriteLine("::notice title=RMFish tests::PASS " + assertions + " assertions.");
             return 0;
         }
         catch (Exception ex)
         {
             Console.Error.WriteLine(ex.ToString());
+            if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true")
+                Console.WriteLine("::error title=RMFish tests::" + ex.Message.Replace("%", "%25").Replace("\r", "%0D").Replace("\n", "%0A"));
             return 1;
         }
     }

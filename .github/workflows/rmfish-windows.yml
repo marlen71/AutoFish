@@ -20,7 +20,15 @@ jobs:
 
       - name: Run detector and engine tests
         shell: powershell
+        env:
+          RMFISH_TEST_NATIVE_KEYS: '1'
         run: .\tests\Run-Tests.ps1
+
+      - name: Check hotkeys with the WinForms UI blocked
+        shell: powershell
+        env:
+          RMFISH_TEST_NATIVE_KEYS: '1'
+        run: .\tests\Smoke-GuiSafety.ps1
 
       - name: Build EXE with .NET Framework
         shell: powershell
@@ -61,6 +69,10 @@ jobs:
         shell: powershell
         run: .\tests\Smoke-Source.ps1 -ViaBat
 
+      - name: Check the emergency force-stop BAT
+        shell: powershell
+        run: .\tests\Smoke-ForceStop.ps1
+
       - name: Package Windows files
         shell: powershell
         run: |
@@ -75,6 +87,7 @@ jobs:
           New-Item -ItemType Directory -Path $stage, $assets -Force | Out-Null
           Copy-Item 'dist\RMFish.exe' (Join-Path $stage 'RMFish.exe')
           Copy-Item 'STOP.bat' (Join-Path $stage 'STOP.bat')
+          Copy-Item 'EMERGENCY-STOP.bat' (Join-Path $stage 'EMERGENCY-STOP.bat')
           $instruction = (Get-Content 'docs\INSTRUCTIONS.txt' -Raw -Encoding UTF8).Replace("`r`n", "`n").Replace("`n", "`r`n")
           [IO.File]::WriteAllText((Join-Path $stage 'INSTRUCTIONS.txt'), $instruction, [Text.UTF8Encoding]::new($true))
           $zipName = "RMFish-v$version-Windows.zip"

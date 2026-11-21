@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
@@ -151,6 +152,12 @@ namespace RMFish
     {
         private readonly string baseDirectory, stopFile, settingsPath;
         private readonly FishingEngine engine;
+        private readonly SafetyKeyMonitor safetyKeys;
+        private readonly BackgroundProbe probeWorker;
+        private readonly Stopwatch hotkeyClock = Stopwatch.StartNew();
+        private readonly CooldownGate probeGate = new CooldownGate(300);
+        private readonly CooldownGate stopLogGate = new CooldownGate(300);
+        private volatile bool safetyFailed, closing;
         private readonly Panel[] pages = new Panel[4];
         private readonly SoftButton[] navigation = new SoftButton[4];
         private readonly System.Windows.Forms.Timer refreshTimer = new System.Windows.Forms.Timer();
@@ -158,7 +165,7 @@ namespace RMFish
         private Label statusDot, statusTitle, statusDetail, castValue, reelValue, timeValue, detectionLabel, probeLabel, hotkeyLabel;
         private SoftButton startButton, stopButton;
         private StageCard castStage, waitStage, reelStage;
-        private NumericUpDown pollInput, clickInput, timeoutInput;
+        private NumericUpDown pollInput, clickInput, timeoutInput, sessionInput;
         private CheckBox minimizeInput;
         private TextBox logBox;
         private bool hotF8, hotF9, hotF10;
@@ -173,6 +180,11 @@ namespace RMFish
             if (String.IsNullOrEmpty(local)) local = directory;
             settingsPath = Path.Combine(local, "RMFish", "settings.ini");
             engine = new FishingEngine(new WindowsGamePort(stopFile));
+            safetyKeys = new SafetyKeyMonitor(
+                delegate(int key) { return (WindowsNative.GetAsyncKeyState(key) & 0x8000) != 0; },
+                HandleEmergency, RequestProbe, HandleSafetyFault);
+            probeWorker = new BackgroundProbe(ProbeScreen,
+                delegate(Exception ex) { ReportProbe("Ошибка снимка: " + ex.Message, "Диагностика: "); });
 
             Text = "RMFish — авторыбалка для RMRP";
             StartPosition = FormStartPosition.CenterScreen;
@@ -205,9 +217,20 @@ namespace RMFish
             refreshTimer.Tick += delegate { RefreshView(); };
             refreshTimer.Start();
             probeTimer.Interval = 3000;
-            probeTimer.Tick += delegate { probeTimer.Stop(); ProbeScreen(); };
-            Shown += delegate { RegisterKeys(); RefreshView(); };
-            FormClosing += delegate { refreshTimer.Stop(); probeTimer.Stop(); engine.RequestStop(); UnregisterKeys(); };
+            probeTimer.Tick += delegate { probeTimer.Stop(); RequestProbe(); };
+            Shown += delegate
+            {
+                RegisterKeys();
+                try { safetyKeys.Start(); }
+                catch (Exception ex) { HandleSafetyFault(ex); }
+                RefreshView();
+            };
+            FormClosing += delegate
+            {
+                closing = true;
+                refreshTimer.Stop(); probeTimer.Stop(); engine.RequestStop();
+                safetyKeys.Dispose(); UnregisterKeys();
+            };
             FormClosed += delegate
             {
                 refreshTimer.Dispose();
@@ -291,11 +314,13 @@ namespace RMFish
                 nav.Click += delegate { ShowPage(pageIndex); };
                 navigation[i] = nav;
             }
-            SoftCard shortcut = Card(sidebar, 20, 527, 170, 107);
+            SoftCard shortcut = Card(sidebar, 20, 515, 170, 120);
             shortcut.Fill = Color.FromArgb(19, 40, 38);
-            AddLabel(shortcut, "БЫСТРОЕ УПРАВЛЕНИЕ", 13, 10, 150, 19, 7.4f, Theme.Muted, FontStyle.Bold);
-            AddLabel(shortcut, "F8     Старт / стоп", 13, 37, 150, 22, 9f, Theme.Text, FontStyle.Bold);
-            AddLabel(shortcut, "F10   Аварийный стоп", 13, 65, 150, 22, 8.5f, Theme.Text, FontStyle.Regular);
+            AddLabel(shortcut, "БЫСТРОЕ УПРАВЛЕНИЕ", 13, 8, 150, 19, 7.4f, Theme.Muted, FontStyle.Bold);
+            AddLabel(shortcut, "F8     Старт / стоп", 13, 30, 150, 20, 8.5f, Theme.Text, FontStyle.Bold);
+            AddLabel(shortcut, "F10   Аварийный стоп", 13, 52, 150, 20, 8.3f, Theme.Text, FontStyle.Regular);
+            AddLabel(shortcut, "Esc   держать 2 сек", 13, 74, 150, 20, 8.3f, Theme.Text, FontStyle.Regular);
+            AddLabel(shortcut, "ЛКМ + ПКМ   2 сек", 13, 96, 150, 20, 8.3f, Theme.Text, FontStyle.Regular);
             hotkeyLabel = AddLabel(sidebar, "", 22, 646, 165, 38, 8f, Theme.Muted, FontStyle.Regular);
         }
 
@@ -349,7 +374,7 @@ namespace RMFish
             AddLabel(note, "Инвентарь  →  бамбуковая удочка  →  ловить рыбу  →  хлебный мякиш", 20, 69, 600, 22, 8.5f, Theme.Muted, FontStyle.Regular);
             SoftButton guide = Button(note, "Инструкция  →", 618, 38, 138, 39, false);
             guide.Click += delegate { ShowPage(2); };
-            AddLabel(page, "Клики только при активном окне GTA5  ·  F8 — старт / стоп  ·  F10 — аварийный стоп", 32, 662, 776, 22, 8f, Theme.Muted, FontStyle.Regular);
+            AddLabel(page, "Клики только в GTA5  ·  F10 — стоп  ·  удерживайте Esc или ЛКМ + ПКМ 2 секунды", 32, 662, 776, 22, 8f, Theme.Muted, FontStyle.Regular);
         }
 
         private static NumericUpDown Number(Control parent, int x, int y, int min, int max, int step)
@@ -372,25 +397,28 @@ namespace RMFish
             AddLabel(page, "Настройки", 30, 42, 600, 40, 21f, Theme.Text, FontStyle.Bold);
             AddLabel(page, "Меняйте скорость и ограничения под свою игру.", 32, 82, 700, 24, 9.5f, Theme.Muted, FontStyle.Regular);
             SoftCard settings = Card(page, 32, 122, 776, 355);
-            AddLabel(settings, "Частота проверки экрана", 22, 19, 450, 25, 10.5f, Theme.Text, FontStyle.Bold);
-            AddLabel(settings, "Интервал между снимками, мс (меньше — быстрее).", 22, 46, 560, 24, 9f, Theme.Muted, FontStyle.Regular);
-            pollInput = Number(settings, 627, 29, 20, 200, 5);
-            AddLabel(settings, "Интервал ЛКМ при вываживании", 22, 91, 500, 25, 10.5f, Theme.Text, FontStyle.Bold);
-            AddLabel(settings, "Время между нажатиями, мс.", 22, 118, 520, 24, 9f, Theme.Muted, FontStyle.Regular);
-            clickInput = Number(settings, 627, 101, 35, 250, 5);
-            AddLabel(settings, "Максимальное ожидание шкалы", 22, 163, 500, 25, 10.5f, Theme.Text, FontStyle.Bold);
-            AddLabel(settings, "В секундах; 0 — ждать без ограничения.", 22, 190, 520, 24, 9f, Theme.Muted, FontStyle.Regular);
-            timeoutInput = Number(settings, 627, 173, 0, 3600, 30);
+            AddLabel(settings, "Частота проверки экрана", 22, 15, 450, 25, 10.5f, Theme.Text, FontStyle.Bold);
+            AddLabel(settings, "Интервал между снимками, мс (меньше — быстрее).", 22, 39, 560, 24, 9f, Theme.Muted, FontStyle.Regular);
+            pollInput = Number(settings, 627, 23, 20, 200, 5);
+            AddLabel(settings, "Интервал ЛКМ при вываживании", 22, 77, 500, 25, 10.5f, Theme.Text, FontStyle.Bold);
+            AddLabel(settings, "Время между нажатиями, мс.", 22, 101, 520, 24, 9f, Theme.Muted, FontStyle.Regular);
+            clickInput = Number(settings, 627, 85, 35, 250, 5);
+            AddLabel(settings, "Максимальное ожидание шкалы", 22, 139, 500, 25, 10.5f, Theme.Text, FontStyle.Bold);
+            AddLabel(settings, "В секундах; 0 — без отдельного лимита ожидания.", 22, 163, 560, 24, 9f, Theme.Muted, FontStyle.Regular);
+            timeoutInput = Number(settings, 627, 147, 0, 3600, 30);
+            AddLabel(settings, "Лимит всей сессии, сек", 22, 201, 500, 25, 10.5f, Theme.Text, FontStyle.Bold);
+            AddLabel(settings, "Автостоп даже на паузе; по умолчанию 120 секунд.", 22, 225, 560, 24, 9f, Theme.Muted, FontStyle.Regular);
+            sessionInput = Number(settings, 627, 209, 1, 1800, 30);
             minimizeInput = new CheckBox();
             minimizeInput.Text = "Сворачивать RMFish при запуске";
-            minimizeInput.SetBounds(22, 245, 500, 29);
+            minimizeInput.SetBounds(22, 270, 500, 29);
             minimizeInput.Font = new Font("Segoe UI", 10f, FontStyle.Bold);
             minimizeInput.ForeColor = Theme.Text;
             minimizeInput.BackColor = Color.Transparent;
             minimizeInput.FlatStyle = FlatStyle.Flat;
             minimizeInput.FlatAppearance.BorderColor = Theme.Muted;
             settings.Controls.Add(minimizeInput);
-            AddLabel(settings, "Вернитесь в игру после нажатия «Старт».", 44, 276, 560, 22, 9f, Theme.Muted, FontStyle.Regular);
+            AddLabel(settings, "Вернитесь в игру после нажатия «Старт».", 44, 302, 560, 22, 9f, Theme.Muted, FontStyle.Regular);
 
             SoftButton save = Button(page, "Сохранить настройки", 32, 497, 220, 44, true);
             save.Click += delegate { SaveSettings(true); };
@@ -399,7 +427,7 @@ namespace RMFish
             safety.Fill = Color.FromArgb(43, 38, 28);
             safety.Stroke = Color.FromArgb(99, 83, 54);
             AddLabel(safety, "БЕЗОПАСНОСТЬ", 18, 12, 210, 20, 8f, Theme.Warn, FontStyle.Bold);
-            AddLabel(safety, "Потеря фокуса GTA5 останавливает клики. Клавиша F10 и STOP.bat останавливают программу.", 18, 37, 735, 38, 9f, Theme.Text, FontStyle.Regular);
+            AddLabel(safety, "F10, Esc на 2 сек или обе кнопки мыши на 2 сек — аварийный стоп. Проверьте в игре до старта.", 18, 37, 735, 38, 9f, Theme.Text, FontStyle.Regular);
         }
 
         private void BuildGuide()
@@ -413,7 +441,7 @@ namespace RMFish
                 "Откройте GTA5 / RMRP и подойдите к воде в отмеченной зоне.",
                 "Нажмите I → бамбуковая удочка → «Ловить рыбу» → «Хлебный мякиш».",
                 "Нажмите «Старт» или F8. Вернитесь в GTA5: программа ждёт видимую шкалу.",
-                "F8 — обычный стоп, F10 — аварийный. Также можно запустить STOP.bat."
+                "F10 — стоп; запасной вариант: удерживайте Esc или обе кнопки мыши 2 секунды."
             };
             for (int i = 0; i < titles.Length; i++)
             {
@@ -434,7 +462,7 @@ namespace RMFish
             Panel page = CreatePage(3);
             AddLabel(page, "ПРОВЕРКА ЭКРАНА", 32, 19, 350, 21, 8.5f, Theme.Accent, FontStyle.Bold);
             AddLabel(page, "Диагностика", 30, 42, 600, 40, 21f, Theme.Text, FontStyle.Bold);
-            AddLabel(page, "Проверка только считывает изображение и не нажимает мышь.", 32, 82, 730, 24, 9.5f, Theme.Muted, FontStyle.Regular);
+            AddLabel(page, "Перед проверкой F9 остановите рыбалку. Нажмите F10 в игре и проверьте журнал.", 32, 82, 730, 24, 9.5f, Theme.Muted, FontStyle.Regular);
             SoftCard probe = Card(page, 32, 122, 776, 159);
             AddLabel(probe, "ПОСЛЕДНЯЯ ПРОВЕРКА F9", 20, 15, 300, 20, 8f, Theme.Accent, FontStyle.Bold);
             probeLabel = AddLabel(probe, "Переключитесь в GTA5 и нажмите F9 или запустите проверку через 3 секунды.", 20, 42, 720, 52, 9.5f, Theme.Text, FontStyle.Regular);
@@ -484,6 +512,7 @@ namespace RMFish
                 PollMilliseconds = (int)pollInput.Value,
                 ReelClickMilliseconds = (int)clickInput.Value,
                 WaitTimeoutSeconds = (int)timeoutInput.Value,
+                SessionLimitSeconds = (int)sessionInput.Value,
                 MinimizeOnStart = minimizeInput.Checked
             };
         }
@@ -504,6 +533,7 @@ namespace RMFish
                         if (pair[0] == "poll_ms" && Int32.TryParse(pair[1], out number)) options.PollMilliseconds = number;
                         if (pair[0] == "reel_click_ms" && Int32.TryParse(pair[1], out number)) options.ReelClickMilliseconds = number;
                         if (pair[0] == "wait_seconds" && Int32.TryParse(pair[1], out number)) options.WaitTimeoutSeconds = number;
+                        if (pair[0] == "session_seconds" && Int32.TryParse(pair[1], out number)) options.SessionLimitSeconds = number;
                         if (pair[0] == "minimize" && Boolean.TryParse(pair[1], out flag)) options.MinimizeOnStart = flag;
                     }
                 }
@@ -513,6 +543,7 @@ namespace RMFish
             pollInput.Value = options.PollMilliseconds;
             clickInput.Value = options.ReelClickMilliseconds;
             timeoutInput.Value = options.WaitTimeoutSeconds;
+            sessionInput.Value = options.SessionLimitSeconds;
             minimizeInput.Checked = options.MinimizeOnStart;
         }
 
@@ -523,7 +554,8 @@ namespace RMFish
                 EngineOptions options = GetOptions().CopyValidated();
                 Directory.CreateDirectory(Path.GetDirectoryName(settingsPath));
                 string text = "poll_ms=" + options.PollMilliseconds + "\r\nreel_click_ms=" + options.ReelClickMilliseconds +
-                    "\r\nwait_seconds=" + options.WaitTimeoutSeconds + "\r\nminimize=" + options.MinimizeOnStart + "\r\n";
+                    "\r\nwait_seconds=" + options.WaitTimeoutSeconds + "\r\nsession_seconds=" + options.SessionLimitSeconds +
+                    "\r\nminimize=" + options.MinimizeOnStart + "\r\n";
                 File.WriteAllText(settingsPath, text, Encoding.UTF8);
                 if (inform) MessageBox.Show(this, "Настройки сохранены. Они применятся при следующем запуске.", "RMFish", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return true;
@@ -538,7 +570,21 @@ namespace RMFish
 
         private void StartFishing()
         {
-            if (engine.Snapshot().Running) return;
+            if (closing || engine.Snapshot().Running) return;
+            // Record intent before any settings/file IO; a stop arriving while
+            // Start is being prepared must cancel this attempt even if released.
+            long stopVersion = engine.StopVersion;
+            if (safetyFailed)
+            {
+                MessageBox.Show(this, "Аварийный монитор недоступен. Перезапустите RMFish и проверьте F10 до начала работы.",
+                    "RMFish", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            if (safetyKeys.StopHeld || (WindowsNative.GetAsyncKeyState(SafetyKeyMonitor.F10) & 0x8000) != 0)
+            {
+                engine.Log("Отпустите аварийную клавишу или кнопки мыши перед запуском.");
+                return;
+            }
             try
             {
                 // STOP.bat deliberately leaves a sentinel. A new explicit Start
@@ -552,10 +598,26 @@ namespace RMFish
             }
             EngineOptions options = GetOptions();
             SaveSettings(false);
-            if (engine.Start(options))
+            try
             {
-                if (options.MinimizeOnStart) WindowState = FormWindowState.Minimized;
+                if (engine.Start(options, stopVersion))
+                {
+                    // A fault or held emergency key must win over Start.
+                    if (safetyFailed || safetyKeys.StopHeld || engine.StopVersion != stopVersion ||
+                        (WindowsNative.GetAsyncKeyState(SafetyKeyMonitor.F10) & 0x8000) != 0)
+                        engine.RequestStop("Запуск отменён: аварийная остановка или ошибка контроля клавиш.");
+                    else if (options.MinimizeOnStart) WindowState = FormWindowState.Minimized;
+                }
+                else engine.Log("Запуск отменён: рабочий поток ещё останавливается или получен сигнал стоп.");
                 RefreshView();
+            }
+            catch (Exception ex)
+            {
+                engine.RequestStop("Ошибка запуска.");
+                engine.Log("Ошибка запуска: " + ex.Message);
+                RefreshView();
+                MessageBox.Show(this, "Не удалось запустить рыбалку: " + ex.Message,
+                    "RMFish", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -564,12 +626,13 @@ namespace RMFish
             EngineSnapshot state = engine.Snapshot();
             statusTitle.Text = state.Title;
             statusDetail.Text = state.Detail;
-            statusDot.ForeColor = !state.Running ? Theme.Muted : state.Phase == FishingPhase.Paused ? Theme.Warn : Theme.Accent;
-            startButton.Enabled = !state.Running;
-            stopButton.Enabled = state.Running;
-            castStage.SetActive(state.Running && state.Phase == FishingPhase.Casting);
-            waitStage.SetActive(state.Running && state.Phase == FishingPhase.WaitingBite);
-            reelStage.SetActive(state.Running && state.Phase == FishingPhase.Reeling);
+            statusDot.ForeColor = !state.Running ? Theme.Muted :
+                state.Stopping || state.Phase == FishingPhase.Paused ? Theme.Warn : Theme.Accent;
+            startButton.Enabled = !state.Running && !safetyFailed;
+            stopButton.Enabled = state.Running && !state.Stopping;
+            castStage.SetActive(state.Running && !state.Stopping && state.Phase == FishingPhase.Casting);
+            waitStage.SetActive(state.Running && !state.Stopping && state.Phase == FishingPhase.WaitingBite);
+            reelStage.SetActive(state.Running && !state.Stopping && state.Phase == FishingPhase.Reeling);
             castValue.Text = state.Casts.ToString();
             reelValue.Text = state.Reels.ToString();
             timeValue.Text = state.Elapsed.TotalHours >= 1 ?
@@ -586,31 +649,87 @@ namespace RMFish
             }
         }
 
-        private void ProbeScreen()
+        private void HandleEmergency(EmergencySignal signal, bool first)
         {
+            bool wasRunning = engine.Snapshot().Running;
+            string reason = signal == EmergencySignal.F10 ? "Аварийная остановка: F10." :
+                signal == EmergencySignal.EscapeHeld ? "Аварийная остановка: Esc удерживался 2 секунды." :
+                "Аварийная остановка: обе кнопки мыши удерживались 2 секунды.";
+            // This callback also runs on the independent polling thread: it
+            // never waits for the WinForms UI to process a hotkey message.
+            engine.RequestStop(reason);
+            if (!first) return;
+            if (signal == EmergencySignal.F10)
+            {
+                if (stopLogGate.TryClaim(hotkeyClock.ElapsedMilliseconds))
+                    engine.Log(wasRunning ? reason : "F10 получен. Проверьте, что игра была в фокусе во время нажатия.");
+            }
+            else if (wasRunning) engine.Log(reason);
+        }
+
+        private void HandleSafetyFault(Exception ex)
+        {
+            safetyFailed = true;
+            engine.RequestStop("Ошибка контроля аварийной остановки. Запуск заблокирован.");
+            engine.Log("Ошибка контроля аварийных клавиш: " + ex.Message + ". Перезапустите RMFish.");
             try
             {
-                using (WindowsGamePort port = new WindowsGamePort(null))
-                {
-                    GameBounds bounds;
-                    string reason;
-                    if (!port.TryGetForeground(out bounds, out reason))
-                    {
-                        probeLabel.Text = reason;
-                        engine.Log("Диагностика: " + reason);
-                        return;
-                    }
-                    PixelFrame frame = port.Capture(bounds);
-                    string result = String.Format("{0}×{1}. {2}", bounds.Width, bounds.Height, Vision.Describe(frame));
-                    probeLabel.Text = result;
-                    engine.Log("F9: " + result);
-                }
+                if (IsHandleCreated && !IsDisposed && !Disposing)
+                    BeginInvoke((MethodInvoker)delegate { if (!IsDisposed) RefreshView(); });
             }
-            catch (Exception ex)
+            catch (InvalidOperationException) { }
+        }
+
+        private void RequestProbe()
+        {
+            if (closing) return;
+            // Both WM_HOTKEY and the independent poller can see one keypress.
+            if (!probeGate.TryClaim(hotkeyClock.ElapsedMilliseconds)) return;
+            try
             {
-                probeLabel.Text = "Ошибка снимка: " + ex.Message;
-                engine.Log(probeLabel.Text);
+                // Capture must never block the emergency-key or UI thread.
+                if (!probeWorker.TryStart())
+                    ReportProbe("Предыдущая проверка ещё выполняется. Если она зависла, перезапустите RMFish.", "Диагностика: ");
             }
+            catch (Exception ex) { ReportProbe("Не удалось запустить проверку: " + ex.Message, "Диагностика: "); }
+        }
+
+        // BackgroundProbe owns this operation and its thread-affine capture.
+        private void ProbeScreen()
+        {
+            using (WindowsGamePort port = new WindowsGamePort(null))
+            {
+                GameBounds bounds;
+                string reason;
+                if (!port.TryGetForeground(out bounds, out reason))
+                {
+                    ReportProbe(reason, "Диагностика: ");
+                    return;
+                }
+                PixelFrame frame = port.Capture(bounds);
+                if (!port.IsForeground(bounds))
+                {
+                    ReportProbe("Фокус игры изменился во время снимка. Проверьте ещё раз.", "Диагностика: ");
+                    return;
+                }
+                string result = String.Format("{0}×{1}. {2}", bounds.Width, bounds.Height, Vision.Describe(frame));
+                ReportProbe(result, "F9: ");
+            }
+        }
+
+        private void ReportProbe(string text, string logPrefix)
+        {
+            if (closing) return;
+            engine.Log(logPrefix + text);
+            try
+            {
+                if (IsHandleCreated && !IsDisposed && !Disposing)
+                    BeginInvoke((MethodInvoker)delegate
+                    {
+                        if (!closing && !IsDisposed && !Disposing) probeLabel.Text = text;
+                    });
+            }
+            catch (InvalidOperationException) { }
         }
 
         private void RegisterKeys()
@@ -620,11 +739,11 @@ namespace RMFish
             hotF9 = WindowsNative.RegisterHotKey(Handle, HotF9, NoRepeat, 0x78);
             hotF10 = WindowsNative.RegisterHotKey(Handle, HotF10, NoRepeat, 0x79);
             if (hotF8 && hotF9 && hotF10)
-                hotkeyLabel.Text = "F9  ·  проверка экрана\nВерсия 1.27 beta";
+                hotkeyLabel.Text = "F9  ·  проверка экрана\nВерсия 1.27 beta.2";
             else
             {
-                hotkeyLabel.Text = "Некоторые горячие клавиши заняты.";
-                engine.Log(String.Format("Горячие клавиши: F8 {0}, F9 {1}, F10 {2}. Занятые клавиши замените кнопками и STOP.bat.",
+                hotkeyLabel.Text = "Часть клавиш занята.\nПроверьте F10 в игре.";
+                engine.Log(String.Format("Регистрация: F8 {0}, F9 {1}, F10 {2}. Резервная проверка F9/F10 включена; проверьте стоп в игре.",
                     hotF8 ? "готова" : "занята", hotF9 ? "готова" : "занята", hotF10 ? "готова" : "занята"));
             }
         }
@@ -649,8 +768,8 @@ namespace RMFish
                     else StartFishing();
                     return;
                 }
-                if (id == HotF9) { ProbeScreen(); return; }
-                if (id == HotF10) { engine.RequestStop(); return; }
+                if (id == HotF9) { RequestProbe(); return; }
+                if (id == HotF10) { HandleEmergency(EmergencySignal.F10, true); return; }
             }
             base.WndProc(ref m);
         }
