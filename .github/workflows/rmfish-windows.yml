@@ -1,0 +1,104 @@
+name: RMFish Windows build
+
+on:
+  push:
+    branches:
+      - '**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    permissions:
+      contents: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Run detector and engine tests
+        shell: powershell
+        run: .\tests\Run-Tests.ps1
+
+      - name: Build EXE with .NET Framework
+        shell: powershell
+        run: .\Build-RMFish.ps1
+
+      - name: Check that the EXE opens its main window
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $process = Start-Process -FilePath (Join-Path $PWD 'dist\RMFish.exe') -PassThru
+          try {
+            $opened = $false
+            for ($i = 0; $i -lt 40; $i++) {
+              Start-Sleep -Milliseconds 500
+              $process.Refresh()
+              if ($process.HasExited) { throw "RMFish exited early: $($process.ExitCode)" }
+              if ($process.MainWindowHandle -ne 0 -and $process.MainWindowTitle -like 'RMFish*RMRP') {
+                $opened = $true
+                break
+              }
+            }
+            if (-not $opened) { throw "RMFish main window was not found; title: $($process.MainWindowTitle)" }
+            Write-Host 'PASS: RMFish opened its main window on Windows.'
+          }
+          finally {
+            $process.Refresh()
+            if (-not $process.HasExited) {
+              $null = $process.CloseMainWindow()
+              if (-not $process.WaitForExit(5000)) { Stop-Process -Id $process.Id -Force }
+            }
+          }
+
+      - name: Package Windows files
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Item 'dist\RMFish.exe').VersionInfo.ProductVersion
+          if ($version -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') {
+            throw "Unexpected product version: $version"
+          }
+          $stage = Join-Path $env:RUNNER_TEMP 'rmfish-package'
+          $assets = Join-Path $env:RUNNER_TEMP 'rmfish-assets'
+          New-Item -ItemType Directory -Path $stage, $assets -Force | Out-Null
+          Copy-Item 'dist\RMFish.exe' (Join-Path $stage 'RMFish.exe')
+          Copy-Item 'STOP.bat' (Join-Path $stage 'STOP.bat')
+          $instruction = (Get-Content 'docs\INSTRUCTIONS.txt' -Raw -Encoding UTF8).Replace("`r`n", "`n").Replace("`n", "`r`n")
+          [IO.File]::WriteAllText((Join-Path $stage 'INSTRUCTIONS.txt'), $instruction, [Text.UTF8Encoding]::new($true))
+          $zipName = "RMFish-v$version-Windows.zip"
+          $zip = Join-Path $assets $zipName
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -CompressionLevel Optimal
+          Copy-Item 'dist\RMFish.exe' (Join-Path $assets 'RMFish.exe')
+          $exeHash = (Get-FileHash (Join-Path $assets 'RMFish.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
+          $zipHash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $checksums = "$exeHash  RMFish.exe`r`n$zipHash  $zipName`r`n"
+          [IO.File]::WriteAllText((Join-Path $assets 'SHA256SUMS.txt'), $checksums, [Text.Encoding]::ASCII)
+          Write-Host $checksums
+
+      # Only update a matching *draft* prerelease for this branch. Publishing is
+      # a separate, explicit step, so ordinary pushes never modify a release.
+      - name: Upload to matching draft prerelease, if one exists
+        if: github.event_name == 'push'
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Item 'dist\RMFish.exe').VersionInfo.ProductVersion
+          $tag = "v$version"
+          $json = & gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not list releases.' }
+          $release = $json | ConvertFrom-Json | Where-Object { $_.tag_name -eq $tag } | Select-Object -First 1
+          if (-not $release -or -not $release.draft -or -not $release.prerelease -or $release.target_commitish -ne $env:GITHUB_REF_NAME) {
+            Write-Host "No matching draft prerelease for $tag on this branch; skipping upload."
+            exit 0
+          }
+          $remote = & git ls-remote origin "refs/heads/$env:GITHUB_REF_NAME"
+          if ($LASTEXITCODE -ne 0 -or -not $remote) { throw 'Could not verify the remote branch.' }
+          if (($remote -split '\s+')[0] -ne $env:GITHUB_SHA) { throw 'Branch moved; refusing to upload a stale build.' }
+          $assets = Join-Path $env:RUNNER_TEMP 'rmfish-assets'
+          & gh release upload $tag (Join-Path $assets "RMFish-$tag-Windows.zip") (Join-Path $assets 'RMFish.exe') (Join-Path $assets 'SHA256SUMS.txt') --repo $env:GITHUB_REPOSITORY --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Could not upload release files.' }
