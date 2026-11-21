@@ -55,32 +55,7 @@ jobs:
 
       - name: Check the PowerShell source launcher
         shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $script = Join-Path $PWD 'RMFish.ps1'
-          $arguments = '-NoLogo -NoProfile -ExecutionPolicy Bypass -STA -File "' + $script + '"'
-          $process = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList $arguments -WindowStyle Hidden -PassThru
-          try {
-            $opened = $false
-            for ($i = 0; $i -lt 60; $i++) {
-              Start-Sleep -Milliseconds 500
-              $process.Refresh()
-              if ($process.HasExited) { throw "Source launcher exited early: $($process.ExitCode)" }
-              if ($process.MainWindowHandle -ne 0 -and $process.MainWindowTitle -like 'RMFish*RMRP') {
-                $opened = $true
-                break
-              }
-            }
-            if (-not $opened) { throw "Source launcher main window was not found; title: $($process.MainWindowTitle)" }
-            Write-Host 'PASS: PowerShell source launcher opened its main window on Windows.'
-          }
-          finally {
-            $process.Refresh()
-            if (-not $process.HasExited) {
-              $null = $process.CloseMainWindow()
-              if (-not $process.WaitForExit(5000)) { Stop-Process -Id $process.Id -Force }
-            }
-          }
+        run: .\tests\Smoke-Source.ps1
 
       - name: Package Windows files
         shell: powershell
