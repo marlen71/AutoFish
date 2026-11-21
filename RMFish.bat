@@ -12,5 +12,5 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
-start "RMFish" /min powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -STA -File "%~dp0RMFish.ps1"
+start "RMFish" powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -STA -File "%~dp0RMFish.ps1" -HideConsole
 exit /b 0

@@ -11,6 +11,8 @@ namespace RMFish
     {
         [DllImport("user32.dll")] private static extern bool SetProcessDPIAware();
         [DllImport("user32.dll")] private static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+        [DllImport("kernel32.dll")] private static extern IntPtr GetConsoleWindow();
+        [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr window, int command);
         [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr handle, out uint processId);
         [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr handle);
@@ -24,6 +26,14 @@ namespace RMFish
 
         [StructLayout(LayoutKind.Sequential)] public struct Rect { public int Left, Top, Right, Bottom; }
         [StructLayout(LayoutKind.Sequential)] public struct Point { public int X, Y; }
+
+        public static void HideConsoleWindow()
+        {
+            // Only the BAT launcher passes -HideConsole; direct PowerShell
+            // invocation must not hide the user's existing terminal.
+            IntPtr console = GetConsoleWindow();
+            if (console != IntPtr.Zero) ShowWindow(console, 0); // SW_HIDE
+        }
 
         public static void EnableDpiAwareness()
         {

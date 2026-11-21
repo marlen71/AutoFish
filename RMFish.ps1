@@ -1,4 +1,5 @@
 ﻿# RMFish launcher for Windows PowerShell 5.1. No packages need to be installed.
+param([switch]$HideConsole)
 $ErrorActionPreference = 'Stop'
 $mutex = $null
 $ownsMutex = $false
@@ -32,6 +33,7 @@ try {
         [System.Windows.Forms.Form].Assembly.Location
     ) | Select-Object -Unique
     Add-Type -LiteralPath $sources -ReferencedAssemblies $references
+    if ($HideConsole) { [RMFish.WindowsNative]::HideConsoleWindow() }
     [RMFish.WindowsNative]::EnableDpiAwareness()
     [System.Windows.Forms.Application]::EnableVisualStyles()
     [System.Windows.Forms.Application]::SetCompatibleTextRenderingDefault($false)
