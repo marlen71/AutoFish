@@ -409,7 +409,13 @@ namespace RMacro
                 ShowDashboard(note);
             }
             catch (ApiException ex) { if (!closing && expected == generation) loginMessage.Text = ex.Message; }
-            catch (Exception) { if (!closing && expected == generation) loginMessage.Text = "Не удалось выполнить вход. Проверьте подключение."; }
+            catch (Exception ex)
+            {
+                // Type and call sites aid diagnostics without writing the login,
+                // password, token, device identifier, or server response to a log.
+                Console.Error.WriteLine("RMacro login processing: " + ex.GetType().FullName + "\n" + ex.StackTrace);
+                if (!closing && expected == generation) loginMessage.Text = "Не удалось выполнить вход. Проверьте подключение.";
+            }
             finally { if (!closing && expected == generation) { passwordField.Editor.Text = ""; SetBusy(false); } }
         }
 

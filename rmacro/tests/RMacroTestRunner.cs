@@ -137,12 +137,13 @@ internal static class RMacroTestRunner
             Find<TextBox>(first, "serverEditor").Text = api.BaseUrl;
             Trace("submit GUI login");
             Find<SoftButton>(first, "loginButton").PerformClick();
-            WaitUntil(delegate { return Find<Control>(first, "dashboardPage").Visible; }, 12000,
-                "login: " + Find<Label>(first, "loginMessage").Text);
+            WaitUntil(delegate { return Find<Control>(first, "dashboardPage").Visible && !Field<bool>(first, "busy"); }, 12000,
+                "login did not complete");
             Check(Find<TextBox>(first, "passwordEditor").Text.Length == 0, "password remains in input");
-            WaitUntil(delegate { return Find<Label>(first, "warningText").Text.Contains("RMFish"); }, 5000,
-                "expiry warning; banner=" + Find<Label>(first, "warningText").Text + "; login=" + Find<Label>(first, "loginMessage").Text);
-            Check(Find<Label>(first, "warningText").Text.Contains("RMFish"), "soon-expiring subscription warning");
+            string banner = Find<Label>(first, "warningText").Text;
+            string loginStatus = Find<Label>(first, "loginMessage").Text;
+            Check(banner.Contains("RMFish"), "soon-expiring subscription warning; banner length=" + banner.Length +
+                "; login length=" + loginStatus.Length + "; profile=" + (Field<Profile>(first, "profile") != null));
             Check(Find<Label>(first, "uidValue").Text.Length >= 8, "UID shown");
             Check(new SessionStore(local).Load() != null, "remembered login saved");
             Trace("GUI login complete");
@@ -153,7 +154,7 @@ internal static class RMacroTestRunner
         {
             Trace("restore saved session");
             restored.Show();
-            WaitUntil(delegate { return Find<Control>(restored, "dashboardPage").Visible; }, 12000, "automatic login");
+            WaitUntil(delegate { return Find<Control>(restored, "dashboardPage").Visible && !Field<bool>(restored, "busy"); }, 12000, "automatic login");
             Check(Find<Label>(restored, "warningText").Text.Contains("Скоро"), "warning shown on saved login");
             Find<SoftButton>(restored, "navProfile").PerformClick();
             Check(Find<Control>(restored, "profilePage").Visible, "profile navigation");
@@ -210,6 +211,9 @@ internal static class RMacroTestRunner
             string port = Environment.GetEnvironmentVariable("RMACRO_TEST_PORT");
             if (String.IsNullOrEmpty(port)) throw new Exception("RMACRO_TEST_PORT is required");
             Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
+            // The production program runs Application.Run. This harness pumps
+            // messages manually, so explicitly install the UI synchronization context.
+            SynchronizationContext.SetSynchronizationContext(new WindowsFormsSynchronizationContext());
             ApiClient api = new ApiClient("http://127.0.0.1:" + port);
             CheckCore(api, root); CheckGui(api, root);
             Console.WriteLine("PASS: " + count + " RMacro API, DPAPI, UI, authorization and independent stop assertions.");
