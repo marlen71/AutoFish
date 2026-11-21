@@ -27,6 +27,12 @@ try {
     $exitCode = [GuiSafetyRunner]::Main($directory)
     if ($exitCode -ne 0) { throw "GUI safety test failed with exit code $exitCode." }
 }
+catch {
+    $detail = ($_ | Format-List * -Force | Out-String).Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+    if ($detail.Length -gt 5000) { $detail = $detail.Substring(0, 5000) }
+    Write-Output "::error title=GUI safety harness::$detail"
+    throw
+}
 finally {
     if (Test-Path -LiteralPath $directory) { Remove-Item -LiteralPath $directory -Recurse -Force }
 }
