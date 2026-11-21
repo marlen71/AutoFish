@@ -175,15 +175,23 @@ namespace RMFish
 
         private FishingAction TryCast(CastInfo cast, long now)
         {
-            Detail = cast.Hook < 0
-                ? "Зелёная зона найдена, ищем белый крючок."
-                : String.Format("Крючок {0} · центр {1}.", cast.Hook, cast.Center);
-            int width = cast.Right - cast.Left;
-            bool inside = cast.Hook >= cast.Left + 3 && cast.Hook <= cast.Right - 3;
-            bool nearCenter = Math.Abs(cast.Hook - cast.Center) <= Math.Max(4, width / 4);
-            bool relaxed = now - phaseSince >= 10000;
-            if (cast.Hook >= 0 && inside && (nearCenter || relaxed) &&
-                (!castClicked || now - lastClick >= 350))
+            if (!cast.HasTarget)
+            {
+                Detail = "Светлый зелёный участок не найден — ожидаем, не нажимая.";
+                return FishingAction.None;
+            }
+            if (cast.Hook < 0)
+            {
+                Detail = "Светлый участок найден, ищем белый крючок.";
+                return FishingAction.None;
+            }
+            Detail = String.Format("Крючок {0} · светлый участок {1}–{2} · центр {3}.",
+                cast.Hook, cast.TargetLeft, cast.TargetRight, cast.Center);
+            // Prefer the inner portion of the observed bright target, never the
+            // broad dark-green band or a guessed position after a timeout.
+            int margin = Math.Max(2, (cast.TargetRight - cast.TargetLeft) / 6);
+            bool insideTarget = cast.Hook >= cast.TargetLeft + margin && cast.Hook <= cast.TargetRight - margin;
+            if (insideTarget && (!castClicked || now - lastClick >= 350))
             {
                 castClicked = true;
                 lastClick = now;
@@ -213,8 +221,9 @@ namespace RMFish
 
         private static string Describe(CastInfo cast, bool bite)
         {
-            string s = cast == null ? "нет" : String.Format("{0}–{1}, крючок {2}",
-                cast.Left, cast.Right, cast.Hook < 0 ? "не найден" : cast.Hook.ToString());
+            string s = cast == null ? "нет" : String.Format("зелёная {0}–{1}, светлая {2}, крючок {3}",
+                cast.Left, cast.Right, cast.HasTarget ? cast.TargetLeft + "–" + cast.TargetRight : "не найдена",
+                cast.Hook < 0 ? "не найден" : cast.Hook.ToString());
             return "Заброс: " + s + " · Вываживание: " + (bite ? "да" : "нет");
         }
     }

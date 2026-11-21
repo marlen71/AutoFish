@@ -17,20 +17,24 @@ public static class TestRunner
         if (!condition) throw new Exception("FAIL: " + message);
     }
 
+    private static byte[] FixturePixels(string name, int clientWidth)
+    {
+        using (FileStream file = File.OpenRead(Path.Combine(fixtures, name + "-" + clientWidth + ".bgra.gz")))
+        using (GZipStream gzip = new GZipStream(file, CompressionMode.Decompress))
+        using (MemoryStream output = new MemoryStream())
+        {
+            gzip.CopyTo(output);
+            return output.ToArray();
+        }
+    }
+
     private static PixelFrame Fixture(string name, int clientWidth, int clientHeight)
     {
         int left = (int)Math.Floor(PixelFrame.CropLeft * (double)clientWidth / 1920);
         int top = (int)Math.Floor(PixelFrame.CropTop * (double)clientHeight / 1080);
         int right = (int)Math.Ceiling(PixelFrame.CropRight * (double)clientWidth / 1920);
         int bottom = (int)Math.Ceiling(PixelFrame.CropBottom * (double)clientHeight / 1080);
-        byte[] pixels;
-        using (FileStream file = File.OpenRead(Path.Combine(fixtures, name + "-" + clientWidth + ".bgra.gz")))
-        using (GZipStream gzip = new GZipStream(file, CompressionMode.Decompress))
-        using (MemoryStream output = new MemoryStream())
-        {
-            gzip.CopyTo(output);
-            pixels = output.ToArray();
-        }
+        byte[] pixels = FixturePixels(name, clientWidth);
         return new PixelFrame(pixels, right - left, bottom - top, (right - left) * 4,
                               clientWidth, clientHeight, left, top);
     }
@@ -44,6 +48,16 @@ public static class TestRunner
 
     private static PixelFrame SyntheticCast(int hookX, bool redEnds)
     {
+        return SyntheticCast(hookX, redEnds, true);
+    }
+
+    private static PixelFrame SyntheticCast(int hookX, bool redEnds, bool brightTarget)
+    {
+        return SyntheticCast(hookX, redEnds, brightTarget ? 860 : -1, brightTarget ? 915 : -1);
+    }
+
+    private static PixelFrame SyntheticCast(int hookX, bool redEnds, int targetLeft, int targetRight)
+    {
         int width = PixelFrame.CropRight - PixelFrame.CropLeft;
         int height = PixelFrame.CropBottom - PixelFrame.CropTop;
         byte[] data = new byte[width * height * 4];
@@ -54,6 +68,7 @@ public static class TestRunner
                 {
                     if (redEnds) Set(data, x, y, 145, 35, 30);
                 }
+                else if (x >= targetLeft && x <= targetRight) Set(data, x, y, 20, 150, 20);
                 else Set(data, x, y, 45, 100, 45);
             }
         if (hookX >= 0)
@@ -68,6 +83,50 @@ public static class TestRunner
         return new PixelFrame(data, width, height, width * 4, 1920, 1080, PixelFrame.CropLeft, PixelFrame.CropTop);
     }
 
+    // Move the actual white hook pixels from the supplied boat screenshot onto
+    // its reconstructed bar; this is a synthetic sequence, not a game video.
+    private static PixelFrame BoatWithHook(int hookX)
+    {
+        int width = PixelFrame.CropRight - PixelFrame.CropLeft;
+        int height = PixelFrame.CropBottom - PixelFrame.CropTop;
+        byte[] original = FixturePixels("cast-boat", 1920);
+        byte[] data = (byte[])original.Clone();
+        int offset = hookX - 656;
+        for (int y = 488; y <= 521; y++)
+            for (int x = 645; x <= 665; x++)
+            {
+                int i = ((y - PixelFrame.CropTop) * width + x - PixelFrame.CropLeft) * 4;
+                int b = original[i], g = original[i + 1], r = original[i + 2];
+                bool white = r >= 200 && g >= 190 && b >= 175 &&
+                    Math.Max(r, Math.Max(g, b)) - Math.Min(r, Math.Min(g, b)) <= 65;
+                if (!white) continue;
+                if (x < 655) Set(data, x, y, 12, 18, 18);
+                else Set(data, x, y, 145, 25, 15);
+                if (hookX >= 0) Set(data, x + offset, y, r, g, b);
+            }
+        return new PixelFrame(data, width, height, width * 4, 1920, 1080, PixelFrame.CropLeft, PixelFrame.CropTop);
+    }
+
+    private static PixelFrame ScaleTo720(PixelFrame frame)
+    {
+        int left = (int)Math.Floor(PixelFrame.CropLeft * 1280.0 / 1920);
+        int top = (int)Math.Floor(PixelFrame.CropTop * 720.0 / 1080);
+        int right = (int)Math.Ceiling(PixelFrame.CropRight * 1280.0 / 1920);
+        int bottom = (int)Math.Ceiling(PixelFrame.CropBottom * 720.0 / 1080);
+        int width = right - left, height = bottom - top;
+        byte[] data = new byte[width * height * 4];
+        for (int y = 0; y < height; y++)
+            for (int x = 0; x < width; x++)
+            {
+                int r, g, b;
+                frame.Read((int)Math.Round((x + left) * 1920.0 / 1280),
+                    (int)Math.Round((y + top) * 1080.0 / 720), out r, out g, out b);
+                int i = (y * width + x) * 4;
+                data[i] = (byte)b; data[i + 1] = (byte)g; data[i + 2] = (byte)r; data[i + 3] = 255;
+            }
+        return new PixelFrame(data, width, height, width * 4, 1280, 720, left, top);
+    }
+
     private static void VisionTests()
     {
         PixelFrame cast = Fixture("cast", 1920, 1080);
@@ -76,6 +135,8 @@ public static class TestRunner
         Check(info.Left >= 740 && info.Left <= 770, "the translucent green zone starts near x=754");
         Check(info.Right >= 1000 && info.Right <= 1035, "the translucent green zone ends near x=1018");
         Check(info.Hook >= 1045 && info.Hook <= 1070, "the white hook is located in the screenshot");
+        Check(info.HasTarget && info.TargetLeft >= 855 && info.TargetLeft <= 865 &&
+            info.TargetRight >= 910 && info.TargetRight <= 922, "the brighter target is identified separately from the wide green band");
         Check(!Vision.BiteActive(cast), "the cast bar is not a bite bar");
 
         PixelFrame bite = Fixture("bite", 1920, 1080);
@@ -87,10 +148,32 @@ public static class TestRunner
         Check(Vision.FindCast(inv) == null && !Vision.BiteActive(inv), "inventory produces no actions");
         CastInfo small = Vision.FindCast(Fixture("cast", 1280, 720));
         Check(small != null && small.Hook >= 1040 && small.Hook <= 1075, "cast coordinates scale to 1280x720");
+        Check(small.HasTarget && small.TargetLeft >= 855 && small.TargetRight <= 922, "bright target scales with a 720p screenshot");
+        CastInfo boat = Vision.FindCast(Fixture("cast-boat", 1920, 1080));
+        Check(boat != null && boat.Hook >= 650 && boat.Hook <= 660, "the user's white hook on the left is recognized");
+        Check(boat.HasTarget && boat.TargetLeft >= 855 && boat.TargetLeft <= 865 &&
+            boat.TargetRight >= 910 && boat.TargetRight <= 922, "the user's bright green target is recognized over the boat");
+        CastInfo smallBoat = Vision.FindCast(Fixture("cast-boat", 1280, 720));
+        Check(smallBoat != null && smallBoat.HasTarget && smallBoat.Hook >= 650 && smallBoat.Hook <= 660,
+            "the reconstructed boat screenshot also scales to 720p");
+        for (int x = 840; x <= 930; x += 15)
+        {
+            CastInfo moved = Vision.FindCast(BoatWithHook(x));
+            Check(moved != null && moved.Hook >= x - 2 && moved.Hook <= x + 2 && moved.HasTarget,
+                "real white hook pixels remain identifiable at x=" + x + " over the translucent bar");
+        }
+        CastInfo movedSmall = Vision.FindCast(ScaleTo720(BoatWithHook(888)));
+        Check(movedSmall != null && movedSmall.HasTarget && movedSmall.Hook >= 884 && movedSmall.Hook <= 892,
+            "the white hook remains detectable over the bright target after 720p scaling");
         Check(Vision.BiteActive(Fixture("bite", 1280, 720)), "bite coordinates scale to 1280x720");
         Check(Vision.FindCast(SyntheticCast(880, false)) == null, "green without red ends is not a cast");
         CastInfo covered = Vision.FindCast(SyntheticCast(880, true));
-        Check(covered != null && covered.Hook >= 880 && covered.Hook <= 888, "hook covering the green zone does not split the zone");
+        Check(covered != null && covered.Hook >= 880 && covered.Hook <= 888 && covered.HasTarget,
+            "hook covering the bright target does not split the target or the green zone");
+        CastInfo noTarget = Vision.FindCast(SyntheticCast(880, true, false));
+        Check(noTarget != null && !noTarget.HasTarget, "a uniform green band does not invent a bright target");
+        CastInfo offCenter = Vision.FindCast(SyntheticCast(770, true, 755, 790));
+        Check(offCenter != null && !offCenter.HasTarget, "a bright green patch at the far edge is not mistaken for the centre target");
         Check(Vision.FindCast(SyntheticCast(-1, true)).Hook == -1, "a missing hook is explicitly reported");
     }
 
@@ -120,8 +203,48 @@ public static class TestRunner
 
         machine = new FishingStateMachine(options);
         machine.Step(edge, 0);
-        Check(machine.Step(edge, 30) == FishingAction.None, "edge is initially rejected");
-        Check(machine.Step(edge, 10040) == FishingAction.CastClick, "after ten seconds any safe green position works");
+        Check(machine.Step(edge, 30) == FishingAction.None, "dark green edge is rejected");
+        Check(machine.Step(edge, 10040) == FishingAction.None, "waiting never relaxes the bright-target requirement");
+        machine = new FishingStateMachine(options);
+        PixelFrame noTarget = SyntheticCast(880, true, false);
+        machine.Step(noTarget, 0);
+        Check(machine.Step(noTarget, 30) == FishingAction.None && machine.Step(noTarget, 10040) == FishingAction.None,
+            "a hook without a detected bright target never causes a blind click");
+        Check(machine.Step(noTarget, 18031) == FishingAction.Stop, "missing bright target times out safely");
+
+        // Synthetic motion made from the real white-hook sprite. The actual game
+        // speed and latency are not established by these still-image tests.
+        machine = new FishingStateMachine(options);
+        Check(machine.Step(BoatWithHook(760), 0) == FishingAction.None, "moving hook starts outside target");
+        Check(machine.Step(BoatWithHook(800), 20) == FishingAction.None, "left dark green is rejected");
+        Check(machine.Step(BoatWithHook(840), 40) == FishingAction.None, "wide green near the target is still rejected");
+        Check(machine.Step(BoatWithHook(880), 60) == FishingAction.CastClick, "moving hook in the bright centre triggers the cast");
+        machine = new FishingStateMachine(options);
+        machine.Step(BoatWithHook(1000), 0);
+        Check(machine.Step(BoatWithHook(930), 20) == FishingAction.None, "right dark green is rejected");
+        Check(machine.Step(BoatWithHook(900), 40) == FishingAction.CastClick, "the hook can enter the target from the right");
+        machine = new FishingStateMachine(options);
+        machine.Step(ScaleTo720(BoatWithHook(840)), 0);
+        Check(machine.Step(ScaleTo720(BoatWithHook(888)), 30) == FishingAction.CastClick,
+            "the centred white hook triggers the cast after 720p scaling");
+        machine = new FishingStateMachine(options);
+        machine.Step(BoatWithHook(840), 0);
+        Check(machine.Step(BoatWithHook(930), 30) == FishingAction.None, "do not guess a click when frames jump over the target");
+        for (int x = 800; x <= 970; x += 5)
+        {
+            PixelFrame full = BoatWithHook(x);
+            for (int size = 0; size <= 1; size++)
+            {
+                PixelFrame sample = size == 0 ? full : ScaleTo720(full);
+                FishingStateMachine sweep = new FishingStateMachine(options);
+                sweep.Step(sample, 0);
+                FishingAction action = sweep.Step(sample, 30);
+                if (x >= 875 && x <= 900)
+                    Check(action == FishingAction.CastClick, "centred hook is not missed in the reconstructed sweep at x=" + x + " size=" + size);
+                else if (x < 859 || x > 917)
+                    Check(action == FishingAction.None, "reconstructed sweep never clicks outside the bright strip at x=" + x + " size=" + size);
+            }
+        }
         machine = new FishingStateMachine(options);
         machine.Step(noHook, 0);
         Check(machine.Step(noHook, 30) == FishingAction.None, "no white hook means no click");
@@ -150,7 +273,7 @@ public static class TestRunner
         public int Clicks, Captures, CaptureThread, ReleaseThread, Releases;
         public int BlockAtCapture;
         public ManualResetEvent CaptureEntered, ContinueCapture, ClickEntered, ContinueClick;
-        public PixelFrame Frame;
+        public volatile PixelFrame Frame;
         public bool TryGetForeground(out GameBounds bounds, out string reason)
         {
             bounds = Focus ? new GameBounds { Handle = new IntPtr(42), Width = 1920, Height = 1080 } : null;
@@ -199,6 +322,9 @@ public static class TestRunner
 
     private static void EngineTests()
     {
+        Check(FishingEngine.NextPollDelay(20, 7, true) == 13, "casting poll accounts for capture and processing time");
+        Check(FishingEngine.NextPollDelay(20, 25, true) == 1, "a slow casting cycle yields briefly instead of adding a full poll delay");
+        Check(FishingEngine.NextPollDelay(20, 7, false) == 20, "non-casting polling cadence is unchanged");
         FakePort port = new FakePort { Frame = SyntheticCast(880, true), Focus = false };
         using (FishingEngine engine = new FishingEngine(port))
         {
@@ -225,6 +351,18 @@ public static class TestRunner
             Check(engine.WaitForStop(1000), "manual stop wakes the worker immediately");
             Check(port.Releases == 2, "each run releases its capture resources");
             Check(!engine.Snapshot().Running, "manual stop updates status");
+        }
+
+        FakePort moving = new FakePort { Frame = BoatWithHook(840), Focus = true };
+        using (FishingEngine engine = new FishingEngine(moving))
+        {
+            Check(engine.Start(new EngineOptions()), "worker starts for moving-hook test");
+            Check(WaitUntil(delegate { return moving.Captures >= 3; }, 2000), "worker sees several dark-green frames");
+            Check(moving.Clicks == 0, "worker does not click the broad green band outside the bright target");
+            moving.Frame = BoatWithHook(888);
+            Check(WaitUntil(delegate { return moving.Clicks > 0; }, 2000), "worker clicks when the white hook reaches the bright target");
+            engine.RequestStop();
+            Check(engine.WaitForStop(2000), "moving-hook worker stops normally");
         }
     }
 

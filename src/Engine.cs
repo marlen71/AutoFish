@@ -211,6 +211,15 @@ namespace RMFish
             }
         }
 
+        // While tracking a moving hook, the configured period is measured from
+        // cycle start, not added on top of capture/processing time. At least a
+        // millisecond still yields the worker, and stop can wake it at once.
+        internal static int NextPollDelay(int interval, long elapsed, bool casting)
+        {
+            if (!casting) return interval;
+            return (int)Math.Max(1L, (long)interval - Math.Max(0L, elapsed));
+        }
+
         private void Run(EngineOptions options)
         {
             FishingStateMachine machine = new FishingStateMachine(options);
@@ -220,6 +229,7 @@ namespace RMFish
             {
                 while (!stop.WaitOne(0))
                 {
+                    long cycleStarted = watch.ElapsedMilliseconds;
                     // This independent check backs up the timer if the thread
                     // pool is delayed; the limit also counts time while paused.
                     if (watch.ElapsedMilliseconds >= options.SessionLimitSeconds * 1000L)
@@ -302,7 +312,9 @@ namespace RMFish
                             break;
                         }
                     }
-                    stop.WaitOne(options.PollMilliseconds);
+                    long cycleMilliseconds = watch.ElapsedMilliseconds - cycleStarted;
+                    stop.WaitOne(NextPollDelay(options.PollMilliseconds, cycleMilliseconds,
+                        machine.Phase == FishingPhase.Casting));
                 }
             }
             catch (Exception ex)

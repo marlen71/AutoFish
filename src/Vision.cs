@@ -52,15 +52,22 @@ namespace RMFish
     {
         public int Left { get; private set; }
         public int Right { get; private set; }
-        public int Center { get { return (Left + Right) / 2; } }
+        // The narrower, brighter target inside the broad green region. -1 means
+        // it could not be identified reliably, so the worker must not click.
+        public int TargetLeft { get; private set; }
+        public int TargetRight { get; private set; }
+        public bool HasTarget { get { return TargetLeft >= 0 && TargetRight >= TargetLeft; } }
+        public int Center { get { return HasTarget ? (TargetLeft + TargetRight) / 2 : -1; } }
         // -1 means that the bar is visible but the white hook isn't reliable.
         public int Hook { get; private set; }
 
-        public CastInfo(int left, int right, int hook)
+        public CastInfo(int left, int right, int hook, int targetLeft, int targetRight)
         {
             Left = left;
             Right = right;
             Hook = hook;
+            TargetLeft = targetLeft;
+            TargetRight = targetRight;
         }
     }
 
@@ -102,16 +109,22 @@ namespace RMFish
             int n = SearchRight - SearchLeft + 1;
             bool[] green = new bool[n];
             bool[] red = new bool[n];
+            int[] chroma = new int[n], rowChroma = new int[CastRows.Length];
             for (int x = SearchLeft; x <= SearchRight; x++)
             {
                 int greens = 0, reds = 0;
-                foreach (int y in CastRows)
+                for (int row = 0; row < CastRows.Length; row++)
                 {
                     int r, g, b;
-                    frame.Read(x, y, out r, out g, out b);
+                    frame.Read(x, CastRows[row], out r, out g, out b);
                     if (CastGreen(r, g, b)) greens++;
                     if (CastRed(r, g, b)) reds++;
+                    // Relative green strength is less sensitive than raw green
+                    // brightness to the translucent background behind the HUD.
+                    rowChroma[row] = Math.Min(g - r, g - b);
                 }
+                Array.Sort(rowChroma);
+                chroma[x - SearchLeft] = rowChroma[rowChroma.Length / 2];
                 green[x - SearchLeft] = greens >= 3;
                 red[x - SearchLeft] = reds >= 3;
             }
@@ -148,12 +161,83 @@ namespace RMFish
                 if (red[x - SearchLeft]) leftRed++;
             for (int x = right + 6; x <= Math.Min(SearchRight, right + 160); x++)
                 if (red[x - SearchLeft]) rightRed++;
-            // The red ends, a wide green middle and a hook are much safer than
-            // clicking at an arbitrary green object in the game world.
+            // Red ends plus a wide green middle identify a candidate bar. The
+            // worker still requires a white hook and a bright target before clicking.
             if (leftRed < 12 || rightRed < 12) return null;
 
             int hook = FindHook(frame, Math.Max(SearchLeft, left - 160), Math.Min(SearchRight, right + 160));
-            return new CastInfo(left, right, hook);
+            int targetLeft, targetRight;
+            FindBrightTarget(green, chroma, left, right, out targetLeft, out targetRight);
+            return new CastInfo(left, right, hook, targetLeft, targetRight);
+        }
+
+        // The HUD's bright centre is substantially greener than the surrounding
+        // translucent green band. Use its local median as a baseline, rather
+        // than assuming that the whole wide green band is an accurate target.
+        private static void FindBrightTarget(bool[] green, int[] chroma, int left, int right,
+                                             out int targetLeft, out int targetRight)
+        {
+            targetLeft = targetRight = -1;
+            int zoneWidth = right - left + 1;
+            int[] levels = new int[zoneWidth];
+            int valid = 0;
+            for (int x = left; x <= right; x++)
+            {
+                int i = x - SearchLeft;
+                if (green[i]) levels[valid++] = chroma[i];
+            }
+            if (valid < 35) return;
+            Array.Sort(levels, 0, valid);
+            int baseline = levels[valid / 2];
+            int threshold = Math.Max(65, baseline + 20);
+            int start = -1, last = -1, count = 0, peak = 0, strength = 0, bestStrength = 0;
+            for (int x = left; x <= right + 27; x++)
+            {
+                bool marked = x <= right && green[x - SearchLeft] && chroma[x - SearchLeft] >= threshold;
+                if (marked)
+                {
+                    if (start < 0) { start = x; count = peak = strength = 0; }
+                    else if (x - last > 27)
+                    {
+                        ConsiderTarget(start, last, count, peak, strength, baseline, left, right,
+                            ref targetLeft, ref targetRight, ref bestStrength);
+                        start = x;
+                        count = peak = strength = 0;
+                    }
+                    last = x;
+                    count++;
+                    int level = chroma[x - SearchLeft];
+                    peak = Math.Max(peak, level);
+                    strength += level - baseline;
+                }
+                else if (start >= 0 && x - last > 27)
+                {
+                    ConsiderTarget(start, last, count, peak, strength, baseline, left, right,
+                        ref targetLeft, ref targetRight, ref bestStrength);
+                    start = -1;
+                    count = peak = strength = 0;
+                }
+            }
+            if (start >= 0)
+                ConsiderTarget(start, last, count, peak, strength, baseline, left, right,
+                    ref targetLeft, ref targetRight, ref bestStrength);
+        }
+
+        private static void ConsiderTarget(int start, int end, int count, int peak, int strength,
+                                           int baseline, int greenLeft, int greenRight,
+                                           ref int bestLeft, ref int bestRight, ref int bestStrength)
+        {
+            int width = end - start + 1, zoneWidth = greenRight - greenLeft + 1;
+            int maximumWidth = Math.Min(120, zoneWidth * 3 / 5);
+            if (width < 15 || width > maximumWidth || count < 12 || count * 100 < width * 55 ||
+                peak < baseline + 30 || Math.Abs((start + end) / 2 - (greenLeft + greenRight) / 2) > zoneWidth / 3)
+                return;
+            if (strength > bestStrength)
+            {
+                bestLeft = start;
+                bestRight = end;
+                bestStrength = strength;
+            }
         }
 
         private static void ConsiderRun(int start, int last, int count,
@@ -258,7 +342,8 @@ namespace RMFish
             CastInfo cast = FindCast(frame);
             bool bite = BiteActive(frame);
             string castText = cast == null ? "не найдена" :
-                String.Format("зелёная зона {0}–{1}, крючок {2}", cast.Left, cast.Right,
+                String.Format("зелёная зона {0}–{1}, светлый участок {2}, крючок {3}", cast.Left, cast.Right,
+                    cast.HasTarget ? cast.TargetLeft + "–" + cast.TargetRight : "не найден",
                     cast.Hook < 0 ? "не найден" : cast.Hook.ToString());
             return "Заброс: " + castText + "; вываживание: " + (bite ? "найдено" : "не найдено") + ".";
         }

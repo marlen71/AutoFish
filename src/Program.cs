@@ -7,8 +7,8 @@ using System.Windows.Forms;
 [assembly: AssemblyDescription("RMFish — визуальная автоматизация рыбалки для RMRP")]
 [assembly: AssemblyProduct("RMFish")]
 [assembly: AssemblyVersion("1.27.0.0")]
-[assembly: AssemblyFileVersion("1.27.0.2")]
-[assembly: AssemblyInformationalVersion("1.27.0-beta.2")]
+[assembly: AssemblyFileVersion("1.27.0.3")]
+[assembly: AssemblyInformationalVersion("1.27.0-beta.3")]
 
 namespace RMFish
 {

@@ -343,7 +343,7 @@ namespace RMFish
 
             AddLabel(page, "ЭТАПЫ РЫБАЛКИ", 32, 274, 250, 24, 8.5f, Theme.Muted, FontStyle.Bold);
             AddLabel(page, "АВТОМАТИЧЕСКИЙ ЦИКЛ", 612, 274, 196, 24, 8f, Theme.Muted, FontStyle.Bold);
-            castStage = new StageCard("01", "Заброс", "Крючок в зелёной зоне");
+            castStage = new StageCard("01", "Заброс", "Крючок в светлой зоне");
             waitStage = new StageCard("02", "Ожидание клёва", "Следим за шкалой");
             reelStage = new StageCard("03", "Вываживание", "Кликаем, пока она видна");
             castStage.SetBounds(32, 306, 250, 103);
@@ -739,7 +739,7 @@ namespace RMFish
             hotF9 = WindowsNative.RegisterHotKey(Handle, HotF9, NoRepeat, 0x78);
             hotF10 = WindowsNative.RegisterHotKey(Handle, HotF10, NoRepeat, 0x79);
             if (hotF8 && hotF9 && hotF10)
-                hotkeyLabel.Text = "F9  ·  проверка экрана\nВерсия 1.27 beta.2";
+                hotkeyLabel.Text = "F9  ·  проверка экрана\nВерсия 1.27 beta.3";
             else
             {
                 hotkeyLabel.Text = "Часть клавиш занята.\nПроверьте F10 в игре.";
