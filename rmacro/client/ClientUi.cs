@@ -506,7 +506,7 @@ namespace RMacro
             { fishForm.WindowState = FormWindowState.Normal; fishForm.Show(); fishForm.Activate(); return; }
             CloseProduct("Повторная проверка доступа. Запрошена остановка.");
             SetBusy(true); statusTitle.Text = "Проверяем доступ…"; int expected = generation;
-            ApiClient current = api; string currentToken = token;
+            ApiClient current = api; string currentToken = token; bool refreshAfterFailure = false;
             try
             {
                 LeaseInfo initial = await Task.Run(delegate { return current.Authorize(currentToken, device, "rmfish"); });
@@ -554,7 +554,7 @@ namespace RMacro
                 if (!closing && expected == generation)
                 {
                     if (ex.Status == 401) { store.Delete(); api = null; token = null; profile = null; generation++; ShowLogin("Сессия завершена. Войдите заново."); }
-                    else { MessageBox.Show(this, ex.Message, "RMacro", MessageBoxButtons.OK, MessageBoxIcon.Warning); await RefreshProfileAsync(); }
+                    else { MessageBox.Show(this, ex.Message, "RMacro", MessageBoxButtons.OK, MessageBoxIcon.Warning); refreshAfterFailure = true; }
                 }
                 if (fishForm != null) CloseProduct("Не удалось открыть RMFish. Запрошена остановка.");
                 else if (drainingFish == null) ReleaseFishMutex();
@@ -566,6 +566,7 @@ namespace RMacro
                 if (!closing && expected == generation) MessageBox.Show(this, "Не удалось открыть RMFish: " + ex.Message, "RMacro", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally { if (!closing) { SetBusy(false); UpdateProfileView(); } }
+            if (refreshAfterFailure && !closing && expected == generation) await RefreshProfileAsync();
         }
 
         private bool AcquireFishMutex()
