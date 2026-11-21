@@ -18,6 +18,7 @@ internal static class RMacroTestRunner
     private const string Admin = "fixture_admin", AdminPassword = "fixture-admin-password";
     private static readonly string Device = new string('a', 64);
     private static readonly string OtherDevice = new string('b', 64);
+    private static void Trace(string stage) { Console.WriteLine("STAGE: " + stage); Console.Out.Flush(); }
     private static void Check(bool value, string message)
     { count++; if (!value) throw new Exception("Assertion failed: " + message); }
     private static T Find<T>(Control root, string name) where T : Control
@@ -83,6 +84,7 @@ internal static class RMacroTestRunner
         try { new ApiClient("https://user:pass@example.com"); throw new Exception("Credentials in URL accepted"); }
         catch (ApiException ex) { Check(ex.Code == "BAD_ADDRESS", "URL credentials must be rejected"); }
         Check(new ApiClient("https://example.com").BaseUrl == "https://example.com", "HTTPS address rejected");
+        Trace("API login");
         string token;
         Profile profile = api.Login(User, UserPassword, Device, out token);
         Check(profile.Uid > 0 && profile.Username == User, "login profile/UID");
@@ -90,6 +92,7 @@ internal static class RMacroTestRunner
         Check(api.GetProfile(token, Device).Uid == profile.Uid, "saved token profile");
         try { api.GetProfile(token, OtherDevice); throw new Exception("wrong device accepted"); }
         catch (ApiException ex) { Check(ex.Status == 401, "session must be bound to the device"); }
+        Trace("DPAPI persistence");
         string sessionDir = Path.Combine(root, "session-test");
         SessionStore store = new SessionStore(sessionDir); store.Save(api.BaseUrl, token);
         SavedSession saved = store.Load();
@@ -97,6 +100,7 @@ internal static class RMacroTestRunner
         Check(!Encoding.UTF8.GetString(File.ReadAllBytes(Path.Combine(sessionDir, "session.dat"))).Contains(token), "token stored in plaintext");
         store.Save(api.BaseUrl, token); Check(store.Load() != null, "atomic session replacement");
         store.Delete(); Check(store.Load() == null, "logout deletes session");
+        Trace("lease and remote reset");
         string admin = AdminToken(api);
         LeaseInfo initial = api.Authorize(token, Device, "rmfish");
         using (ManualResetEvent stopped = new ManualResetEvent(false))
@@ -107,6 +111,7 @@ internal static class RMacroTestRunner
             Check(stopped.WaitOne(5000), "remote HWID reset must revoke a running lease");
             Check(!monitor.IsValid, "revoked lease remains denied");
         }
+        Trace("offline grace");
         using (ManualResetEvent stopped = new ManualResetEvent(false))
         using (ProductLease offline = new ProductLease(new LeaseInfo { ServerTime = 1000, ExpiresAt = 2000 },
             delegate { throw new ApiException(0, "NETWORK", "offline"); }, delegate(string reason) { stopped.Set(); }, 1200, 250))
@@ -118,6 +123,7 @@ internal static class RMacroTestRunner
     }
     private static void CheckGui(ApiClient api, string root)
     {
+        Trace("open login window");
         string local = Path.Combine(root, "profile", "RMacro");
         Directory.CreateDirectory(local);
         using (LoaderForm first = new LoaderForm(local, Device))
@@ -129,6 +135,7 @@ internal static class RMacroTestRunner
             Find<TextBox>(first, "usernameEditor").Text = User;
             Find<TextBox>(first, "passwordEditor").Text = UserPassword;
             Find<TextBox>(first, "serverEditor").Text = api.BaseUrl;
+            Trace("submit GUI login");
             Find<SoftButton>(first, "loginButton").PerformClick();
             WaitUntil(delegate { return Find<Control>(first, "dashboardPage").Visible; }, 12000,
                 "login: " + Find<Label>(first, "loginMessage").Text);
@@ -136,11 +143,13 @@ internal static class RMacroTestRunner
             Check(Find<Label>(first, "warningText").Text.Contains("RMFish"), "soon-expiring subscription warning");
             Check(Find<Label>(first, "uidValue").Text.Length >= 8, "UID shown");
             Check(new SessionStore(local).Load() != null, "remembered login saved");
+            Trace("GUI login complete");
             Capture(first, true, "02-products");
             first.Close(); Application.DoEvents();
         }
         using (LoaderForm restored = new LoaderForm(local, Device))
         {
+            Trace("restore saved session");
             restored.Show();
             WaitUntil(delegate { return Find<Control>(restored, "dashboardPage").Visible; }, 12000, "automatic login");
             Check(Find<Label>(restored, "warningText").Text.Contains("Скоро"), "warning shown on saved login");
@@ -148,17 +157,21 @@ internal static class RMacroTestRunner
             Check(Find<Control>(restored, "profilePage").Visible, "profile navigation");
             Check(Find<DarkLogBox>(restored, "subscriptionList").Editor.Text.Contains("RMFish"), "profile lists product");
             Find<SoftButton>(restored, "navProducts").PerformClick();
+            Trace("open embedded product");
             Find<SoftButton>(restored, "launchButton").PerformClick();
             WaitUntil(delegate { MainForm fish = Field<MainForm>(restored, "fishForm"); return fish != null && fish.Visible; }, 12000, "embedded RMFish opens");
+            Trace("product window opened");
             MainForm product = Field<MainForm>(restored, "fishForm");
             ProductLease lease = Field<ProductLease>(restored, "lease");
             Check(lease.IsValid, "active GUI lease");
             Check(!File.Exists(Path.Combine(local, "Runtime", "RMFish.exe")) && !File.Exists(Path.Combine(local, "Runtime", "RMFish.ps1")), "no separate executable or source script installed");
             PowerButton start = Find<PowerButton>(product, "powerButton");
             Check(start != null && start.Enabled, "RMFish power control is available");
+            Trace("start worker");
             start.PerformClick();
             FishingEngine engine = Field<FishingEngine>(product, "engine");
             WaitUntil(delegate { return engine.Snapshot().Running; }, 5000, "RMFish worker starts without GTA5");
+            Trace("revoke worker from server");
             string admin = AdminToken(api); long uid = Field<Profile>(restored, "profile").Uid;
             Reset(api, admin, uid);
             MethodInfo renew = typeof(ProductLease).GetMethod("Renew", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -171,6 +184,7 @@ internal static class RMacroTestRunner
             MethodInfo startFishing = typeof(MainForm).GetMethod("StartFishing", BindingFlags.Instance | BindingFlags.NonPublic);
             startFishing.Invoke(product, null); Application.DoEvents();
             Check(!engine.Snapshot().Running, "revoked F8/start path cannot restart");
+            Trace("logout and close");
             product.Close(); Application.DoEvents();
             Find<SoftButton>(restored, "logoutButton").PerformClick(); Application.DoEvents();
             Check(new SessionStore(local).Load() == null, "logout clears remembered session");

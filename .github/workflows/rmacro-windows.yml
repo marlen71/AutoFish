@@ -42,12 +42,14 @@ jobs:
           }
 
       - name: Test Windows login, DPAPI, embedded product and revoked access
+        timeout-minutes: 3
         shell: powershell
         env:
           RMACRO_UI_SCREENSHOTS: ${{ runner.temp }}/rmacro-screenshots
         run: .\rmacro\tests\Smoke-RMacro.ps1
 
       - name: Test the administrator UI in Chrome
+        timeout-minutes: 4
         shell: powershell
         env:
           RMACRO_UI_SCREENSHOTS: ${{ runner.temp }}/rmacro-screenshots

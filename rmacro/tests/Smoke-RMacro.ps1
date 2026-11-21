@@ -4,6 +4,7 @@ $pythonCommand = Get-Command python -ErrorAction Stop
 $python = $pythonCommand.Source
 $directory = Join-Path ([IO.Path]::GetTempPath()) ('rmacro-test-' + [Guid]::NewGuid().ToString('N'))
 $fixture = $null
+$guiProcess = $null
 $oldPort = $env:RMACRO_TEST_PORT
 try {
     New-Item -ItemType Directory -Path $directory | Out-Null
@@ -49,8 +50,18 @@ try {
     $compile += $sources
     & $csc @compile
     if ($LASTEXITCODE -ne 0) { throw "GUI test compilation failed: $LASTEXITCODE" }
-    & $testExe
-    if ($LASTEXITCODE -ne 0) { throw "RMacro GUI/API test failed: $LASTEXITCODE" }
+    $guiOut = Join-Path $directory 'gui-out.txt'
+    $guiErr = Join-Path $directory 'gui-err.txt'
+    $guiProcess = Start-Process -FilePath $testExe -RedirectStandardOutput $guiOut -RedirectStandardError $guiErr -PassThru
+    if (-not $guiProcess.WaitForExit(60000)) {
+        Stop-Process -Id $guiProcess.Id -Force -ErrorAction SilentlyContinue
+        $detail = ((Get-Content $guiOut -Raw -ErrorAction SilentlyContinue) + "`n" + (Get-Content $guiErr -Raw -ErrorAction SilentlyContinue) + "`nServer:" + (Get-Content $stderr -Raw -ErrorAction SilentlyContinue))
+        throw "GUI test timed out. $detail"
+    }
+    $guiOutput = (Get-Content $guiOut -Raw -ErrorAction SilentlyContinue)
+    $guiError = (Get-Content $guiErr -Raw -ErrorAction SilentlyContinue)
+    Write-Host $guiOutput
+    if ($guiProcess.ExitCode -ne 0) { throw "RMacro GUI/API test failed: $($guiProcess.ExitCode). $guiOutput $guiError" }
 
     # Exercise the same Windows BAT that the interactive setup/start wrappers use,
     # and take a consistent backup while the fixture server is running.
@@ -69,6 +80,7 @@ catch {
 }
 finally {
     $env:RMACRO_TEST_PORT = $oldPort
+    if ($guiProcess) { $guiProcess.Refresh(); if (-not $guiProcess.HasExited) { Stop-Process -Id $guiProcess.Id -Force } }
     if ($fixture) { $fixture.Refresh(); if (-not $fixture.HasExited) { Stop-Process -Id $fixture.Id -Force } }
     if (Test-Path -LiteralPath $directory) { Remove-Item -LiteralPath $directory -Recurse -Force -ErrorAction SilentlyContinue }
 }

@@ -483,17 +483,21 @@ namespace RMacro
                 if (item.Code != "rmfish") list.Append("   ·   запуск пока не поддерживается");
             }
             profileList.SetContent(list.Length == 0 ? "Нет продуктов." : list.ToString());
-            if (soonCount > 0)
+            if (!String.IsNullOrEmpty(persistentNotice))
+            {
+                warningText.Text = "!   " + persistentNotice;
+                warningText.ForeColor = Theme.Warn; warningCard.Stroke = Color.FromArgb(110, 88, 53);
+            }
+            else if (soonCount > 0)
             {
                 warningText.Text = "!   Скоро закончится: " + warning + (soonCount > 2 ? " и ещё " + (soonCount - 2) + " (см. профиль)" : "") + ". Проверьте срок подписки.";
                 warningText.ForeColor = Theme.Warn; warningCard.Stroke = Color.FromArgb(110, 88, 53);
             }
             else
             {
-                warningText.Text = !String.IsNullOrEmpty(persistentNotice) ? "!   " + persistentNotice : active ?
-                    "◆   Подписка подтверждена. Перед рыбалкой проверьте F10 в игре." :
+                warningText.Text = active ? "◆   Подписка подтверждена. Перед рыбалкой проверьте F10 в игре." :
                     "◆   Подписку для RMFish может добавить администратор.";
-                warningText.ForeColor = String.IsNullOrEmpty(persistentNotice) ? Theme.Muted : Theme.Warn;
+                warningText.ForeColor = Theme.Muted;
                 warningCard.Stroke = Color.FromArgb(35, 77, 69);
             }
             warningCard.Invalidate();
@@ -505,6 +509,7 @@ namespace RMacro
             if (fishForm != null && !fishForm.IsDisposed && lease != null && lease.IsValid)
             { fishForm.WindowState = FormWindowState.Normal; fishForm.Show(); fishForm.Activate(); return; }
             CloseProduct("Повторная проверка доступа. Запрошена остановка.");
+            persistentNotice = null;
             SetBusy(true); statusTitle.Text = "Проверяем доступ…"; int expected = generation;
             ApiClient current = api; string currentToken = token; bool refreshAfterFailure = false;
             try
@@ -513,7 +518,8 @@ namespace RMacro
                 if (closing || expected != generation) return;
                 if (!AcquireFishMutex())
                 {
-                    MessageBox.Show(this, "RMFish уже открыт. Закройте существующий экземпляр перед запуском через RMacro.", "RMacro", MessageBoxButtons.OK, MessageBoxIcon.Information); return;
+                    persistentNotice = "RMFish уже открыт или ещё останавливается. Закройте предыдущий экземпляр.";
+                    connectionText.Text = persistentNotice; return;
                 }
                 Directory.CreateDirectory(Path.Combine(localDirectory, "Runtime"));
                 ProductLease currentLease = null; MainForm currentForm = null;
@@ -554,7 +560,7 @@ namespace RMacro
                 if (!closing && expected == generation)
                 {
                     if (ex.Status == 401) { store.Delete(); api = null; token = null; profile = null; generation++; ShowLogin("Сессия завершена. Войдите заново."); }
-                    else { MessageBox.Show(this, ex.Message, "RMacro", MessageBoxButtons.OK, MessageBoxIcon.Warning); refreshAfterFailure = true; }
+                    else { persistentNotice = ex.Message; connectionText.Text = ex.Message; refreshAfterFailure = true; }
                 }
                 if (fishForm != null) CloseProduct("Не удалось открыть RMFish. Запрошена остановка.");
                 else if (drainingFish == null) ReleaseFishMutex();
@@ -563,7 +569,7 @@ namespace RMacro
             {
                 if (fishForm != null) CloseProduct("Не удалось открыть RMFish. Запрошена остановка.");
                 else if (drainingFish == null) ReleaseFishMutex();
-                if (!closing && expected == generation) MessageBox.Show(this, "Не удалось открыть RMFish: " + ex.Message, "RMacro", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                if (!closing && expected == generation) { persistentNotice = "Не удалось открыть RMFish: " + ex.Message; connectionText.Text = persistentNotice; }
             }
             finally { if (!closing) { SetBusy(false); UpdateProfileView(); } }
             if (refreshAfterFailure && !closing && expected == generation) await RefreshProfileAsync();
