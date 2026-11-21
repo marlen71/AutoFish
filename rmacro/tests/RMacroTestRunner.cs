@@ -14,6 +14,7 @@ using RMacro;
 internal static class RMacroTestRunner
 {
     private static int count;
+    private static Control uiDispatcher;
     private const string User = "fixture_user", UserPassword = "fixture-user-password";
     private const string Admin = "fixture_admin", AdminPassword = "fixture-admin-password";
     private static readonly string Device = new string('a', 64);
@@ -32,7 +33,7 @@ internal static class RMacroTestRunner
         Stopwatch clock = Stopwatch.StartNew();
         while (clock.ElapsedMilliseconds < milliseconds)
         {
-            Application.DoEvents(); if (test()) return; Thread.Sleep(20);
+            if (test()) return; Thread.Sleep(20);
         }
         throw new Exception("Timed out: " + reason);
     }
@@ -121,84 +122,150 @@ internal static class RMacroTestRunner
             Check(!offline.IsValid, "offline lease remains denied");
         }
     }
-    private static void CheckGui(ApiClient api, string root)
+    // Use a real WinForms message loop, just like production. The test thread
+    // can deliberately block it to prove the lease stop remains independent.
+    private sealed class UiHost : IDisposable
+    {
+        public LoaderForm Form;
+        private readonly ApplicationContext context;
+
+        public UiHost(ApplicationContext context, string directory)
+        {
+            this.context = context;
+            // Creation must be dispatched to the UI thread; supplied context is
+            // serviced by the single Application.Run on Main's STA thread.
+            if (uiDispatcher == null) throw new Exception("UI dispatcher unavailable");
+            uiDispatcher.Invoke((MethodInvoker)delegate
+            {
+                Form = new LoaderForm(directory, Device);
+                context.MainForm = Form;
+                Form.Show();
+            });
+        }
+        public void Run(Action<LoaderForm> action)
+        {
+            Form.Invoke((MethodInvoker)delegate { action(Form); });
+        }
+        public T Value<T>(Func<LoaderForm, T> action)
+        {
+            T value = default(T);
+            Run(delegate(LoaderForm form) { value = action(form); });
+            return value;
+        }
+        public void Dispose()
+        {
+            Run(delegate(LoaderForm f) { context.MainForm = null; f.Close(); });
+        }
+    }
+
+    private static void TraceUi(LoaderForm form)
+    {
+        Profile data = Field<Profile>(form, "profile");
+        Label warning = Find<Label>(form, "warningText"), login = Find<Label>(form, "loginMessage");
+        Trace("UI state: busy=" + Field<bool>(form, "busy") + " dashboard=" + Find<Control>(form, "dashboardPage").Visible +
+            " login=" + Find<Control>(form, "loginPage").Visible + " profile=" + (data != null) +
+            " bannerBytes=" + Convert.ToBase64String(Encoding.UTF8.GetBytes(warning.Text)) +
+            " loginBytes=" + Convert.ToBase64String(Encoding.UTF8.GetBytes(login.Text)));
+    }
+
+    private static void CheckGui(ApiClient api, string root, ApplicationContext context)
     {
         Trace("open login window");
         string local = Path.Combine(root, "profile", "RMacro");
         Directory.CreateDirectory(local);
-        using (LoaderForm first = new LoaderForm(local, Device))
+        using (UiHost first = new UiHost(context, local))
         {
-            first.Show(); Application.DoEvents();
-            Check(first.FormBorderStyle == FormBorderStyle.None, "branded title bar");
-            Check(Find<Control>(first, "loginPage").Visible, "login page opens first");
-            Capture(first, false, "01-login");
-            Find<TextBox>(first, "usernameEditor").Text = User;
-            Find<TextBox>(first, "passwordEditor").Text = UserPassword;
-            Find<TextBox>(first, "serverEditor").Text = api.BaseUrl;
-            Trace("submit GUI login");
-            Find<SoftButton>(first, "loginButton").PerformClick();
-            WaitUntil(delegate { return Find<Control>(first, "dashboardPage").Visible && !Field<bool>(first, "busy"); }, 12000,
-                "login did not complete");
-            Check(Find<TextBox>(first, "passwordEditor").Text.Length == 0, "password remains in input");
-            string banner = Find<Label>(first, "warningText").Text;
-            string loginStatus = Find<Label>(first, "loginMessage").Text;
-            Check(banner.Contains("RMFish"), "soon-expiring subscription warning; banner length=" + banner.Length +
-                "; login length=" + loginStatus.Length + "; profile=" + (Field<Profile>(first, "profile") != null));
-            Check(Find<Label>(first, "uidValue").Text.Length >= 8, "UID shown");
-            Check(new SessionStore(local).Load() != null, "remembered login saved");
-            Trace("GUI login complete");
-            Capture(first, true, "02-products");
-            first.Close(); Application.DoEvents();
+            first.Run(delegate(LoaderForm form)
+            {
+                Check(form.FormBorderStyle == FormBorderStyle.None, "branded title bar");
+                Check(Find<Control>(form, "loginPage").Visible, "login page opens first");
+                Check(!Find<Control>(form, "dashboardPage").Visible, "dashboard must be hidden before login");
+                Capture(form, false, "01-login");
+                Find<TextBox>(form, "usernameEditor").Text = User;
+                Find<TextBox>(form, "passwordEditor").Text = UserPassword;
+                Find<TextBox>(form, "serverEditor").Text = api.BaseUrl;
+                Trace("submit GUI login");
+                Find<SoftButton>(form, "loginButton").PerformClick();
+            });
+            WaitUntil(delegate { return first.Value(delegate(LoaderForm f) { return Find<Control>(f, "dashboardPage").Visible && !Field<bool>(f, "busy"); }); }, 12000, "login did not complete");
+            first.Run(delegate(LoaderForm form)
+            {
+                Check(Find<TextBox>(form, "passwordEditor").Text.Length == 0, "password remains in input");
+                string banner = Find<Label>(form, "warningText").Text;
+                Check(banner.Contains("RMFish"), "soon-expiring subscription warning; banner length=" + banner.Length);
+                Check(Find<Label>(form, "uidValue").Text.Length >= 8, "UID shown");
+                Check(new SessionStore(local).Load() != null, "remembered login saved");
+                Trace("GUI login complete"); Capture(form, true, "02-products");
+            });
         }
-        using (LoaderForm restored = new LoaderForm(local, Device))
+        Trace("restore saved session");
+        using (UiHost restored = new UiHost(context, local))
         {
-            Trace("restore saved session");
-            restored.Show();
-            WaitUntil(delegate { return Find<Control>(restored, "dashboardPage").Visible && !Field<bool>(restored, "busy"); }, 12000, "automatic login");
-            Check(Find<Label>(restored, "warningText").Text.Contains("Скоро"), "warning shown on saved login");
-            Find<SoftButton>(restored, "navProfile").PerformClick();
-            Check(Find<Control>(restored, "profilePage").Visible, "profile navigation");
-            Check(Find<DarkLogBox>(restored, "subscriptionList").Editor.Text.Contains("RMFish"), "profile lists product");
-            Find<SoftButton>(restored, "navProducts").PerformClick();
-            Trace("open embedded product");
-            Find<SoftButton>(restored, "launchButton").PerformClick();
-            WaitUntil(delegate { MainForm fish = Field<MainForm>(restored, "fishForm"); return fish != null && fish.Visible; }, 12000, "embedded RMFish opens");
+            try { WaitUntil(delegate { return restored.Value(delegate(LoaderForm f) { return Find<Control>(f, "dashboardPage").Visible && !Field<bool>(f, "busy"); }); }, 12000, "automatic login"); }
+            catch { restored.Run(TraceUi); throw; }
+            restored.Run(delegate(LoaderForm form)
+            {
+                Check(Find<Label>(form, "warningText").Text.Contains("Скоро"), "warning shown on saved login");
+                Find<SoftButton>(form, "navProfile").PerformClick();
+                Check(Find<Control>(form, "profilePage").Visible, "profile navigation");
+                Check(Find<DarkLogBox>(form, "subscriptionList").Editor.Text.Contains("RMFish"), "profile lists product");
+                Find<SoftButton>(form, "navProducts").PerformClick();
+                Trace("open embedded product"); Find<SoftButton>(form, "launchButton").PerformClick();
+            });
+            WaitUntil(delegate { return restored.Value(delegate(LoaderForm f) { MainForm fish = Field<MainForm>(f, "fishForm"); return fish != null && fish.Visible; }); }, 12000, "embedded RMFish opens");
             Trace("product window opened");
-            MainForm product = Field<MainForm>(restored, "fishForm");
-            ProductLease lease = Field<ProductLease>(restored, "lease");
+            MainForm product = restored.Value(delegate(LoaderForm f) { return Field<MainForm>(f, "fishForm"); });
+            ProductLease lease = restored.Value(delegate(LoaderForm f) { return Field<ProductLease>(f, "lease"); });
             Check(lease.IsValid, "active GUI lease");
             Check(!File.Exists(Path.Combine(local, "Runtime", "RMFish.exe")) && !File.Exists(Path.Combine(local, "Runtime", "RMFish.ps1")), "no separate executable or source script installed");
-            PowerButton start = Find<PowerButton>(product, "powerButton");
-            Check(start != null && start.Enabled, "RMFish power control is available");
-            Trace("start worker");
-            start.PerformClick();
             FishingEngine engine = Field<FishingEngine>(product, "engine");
+            restored.Run(delegate(LoaderForm form)
+            {
+                PowerButton start = Find<PowerButton>(product, "powerButton");
+                Check(start != null && start.Enabled, "RMFish power control is available");
+                Trace("start worker"); start.PerformClick();
+            });
             WaitUntil(delegate { return engine.Snapshot().Running; }, 5000, "RMFish worker starts without GTA5");
-            Trace("revoke worker from server");
-            string admin = AdminToken(api); long uid = Field<Profile>(restored, "profile").Uid;
-            Reset(api, admin, uid);
-            Trace("reset returned");
-            MethodInfo renew = typeof(ProductLease).GetMethod("Renew", BindingFlags.Instance | BindingFlags.NonPublic);
-            Check(renew != null, "lease renew method");
-            Thread renewal = new Thread(delegate() { renew.Invoke(lease, null); }); renewal.IsBackground = true; renewal.Start();
-            Trace("renewal started; UI blocked");
-            // Do not pump the UI: the lease callback must stop the worker independently.
-            Check(renewal.Join(7000), "lease renewal while UI blocked");
-            Trace("renewal returned");
-            Check(!lease.IsValid, "reset revokes lease while UI is blocked");
-            Check(engine.WaitForStop(5000), "revocation requested an independent worker stop");
-            Trace("worker stopped");
+            long uid = restored.Value(delegate(LoaderForm f) { return Field<Profile>(f, "profile").Uid; });
             MethodInfo startFishing = typeof(MainForm).GetMethod("StartFishing", BindingFlags.Instance | BindingFlags.NonPublic);
-            startFishing.Invoke(product, null);
-            Trace("revoked F8 path returned");
-            Application.DoEvents();
-            Trace("UI messages processed after revoke");
-            Check(!engine.Snapshot().Running, "revoked F8/start path cannot restart");
+            using (ManualResetEvent blocked = new ManualResetEvent(false))
+            using (ManualResetEvent release = new ManualResetEvent(false))
+            using (ManualResetEvent f8Complete = new ManualResetEvent(false))
+            {
+                Exception f8Error = null;
+                restored.Form.BeginInvoke((MethodInvoker)delegate
+                {
+                    blocked.Set();
+                    try { release.WaitOne(); startFishing.Invoke(product, null); }
+                    catch (Exception ex) { f8Error = ex; }
+                    finally { f8Complete.Set(); }
+                });
+                Check(blocked.WaitOne(5000), "UI could not be blocked");
+                try
+                {
+                    Trace("revoke worker from server while UI blocked");
+                    string admin = AdminToken(api); Reset(api, admin, uid);
+                    MethodInfo renew = typeof(ProductLease).GetMethod("Renew", BindingFlags.Instance | BindingFlags.NonPublic);
+                    Check(renew != null, "lease renew method");
+                    Thread renewal = new Thread(delegate() { renew.Invoke(lease, null); }); renewal.IsBackground = true; renewal.Start();
+                    Check(renewal.Join(7000), "lease renewal while UI blocked");
+                    Check(!lease.IsValid, "reset revokes lease while UI is blocked");
+                    Check(engine.WaitForStop(5000), "revocation requested an independent worker stop");
+                    Trace("worker stopped while UI blocked");
+                }
+                finally { release.Set(); }
+                Check(f8Complete.WaitOne(7000), "F8 gate check did not return");
+                if (f8Error != null) throw new Exception("F8 gate test failed", f8Error);
+                Check(!engine.Snapshot().Running, "revoked F8/start path cannot restart");
+            }
             Trace("logout and close");
-            product.Close(); Application.DoEvents();
-            Find<SoftButton>(restored, "logoutButton").PerformClick(); Application.DoEvents();
+            restored.Run(delegate(LoaderForm form)
+            {
+                if (!product.IsDisposed) product.Close();
+                if (Find<Control>(form, "dashboardPage").Visible) Find<SoftButton>(form, "logoutButton").PerformClick();
+            });
+            WaitUntil(delegate { return new SessionStore(local).Load() == null; }, 7000, "logout clears remembered session");
             Check(new SessionStore(local).Load() == null, "logout clears remembered session");
-            restored.Close(); Application.DoEvents();
         }
     }
     [STAThread]
@@ -211,11 +278,30 @@ internal static class RMacroTestRunner
             string port = Environment.GetEnvironmentVariable("RMACRO_TEST_PORT");
             if (String.IsNullOrEmpty(port)) throw new Exception("RMACRO_TEST_PORT is required");
             Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
-            // The production program runs Application.Run. This harness pumps
-            // messages manually, so explicitly install the UI synchronization context.
-            SynchronizationContext.SetSynchronizationContext(new WindowsFormsSynchronizationContext());
             ApiClient api = new ApiClient("http://127.0.0.1:" + port);
-            CheckCore(api, root); CheckGui(api, root);
+            CheckCore(api, root);
+            using (ApplicationContext context = new ApplicationContext())
+            {
+                Exception uiError = null;
+                using (ManualResetEvent finished = new ManualResetEvent(false))
+                using (Control dispatcher = new Control())
+                {
+                    dispatcher.CreateControl(); uiDispatcher = dispatcher;
+                    dispatcher.BeginInvoke((MethodInvoker)delegate
+                    {
+                        Thread tester = new Thread(delegate()
+                        {
+                            try { CheckGui(api, root, context); }
+                            catch (Exception ex) { uiError = ex; }
+                            finally { finished.Set(); dispatcher.BeginInvoke((MethodInvoker)delegate { context.ExitThread(); }); }
+                        });
+                        tester.IsBackground = true; tester.Start();
+                    });
+                    Application.Run(context);
+                    if (!finished.WaitOne(10000)) throw new Exception("GUI test did not finish");
+                    if (uiError != null) throw new Exception("GUI integration failed", uiError);
+                }
+            }
             Console.WriteLine("PASS: " + count + " RMacro API, DPAPI, UI, authorization and independent stop assertions.");
             Console.WriteLine("No real GTA5 or physical keyboard was tested.");
             return 0;
