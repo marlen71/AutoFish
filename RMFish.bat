@@ -1,8 +1,12 @@
 @echo off
 setlocal
 cd /d "%~dp0"
+if exist "%~dp0RMFish.exe" (
+    start "" "%~dp0RMFish.exe"
+    exit /b 0
+)
 if not exist "%~dp0RMFish.ps1" (
-    echo RMFish.ps1 was not found. Extract the complete program folder.
+    echo RMFish.exe and RMFish.ps1 were not found. Extract the complete program folder.
     pause
     exit /b 1
 )

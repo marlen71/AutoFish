@@ -61,6 +61,10 @@ jobs:
             }
           }
 
+      - name: Check the BAT EXE launcher
+        shell: powershell
+        run: .\tests\Smoke-ExeBat.ps1
+
       - name: Check the PowerShell source launcher
         shell: powershell
         run: .\tests\Smoke-Source.ps1
@@ -86,6 +90,7 @@ jobs:
           $assets = Join-Path $env:RUNNER_TEMP 'rmfish-assets'
           New-Item -ItemType Directory -Path $stage, $assets -Force | Out-Null
           Copy-Item 'dist\RMFish.exe' (Join-Path $stage 'RMFish.exe')
+          Copy-Item 'RMFish.bat' (Join-Path $stage 'RMFish.bat')
           Copy-Item 'STOP.bat' (Join-Path $stage 'STOP.bat')
           Copy-Item 'EMERGENCY-STOP.bat' (Join-Path $stage 'EMERGENCY-STOP.bat')
           $instruction = (Get-Content 'docs\INSTRUCTIONS.txt' -Raw -Encoding UTF8).Replace("`r`n", "`n").Replace("`n", "`r`n")
