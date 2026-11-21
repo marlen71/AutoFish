@@ -32,7 +32,14 @@ jobs:
 
       - name: Build the single-file RMacro loader
         shell: powershell
-        run: .\Build-RMacro.ps1
+        run: |
+          try { .\Build-RMacro.ps1 }
+          catch {
+            $detail = ($_ | Format-List * -Force | Out-String).Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            if ($detail.Length -gt 5000) { $detail = $detail.Substring(0, 5000) }
+            Write-Output "::error title=RMacro build::$detail"
+            throw
+          }
 
       - name: Test Windows login, DPAPI, embedded product and revoked access
         shell: powershell

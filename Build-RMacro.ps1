@@ -38,6 +38,18 @@ $arguments = @(
 )
 foreach ($reference in $references) { $arguments += "/reference:$reference" }
 $arguments += $sources
-& $csc @arguments
-if ($LASTEXITCODE -ne 0) { throw "RMacro compilation failed with exit code $LASTEXITCODE." }
+# Emit the compiler diagnostics as an Actions annotation as well as a log,
+# so a failed Windows build can be diagnosed even when log download is blocked.
+$previousPreference = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+$compilerOutput = & $csc @arguments 2>&1
+$compilerExit = $LASTEXITCODE
+$ErrorActionPreference = $previousPreference
+foreach ($line in $compilerOutput) { Write-Host $line }
+if ($compilerExit -ne 0) {
+    $detail = (($compilerOutput | Out-String).Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A'))
+    if ($detail.Length -gt 8000) { $detail = $detail.Substring(0, 8000) }
+    Write-Output "::error title=RMacro compiler::$detail"
+    throw "RMacro compilation failed with exit code $compilerExit."
+}
 Write-Host "Built $output"
