@@ -65,6 +65,11 @@ jobs:
         shell: powershell
         run: .\rmacro\tests\Smoke-Updater.ps1
 
+      - name: Test real GitHub metadata and loader download without installation
+        timeout-minutes: 3
+        shell: powershell
+        run: .\rmacro\tests\Smoke-UpdateNetwork.ps1
+
       - name: Test Windows login, DPAPI, embedded product and revoked access
         timeout-minutes: 3
         shell: powershell
