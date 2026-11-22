@@ -22,7 +22,8 @@ namespace RMFish
             Font = new Font("Segoe UI", 9f);
             Label title = new Label(); title.Text = "Автоотход при окончании рыбы"; title.SetBounds(18, 14, 570, 28);
             title.Font = new Font("Segoe UI", 12f, FontStyle.Bold); Controls.Add(title);
-            enabled = new CheckBox(); enabled.Text = "Включить автоотход (по умолчанию выключен)";
+            enabled = new CheckBox(); enabled.Name = "relocationEnabled";
+            enabled.Text = "Включить автоотход (по умолчанию выключен)";
             enabled.Checked = autoEnabled; enabled.SetBounds(20, 50, 570, 27); Controls.Add(enabled);
             Label warning = new Label(); warning.SetBounds(20, 83, 580, 78);
             warning.ForeColor = Theme.Warn;
@@ -32,15 +33,19 @@ namespace RMFish
             steps.Text = "Для работы нужны два образца при одинаковом разрешении: точная надпись об окончании рыбы и три элемента инвентаря. Пока их нет, запуск с автоотходом заблокирован.";
             Controls.Add(steps);
             Button notice = MakeButton("1. Записать уведомление · " + (hasNotice ? "готово" : "нет"), 20, 235, 330);
+            notice.Name = "recordNotice";
             notice.Click += delegate { Command = "notice"; DialogResult = DialogResult.OK; Close(); };
-            rightButton = new CheckBox(); rightButton.Text = "Удочку открывать правой кнопкой мыши";
+            rightButton = new CheckBox(); rightButton.Name = "rodRightButton";
+            rightButton.Text = "Удочку открывать правой кнопкой мыши";
             rightButton.Checked = rodRight; rightButton.SetBounds(20, 282, 570, 28); Controls.Add(rightButton);
             Button gear = MakeButton("2. Записать удочку и наживку · " + (hasGear ? "готово" : "нет"), 20, 315, 330);
+            gear.Name = "recordGear";
             gear.Click += delegate { Command = "gear"; DialogResult = DialogResult.OK; Close(); };
             Label hint = new Label(); hint.SetBounds(20, 359, 580, 35); hint.ForeColor = Theme.Muted;
             hint.Text = "При записи переключитесь в игру и следуйте инструкции F9. При несовпадении элемента клики остановятся.";
             Controls.Add(hint);
             Button save = MakeButton("Сохранить и закрыть", 20, 400, 190);
+            save.Name = "saveRelocation";
             save.Click += delegate { Command = "save"; DialogResult = DialogResult.OK; Close(); };
             Button cancel = MakeButton("Отмена", 218, 400, 115);
             cancel.DialogResult = DialogResult.Cancel;
@@ -90,7 +95,8 @@ namespace RMFish
             BitmapData bits = image.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
             try { Marshal.Copy(data, 0, bits.Scan0, data.Length); }
             finally { image.UnlockBits(bits); }
-            preview = new PictureBox(); preview.Image = image; preview.SetBounds(12, 54, width, height);
+            preview = new PictureBox(); preview.Name = "noticePreview";
+            preview.Image = image; preview.SetBounds(12, 54, width, height);
             preview.Cursor = Cursors.Cross;
             preview.MouseDown += delegate(object sender, MouseEventArgs e)
             {
@@ -111,7 +117,8 @@ namespace RMFish
                     using (Pen pen = new Pen(Color.Yellow, 2)) e.Graphics.DrawRectangle(pen, Selection());
             };
             Controls.Add(preview);
-            Button save = new Button(); save.Text = "Сохранить образец"; save.SetBounds(12, 466, 185, 32); Controls.Add(save);
+            Button save = new Button(); save.Name = "saveNotice"; save.Text = "Сохранить образец";
+            save.SetBounds(12, 466, 185, 32); Controls.Add(save);
             save.Click += delegate
             {
                 try

@@ -204,6 +204,64 @@ public static class GuiSafetyRunner
         Find<SoftButton>(form, "navigation0").PerformClick();
     }
 
+    private static void SimulateMouse(Control control, string method, int x, int y)
+    {
+        MethodInfo handler = typeof(Control).GetMethod(method, BindingFlags.Instance | BindingFlags.NonPublic);
+        Check(handler != null, "mouse handler missing: " + method);
+        handler.Invoke(control, new object[] { new MouseEventArgs(MouseButtons.Left, 1, x, y, 0) });
+    }
+
+    // Exercise the opt-in setup and the rectangle-selection UI with a synthetic
+    // image. This deliberately sends no input to GTA5 and does not calibrate on
+    // the real, still-unknown fish-depleted notification.
+    private static void CheckRelocationUi(MainForm form, FishingEngine engine)
+    {
+        using (RelocationSetupForm dialog = new RelocationSetupForm(false, true, false, false))
+        {
+            dialog.Show(form);
+            CheckLayout(dialog);
+            Check(!dialog.AutoEnabled && dialog.RodRightButton, "relocation did not default to off");
+            Check(Find<Button>(dialog, "recordNotice").Text.Contains("нет") &&
+                Find<Button>(dialog, "recordGear").Text.Contains("нет"), "missing calibration was not displayed");
+            Find<CheckBox>(dialog, "relocationEnabled").Checked = true;
+            Find<CheckBox>(dialog, "rodRightButton").Checked = false;
+            Find<Button>(dialog, "saveRelocation").PerformClick();
+            Check(dialog.Command == "save" && dialog.AutoEnabled && !dialog.RodRightButton,
+                "relocation choices were not saved from the dialog");
+        }
+
+        int width = 620, height = 400;
+        byte[] pixels = new byte[width * height * 4];
+        for (int y = 640; y < 660; y++)
+            for (int x = 90; x < 190; x++)
+                if ((x / 3 + y / 4) % 3 != 0)
+                {
+                    int i = ((y - 600) * width + x) * 4;
+                    pixels[i] = pixels[i + 1] = pixels[i + 2] = pixels[i + 3] = 255;
+                }
+        PixelFrame frame = new PixelFrame(pixels, width, height, width * 4, 1920, 1080, 0, 600);
+        using (NoticeSelectionForm dialog = new NoticeSelectionForm(frame))
+        {
+            dialog.Show(form);
+            CheckLayout(dialog);
+            PictureBox preview = Find<PictureBox>(dialog, "noticePreview");
+            SimulateMouse(preview, "OnMouseDown", 80, 30);
+            SimulateMouse(preview, "OnMouseMove", 200, 70);
+            SimulateMouse(preview, "OnMouseUp", 200, 70);
+            Find<Button>(dialog, "saveNotice").PerformClick();
+            Check(dialog.Result != null && dialog.Result.Matches(frame), "synthetic notice selection did not save a matching mask");
+        }
+
+        FieldInfo mode = typeof(MainForm).GetField("calibrationMode", BindingFlags.Instance | BindingFlags.NonPublic);
+        MethodInfo stop = typeof(MainForm).GetMethod("HandleEmergency", BindingFlags.Instance | BindingFlags.NonPublic);
+        Check(mode != null && stop != null, "calibration safety hooks are missing");
+        mode.SetValue(form, 1);
+        Find<PowerButton>(form, "powerButton").PerformClick();
+        Check(!engine.Snapshot().Running, "fishing started during a calibration");
+        stop.Invoke(form, new object[] { EmergencySignal.F10, true });
+        Check((int)mode.GetValue(form) == 0, "F10 did not cancel calibration");
+    }
+
     private static void CheckWindowDrag(MainForm form)
     {
         Point origin = Point.Empty;
@@ -269,7 +327,7 @@ public static class GuiSafetyRunner
             Check(field != null, "engine field is missing");
             FishingEngine engine = (FishingEngine)field.GetValue(form);
 
-            form.Invoke((MethodInvoker)delegate { CheckMenu(form); });
+            form.Invoke((MethodInvoker)delegate { CheckMenu(form); CheckRelocationUi(form, engine); });
             CheckWindowDrag(form);
             form.Invoke((MethodInvoker)delegate { Find<PowerButton>(form, "powerButton").PerformClick(); });
             Check(WaitUntil(delegate { return engine.Snapshot().Running && engine.Snapshot().Phase == FishingPhase.Paused; }, 5000),
@@ -354,7 +412,7 @@ public static class GuiSafetyRunner
             }
         }
         if (result == 0)
-            Console.WriteLine("::notice title=GUI safety::PASS: custom window, drag/minimize/close, settings, themed journal, start/stop, and synthetic F9/F10 with the UI blocked. No GTA5 or physical keyboard was tested.");
+            Console.WriteLine("::notice title=GUI safety::PASS: custom window, drag/minimize/close, settings, experimental calibration dialogs, synthetic notice selection and F10 cancellation, start/stop, and F9/F10 with the UI blocked. No GTA5 or physical keyboard was tested.");
         return result;
     }
 }

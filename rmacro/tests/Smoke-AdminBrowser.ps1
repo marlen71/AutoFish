@@ -27,7 +27,7 @@ try {
     $env:NODE_PATH = Join-Path $nodeHome 'node_modules'
     & node (Join-Path $PSScriptRoot 'AdminBrowser.js')
     if ($LASTEXITCODE -ne 0) { throw "Admin browser smoke failed: $LASTEXITCODE" }
-    Write-Output '::notice title=RMacro admin UI::PASS: Chrome exercised admin login, users, subscriptions, device reset, password, blocking and mobile logout.'
+    Write-Output '::notice title=RMacro admin UI::PASS: Chrome exercised admin session restore after F5, network retry, revocation/logout, storage denial, and the admin CRUD and mobile UI.'
 }
 finally {
     $env:RMACRO_TEST_PORT = $oldPort; $env:NODE_PATH = $oldNode; $env:RMACRO_CHROME_PATH = $oldChrome

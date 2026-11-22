@@ -2,6 +2,26 @@
 (() => {
   const $ = id => document.getElementById(id);
   let token = '', adminName = '', selected = null, users = [], games = [], products = [], keys = [], serverTime = 0, searchTimer;
+  const sessionKey = 'eternal-core.admin-session.v1';
+  const validToken = value => typeof value === 'string' && /^[A-Za-z0-9_-]{40,64}$/.test(value);
+  const validName = value => typeof value === 'string' && /^[A-Za-z0-9_.-]{3,32}$/.test(value);
+  // A tab-scoped token survives F5, but no password is retained. Storage can
+  // be disabled by the browser; in that case login still works for this page.
+  function clearSavedSession() { try { sessionStorage.removeItem(sessionKey); } catch (_) {} }
+  function saveSession() {
+    try { sessionStorage.setItem(sessionKey, JSON.stringify({token, name:adminName})); return true; }
+    catch (_) { return false; }
+  }
+  function savedSession() {
+    let raw;
+    try { raw = sessionStorage.getItem(sessionKey); } catch (_) { return null; }
+    if (!raw) return null;
+    try {
+      const value = raw.length <= 1024 && JSON.parse(raw);
+      if (value && validToken(value.token) && validName(value.name)) return value;
+    } catch (_) {}
+    clearSavedSession(); return null;
+  }
   const labels = {admin_login:'Вход администратора',create_user:'Создан аккаунт',create_product:'Добавлен макрос',update_product:'Изменён макрос',create_game:'Добавлена игра',
     'reset-hwid':'Сброшена привязка устройства',password:'Изменён пароль',profile_password:'Пароль изменён в лоадере',admin_reset_password:'Пароль администратора сброшен',
     rename_user:'Изменён логин',create_key:'Создан ключ',activate_key:'Активирован ключ',disable_key:'Ключ отключён',enable_key:'Ключ включён',
@@ -14,21 +34,25 @@
   if (location.protocol === 'https:') text($('transport-note'),'HTTPS включён. Используйте доверенный сертификат и ограничьте доступ к панели.');
   const defaultDeadline = new Date(Date.now() + 7 * 86400000);
   $('key-deadline').value = new Date(defaultDeadline.getTime() - defaultDeadline.getTimezoneOffset() * 60000).toISOString().slice(0,16);
-  async function api(path, body) {
-    const headers = {}; if (token) headers.Authorization = 'Bearer ' + token;
+  async function api(path, body, explicitToken) {
+    const requestToken = explicitToken === undefined ? token : explicitToken;
+    const headers = {}; if (requestToken) headers.Authorization = 'Bearer ' + requestToken;
     const options = {method: body === undefined ? 'GET' : 'POST', headers, cache:'no-store', credentials:'omit', redirect:'error'};
     if (body !== undefined) { headers['Content-Type'] = 'application/json'; options.body = JSON.stringify(body); }
     let response;
     try { response = await fetch(path, options); } catch (_) { throw new Error('Сервер недоступен. Проверьте соединение.'); }
     let data = {}; try { data = await response.json(); } catch (_) { throw new Error('Некорректный ответ сервера.'); }
     if (!response.ok) {
-      if (response.status === 401 && token && path !== '/api/admin/login') { showLogin(); }
-      throw new Error(data.message || 'Ошибка сервера.');
+      if (response.status === 401 && requestToken && token === requestToken && path !== '/api/admin/login') {
+        showLogin(); error($('login-message'), data.message || 'Сессия завершена. Войдите заново.');
+      }
+      const failure = new Error(data.message || 'Ошибка сервера.'); failure.status = response.status; throw failure;
     }
     return data;
   }
   function showLogin() {
-    token = ''; selected = null; users = []; games = []; products = []; keys = [];
+    clearSavedSession(); token = ''; adminName = ''; selected = null; users = []; games = []; products = []; keys = [];
+    error($('login-message'),'');
     $('login-view').hidden = false; $('app-view').hidden = true; $('admin-password').value = '';
     $('key-value').value = ''; $('created-key').hidden = true; $('new-password').value = ''; $('user-password').value = '';
   }
@@ -130,16 +154,21 @@
     }
   }
   async function loadUsers() {
-    const data = await api('/api/admin/users?q=' + encodeURIComponent($('search').value)); users = data.users; renderUsers(); renderDetail();
+    const expected = token;
+    const data = await api('/api/admin/users?q=' + encodeURIComponent($('search').value));
+    if (!expected || token !== expected) return;
+    users = data.users; renderUsers(); renderDetail();
   }
   async function refresh() {
+    const expected = token; if (!expected) return;
     error($('app-message'),'');
     try {
       const [userData, gameData, productData, keyData, auditData] = await Promise.all([
         api('/api/admin/users?q=' + encodeURIComponent($('search').value)), api('/api/admin/games'), api('/api/admin/products'), api('/api/admin/keys'), api('/api/admin/audit')]);
+      if (token !== expected) return;
       users = userData.users; games = gameData.games; products = productData.products; keys = keyData.keys; serverTime = keyData.server_time;
       renderUsers(); renderDetail(); renderProducts(); renderKeys(); renderAudit(auditData.events);
-    } catch (e) { error($('app-message'), e.message); }
+    } catch (e) { if (token === expected) error($('app-message'), e.message); }
   }
   async function change(action, body, success) {
     if (!selected) return;
@@ -151,10 +180,26 @@
   }
   $('login-form').addEventListener('submit', async event => {
     event.preventDefault(); error($('login-message'),''); const button = event.submitter || event.target.querySelector('button'); button.disabled = true;
-    try { adminName = $('admin-login').value.trim(); const data = await api('/api/admin/login',{username:adminName,password:$('admin-password').value}); token=data.token; $('admin-password').value=''; showApp(); await refresh(); }
-    catch (e) { error($('login-message'),e.message); } finally { button.disabled=false; }
+    try {
+      const name = $('admin-login').value.trim();
+      const data = await api('/api/admin/login',{username:name,password:$('admin-password').value});
+      if (!validName(name) || !validToken(data.token)) throw new Error('Некорректный ответ сервера при входе.');
+      adminName = name; token = data.token; const saved = saveSession();
+      $('admin-password').value=''; showApp(); await refresh();
+      if (!saved && token === data.token) error($('app-message'),'Браузер запрещает хранить сессию вкладки: после обновления страницы потребуется вход.');
+    } catch (e) { error($('login-message'),e.message); } finally { button.disabled=false; }
   });
-  $('logout').addEventListener('click',async () => { try { await api('/api/admin/logout',{}); } catch (_) {} showLogin(); });
+  $('logout').addEventListener('click',async () => {
+    const previous = token;
+    // Always forget locally immediately, even if the server is unreachable.
+    showLogin();
+    if (!previous) return;
+    try { await api('/api/admin/logout',{},previous); }
+    catch (e) {
+      if (!token && e.status !== 401)
+        error($('login-message'),'Вход на этом компьютере удалён, но сервер не подтвердил выход. Серверная сессия может действовать до 12 часов.');
+    }
+  });
   $('refresh').addEventListener('click',refresh);
   $('search').addEventListener('input',() => { clearTimeout(searchTimer); searchTimer=setTimeout(() => loadUsers().catch(e => error($('app-message'),e.message)),250); });
   $('create-user').addEventListener('submit',async event => {
@@ -224,4 +269,26 @@
     event.preventDefault(); const username=$('rename-user').value.trim();
     if (confirm('Изменить логин? UID и подписки сохранятся, текущие сеансы завершатся.')) { $('rename-user').value=''; change('rename',{username},'Логин изменён; UID и подписки сохранены.'); }
   });
+
+  async function restoreSession() {
+    const saved = savedSession(); if (!saved) return;
+    token = saved.token; adminName = saved.name;
+    text($('login-message'), 'Проверяем сохранённый вход…');
+    try {
+      // Existing authenticated endpoint works with old servers too. Do not
+      // show the dashboard until the server accepts this saved token.
+      const data = await api('/api/admin/users?q=' + encodeURIComponent($('search').value));
+      if (token !== saved.token) return;
+      users = data.users; showApp(); renderUsers(); renderDetail(); await refresh();
+    } catch (e) {
+      if (token === saved.token) {
+        // A transient network failure is not a logout. Keep sessionStorage so
+        // the same tab can retry by refreshing when the server is reachable.
+        token = ''; adminName = '';
+        error($('login-message'), 'Не удалось проверить сохранённый вход. Проверьте связь и обновите страницу. ' + e.message);
+      }
+      // A 401 already cleared storage and displayed the server's message.
+    }
+  }
+  restoreSession();
 })();
