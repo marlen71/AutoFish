@@ -27,8 +27,14 @@ try {
     if (-not (Test-Path -LiteralPath $ready)) { throw 'Fixture server did not start.' }
     $env:RMACRO_TEST_PORT = (Get-Content -LiteralPath $ready -Raw).Trim()
     $configured = Join-Path $directory 'configured\RMacro.exe'
-    & $python (Join-Path $root 'rmacro\server\server.py') configure-client --source (Join-Path $root 'dist\RMacro.exe') --output $configured --url "http://127.0.0.1:$env:RMACRO_TEST_PORT"
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $configured)) { throw 'Failed to configure the released loader EXE.' }
+    $ErrorActionPreference = 'Continue'
+    $configOutput = & $python (Join-Path $root 'rmacro\server\server.py') configure-client --source (Join-Path $root 'dist\RMacro.exe') --output $configured --url "http://127.0.0.1:$env:RMACRO_TEST_PORT" 2>&1
+    $configExit = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+    foreach ($line in $configOutput) { Write-Host $line }
+    if ($configExit -ne 0 -or -not (Test-Path -LiteralPath $configured)) {
+        throw "Failed to configure the released loader EXE (exit $configExit): $($configOutput | Out-String)"
+    }
     $env:RMACRO_CONFIGURED_EXE = $configured
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
