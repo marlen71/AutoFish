@@ -806,4 +806,13 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    # On Windows an English console or redirected stdout can use a legacy
+    # codepage that cannot encode Russian messages. Do not fail after a file
+    # or database operation just because a status message cannot be printed.
+    # The supplied BAT files use UTF-8; legacy redirections get escaped text.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="backslashreplace")
+        except (AttributeError, OSError, ValueError):
+            pass
     sys.exit(main())

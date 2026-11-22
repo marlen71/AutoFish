@@ -1,9 +1,12 @@
 """HTTP and SQLite integration tests; no external packages or real credentials."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sqlite3
 import struct
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -293,6 +296,14 @@ class MigrationAndConfigurationTests(unittest.TestCase):
                 with self.assertRaises(ValueError): srv.validate_loader_url(bad)
             old = base / "old.exe"; old.write_bytes(b"MZlegacy")
             with self.assertRaises(ValueError): srv.configure_loader(old, base / "bad.exe", "https://example.com")
+            # An English Windows console/redirect may not represent Russian
+            # status text. File creation must still exit successfully.
+            environment = dict(os.environ, PYTHONIOENCODING="cp1252")
+            third = base / "third.exe"
+            result = subprocess.run([sys.executable, str(SERVER_PATH), "configure-client", "--source", str(original),
+                "--output", str(third), "--url", "https://example.com"], env=environment, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(third.exists())
 
 
 if __name__ == "__main__":
