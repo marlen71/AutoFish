@@ -260,6 +260,9 @@ class MigrationAndConfigurationTests(unittest.TestCase):
                 db.execute("INSERT INTO products VALUES(?,?,?)", ("other","Другой",1))
                 db.execute("INSERT INTO subscriptions VALUES(?,?,?)", (42,"rmfish",srv.unix_now()+7200))
                 db.execute("INSERT INTO sessions VALUES(?,?,?,?,?)", (srv.token_hash(token),42,device,srv.unix_now()+7200,1))
+            # sqlite's context manager commits but does not close; Windows
+            # cannot remove a temporary database while this handle is open.
+            db.close()
             migrated = srv.Database(path)
             self.assertEqual(migrated.authenticate(token, device)["uid"], 42)
             self.assertEqual(migrated.authorize(42,"rmfish")["code"], "rmfish")

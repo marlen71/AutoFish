@@ -26,9 +26,20 @@ jobs:
       - name: Test server, SQLite, users, subscriptions, and HWID
         shell: powershell
         run: |
+          $ErrorActionPreference = 'Continue'
+          $output = & python -m unittest discover -s rmacro/tests -v 2>&1
+          $testExit = $LASTEXITCODE
           $ErrorActionPreference = 'Stop'
-          & python -m unittest discover -s rmacro/tests -v
-          if ($LASTEXITCODE -ne 0) { throw 'Server integration tests failed.' }
+          foreach ($line in $output) { Write-Host $line }
+          if ($testExit -ne 0) {
+            # The tail contains unittest tracebacks and remains available as a
+            # check annotation if Actions log downloads are unavailable.
+            $detail = ($output | Out-String)
+            if ($detail.Length -gt 8000) { $detail = $detail.Substring($detail.Length - 8000) }
+            $detail = $detail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=RMacro server tests::$detail"
+            throw "Server integration tests failed: $testExit"
+          }
 
       - name: Build the single-file RMacro loader
         shell: powershell
