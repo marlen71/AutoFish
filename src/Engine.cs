@@ -214,6 +214,11 @@ namespace RMFish
         // While tracking a moving hook, the configured period is measured from
         // cycle start, not added on top of capture/processing time. At least a
         // millisecond still yields the worker, and stop can wake it at once.
+        // A moving hook needs a shorter sampling period than an idle screen.
+        // This caps only the casting phase; all other settings stay unchanged.
+        internal static int EffectivePollPeriod(int configured, bool casting)
+        { return casting ? Math.Min(configured, 15) : configured; }
+
         internal static int NextPollDelay(int interval, long elapsed, bool casting)
         {
             if (!casting) return interval;
@@ -313,8 +318,8 @@ namespace RMFish
                         }
                     }
                     long cycleMilliseconds = watch.ElapsedMilliseconds - cycleStarted;
-                    stop.WaitOne(NextPollDelay(options.PollMilliseconds, cycleMilliseconds,
-                        machine.Phase == FishingPhase.Casting));
+                    bool casting = machine.Phase == FishingPhase.Casting;
+                    stop.WaitOne(NextPollDelay(EffectivePollPeriod(options.PollMilliseconds, casting), cycleMilliseconds, casting));
                 }
             }
             catch (Exception ex)

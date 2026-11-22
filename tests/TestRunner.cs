@@ -107,6 +107,54 @@ public static class TestRunner
         return new PixelFrame(data, width, height, width * 4, 1920, 1080, PixelFrame.CropLeft, PixelFrame.CropTop);
     }
 
+    // The user supplied only the HUD crop, not a full screen: place it at the
+    // expected reference coordinates and move its actual hook pixels. This is
+    // a synthetic sweep, not evidence of in-game timing or HUD placement.
+    private static PixelFrame UserBarWithHook(int hookX, double brightness)
+    {
+        int width = PixelFrame.CropRight - PixelFrame.CropLeft;
+        int height = PixelFrame.CropBottom - PixelFrame.CropTop;
+        byte[] original = FixturePixels("cast-user", 1920), data = (byte[])original.Clone();
+        for (int y = 488; y <= 521; y++)
+            for (int x = 776; x <= 797; x++)
+            {
+                int source = ((y - PixelFrame.CropTop) * width + 774 - PixelFrame.CropLeft) * 4;
+                int dest = ((y - PixelFrame.CropTop) * width + x - PixelFrame.CropLeft) * 4;
+                Array.Copy(original, source, data, dest, 4);
+            }
+        if (hookX >= 0)
+        {
+            for (int y = 488; y <= 521; y++)
+                for (int x = 776; x <= 797; x++)
+                {
+                    int i = ((y - PixelFrame.CropTop) * width + x - PixelFrame.CropLeft) * 4;
+                    int b = original[i], g = original[i + 1], r = original[i + 2];
+                    if (r >= 200 && g >= 190 && b >= 175 && Math.Max(r, Math.Max(g, b)) - Math.Min(r, Math.Min(g, b)) <= 65)
+                        Set(data, x + hookX - 785, y, r, g, b);
+                }
+        }
+        for (int y = 486; y <= 523; y++)
+            for (int x = 655; x < 1122; x++)
+            {
+                int i = ((y - PixelFrame.CropTop) * width + x - PixelFrame.CropLeft) * 4;
+                data[i] = (byte)(data[i] * brightness); data[i + 1] = (byte)(data[i + 1] * brightness); data[i + 2] = (byte)(data[i + 2] * brightness);
+            }
+        return new PixelFrame(data, width, height, width * 4, 1920, 1080, PixelFrame.CropLeft, PixelFrame.CropTop);
+    }
+
+    private static PixelFrame ShiftCast(PixelFrame frame, int offset)
+    {
+        int width = PixelFrame.CropRight - PixelFrame.CropLeft;
+        int height = PixelFrame.CropBottom - PixelFrame.CropTop;
+        byte[] data = new byte[width * height * 4];
+        for (int y = 488; y <= 521; y++)
+            for (int x = 620; x <= 1160; x++)
+            {
+                int r, g, b; frame.Read(x - offset, y, out r, out g, out b); Set(data, x, y, r, g, b);
+            }
+        return new PixelFrame(data, width, height, width * 4, 1920, 1080, PixelFrame.CropLeft, PixelFrame.CropTop);
+    }
+
     private static PixelFrame ScaleTo720(PixelFrame frame)
     {
         int left = (int)Math.Floor(PixelFrame.CropLeft * 1280.0 / 1920);
@@ -165,6 +213,21 @@ public static class TestRunner
         CastInfo movedSmall = Vision.FindCast(ScaleTo720(BoatWithHook(888)));
         Check(movedSmall != null && movedSmall.HasTarget && movedSmall.Hook >= 884 && movedSmall.Hook <= 892,
             "the white hook remains detectable over the bright target after 720p scaling");
+        CastInfo user = Vision.FindCast(Fixture("cast-user", 1920, 1080));
+        Check(user != null && user.HasTarget && user.Hook >= 780 && user.Hook <= 795 &&
+            user.TargetLeft >= 850 && user.TargetRight <= 925, "new user screenshot recognizes the hook and the central bright patch");
+        foreach (double brightness in new double[] { 1.0, 0.85, 0.70 })
+        {
+            PixelFrame frame = UserBarWithHook(890, brightness);
+            foreach (PixelFrame sample in new PixelFrame[] { frame, ScaleTo720(frame) })
+            {
+                CastInfo dimmed = Vision.FindCast(sample);
+                Check(dimmed != null && dimmed.HasTarget && dimmed.Hook >= 884 && dimmed.Hook <= 897,
+                    "dimmed user hook is detected at " + brightness + " for " + (sample == frame ? "1080p" : "720p"));
+            }
+            CastInfo missingHook = Vision.FindCast(UserBarWithHook(-1, brightness));
+            Check(missingHook != null && missingHook.Hook < 0, "pale border alone is not a hook at brightness " + brightness);
+        }
         Check(Vision.BiteActive(Fixture("bite", 1280, 720)), "bite coordinates scale to 1280x720");
         Check(Vision.FindCast(SyntheticCast(880, false)) == null, "green without red ends is not a cast");
         CastInfo covered = Vision.FindCast(SyntheticCast(880, true));
@@ -245,6 +308,44 @@ public static class TestRunner
                     Check(action == FishingAction.None, "reconstructed sweep never clicks outside the bright strip at x=" + x + " size=" + size);
             }
         }
+        foreach (double brightness in new double[] { 1.0, 0.85, 0.70 })
+        {
+            for (int size = 0; size < 2; size++)
+            {
+                PixelFrame outside = UserBarWithHook(840, brightness), inside = UserBarWithHook(890, brightness);
+                if (size == 1) { outside = ScaleTo720(outside); inside = ScaleTo720(inside); }
+                machine = new FishingStateMachine(options);
+                machine.Step(outside, 0);
+                Check(machine.Step(outside, 20) == FishingAction.None, "dimmed user hook outside bright patch must not click");
+                Check(machine.Step(inside, 40) == FishingAction.CastClick, "dimmed user hook inside bright patch clicks");
+            }
+        }
+        // A visually confirmed target may survive a brief occlusion, but it
+        // must not survive a different bar, a missing bar, a pause or age-out.
+        machine = new FishingStateMachine(options);
+        machine.Step(SyntheticCast(800, true), 0);
+        Check(machine.Step(SyntheticCast(880, true, false), 20) == FishingAction.None, "one target frame is not enough to establish memory");
+        machine = new FishingStateMachine(options);
+        machine.Step(SyntheticCast(800, true), 0); machine.Step(SyntheticCast(830, true), 20);
+        Check(machine.Step(SyntheticCast(-1, true, false), 40) == FishingAction.None, "remembered target without a visible hook never clicks");
+        Check(machine.Step(SyntheticCast(880, true, false), 40) == FishingAction.CastClick, "temporarily occluded verified target stays usable");
+        machine = new FishingStateMachine(options);
+        machine.Step(SyntheticCast(800, true), 0); machine.Step(SyntheticCast(830, true), 20);
+        Check(machine.Step(SyntheticCast(880, true, false), 220) == FishingAction.CastClick, "memory remains valid through its 200 millisecond boundary");
+        machine = new FishingStateMachine(options);
+        machine.Step(SyntheticCast(800, true), 0); machine.Step(SyntheticCast(830, true), 20);
+        Check(machine.Step(SyntheticCast(880, true, false), 221) == FishingAction.None, "old target is never used after the short window");
+        machine = new FishingStateMachine(options);
+        machine.Step(SyntheticCast(800, true), 0); machine.Step(SyntheticCast(830, true), 20);
+        Check(machine.Step(ShiftCast(SyntheticCast(845, true, false), 35), 40) == FishingAction.None, "target is not reused on a shifted bar");
+        machine = new FishingStateMachine(options);
+        machine.Step(SyntheticCast(800, true), 0); machine.Step(SyntheticCast(830, true), 20); machine.Pause();
+        machine.Step(SyntheticCast(880, true, false), 40);
+        Check(machine.Step(SyntheticCast(880, true, false), 60) == FishingAction.None, "pause clears target memory");
+        machine = new FishingStateMachine(options);
+        machine.Step(SyntheticCast(800, true), 0); machine.Step(SyntheticCast(830, true), 20); machine.Step(wait, 30);
+        Check(machine.Step(SyntheticCast(880, true, false), 40) == FishingAction.None, "missing bar clears target memory");
+
         machine = new FishingStateMachine(options);
         machine.Step(noHook, 0);
         Check(machine.Step(noHook, 30) == FishingAction.None, "no white hook means no click");
@@ -322,6 +423,9 @@ public static class TestRunner
 
     private static void EngineTests()
     {
+        Check(FishingEngine.EffectivePollPeriod(20, true) == 15 && FishingEngine.EffectivePollPeriod(150, true) == 15,
+            "casting temporarily increases sampling frequency");
+        Check(FishingEngine.EffectivePollPeriod(150, false) == 150, "configured non-casting polling is respected");
         Check(FishingEngine.NextPollDelay(20, 7, true) == 13, "casting poll accounts for capture and processing time");
         Check(FishingEngine.NextPollDelay(20, 25, true) == 1, "a slow casting cycle yields briefly instead of adding a full poll delay");
         Check(FishingEngine.NextPollDelay(20, 7, false) == 20, "non-casting polling cadence is unchanged");

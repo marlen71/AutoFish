@@ -18,6 +18,7 @@ import re
 import secrets
 import sqlite3
 import ssl
+import struct
 import sys
 import threading
 import time
@@ -108,8 +109,12 @@ class Database:
                     disabled INTEGER NOT NULL DEFAULT 0 CHECK (disabled IN (0,1)),
                     hwid_hash TEXT, created_at INTEGER NOT NULL
                 );
-                CREATE TABLE IF NOT EXISTS products (
+                CREATE TABLE IF NOT EXISTS games (
                     code TEXT PRIMARY KEY, name TEXT NOT NULL, created_at INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS products (
+                    code TEXT PRIMARY KEY, name TEXT NOT NULL, created_at INTEGER NOT NULL,
+                    game_code TEXT NOT NULL DEFAULT 'gta5' REFERENCES games(code)
                 );
                 CREATE TABLE IF NOT EXISTS subscriptions (
                     uid INTEGER NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
@@ -134,7 +139,19 @@ class Database:
                     uid INTEGER, details TEXT NOT NULL DEFAULT ''
                 );
             """)
-            db.execute("INSERT OR IGNORE INTO products(code,name,created_at) VALUES(?,?,?)", ("rmfish", "RMFish", unix_now()))
+            # Upgrade an existing beta.1 database in place without changing
+            # user IDs, sessions, subscriptions, or product codes. Serialize
+            # concurrent initializations before inspecting and altering schema.
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("INSERT OR IGNORE INTO games(code,name,created_at) VALUES(?,?,?)", ("gta5", "GTA5 · RMRP", unix_now()))
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(products)")}
+            if "game_code" not in columns:
+                # SQLite permits an added REFERENCES column only with a NULL
+                # default. Immediately backfill it inside this transaction.
+                db.execute("ALTER TABLE products ADD COLUMN game_code TEXT REFERENCES games(code)")
+            db.execute("UPDATE products SET game_code='gta5' WHERE game_code IS NULL")
+            db.execute("INSERT OR IGNORE INTO products(code,name,created_at,game_code) VALUES(?,?,?,?)",
+                       ("rmfish", "RMFish", unix_now(), "gta5"))
             db.commit()
         try:
             os.chmod(str(self.path), 0o600)
@@ -179,11 +196,16 @@ class Database:
                    (unix_now(), actor, action, uid, details[:200]))
 
     @staticmethod
+    def games_for(db):
+        return [dict(row) for row in db.execute("SELECT code,name FROM games ORDER BY name COLLATE NOCASE,code")]
+
+    @staticmethod
     def products_for(db, uid, now):
-        rows = db.execute("""SELECT p.code,p.name,s.expires_at FROM products p
+        rows = db.execute("""SELECT p.code,p.name,p.game_code,g.name AS game_name,s.expires_at FROM products p
+            JOIN games g ON g.code=p.game_code
             LEFT JOIN subscriptions s ON s.product_code=p.code AND s.uid=? ORDER BY p.code""", (uid,)).fetchall()
-        return [{"code": r["code"], "name": r["name"], "expires_at": r["expires_at"],
-                 "active": r["expires_at"] is not None and r["expires_at"] > now,
+        return [{"code": r["code"], "name": r["name"], "game_code": r["game_code"], "game_name": r["game_name"],
+                 "expires_at": r["expires_at"], "active": r["expires_at"] is not None and r["expires_at"] > now,
                  "seconds_remaining": max(0, r["expires_at"] - now) if r["expires_at"] is not None else 0}
                 for r in rows]
 
@@ -194,7 +216,7 @@ class Database:
             if not row:
                 raise ApiError(401, "SESSION_INVALID", "Сессия больше не действительна. Войдите заново.")
             return {"server_time": now, "user": {"uid": row["uid"], "username": row["username"]},
-                    "products": self.products_for(db, uid, now)}
+                    "games": self.games_for(db), "products": self.products_for(db, uid, now)}
 
     def login(self, username, password, device, admin=False):
         # Same generic failure for an unknown account and an incorrect password.
@@ -236,7 +258,7 @@ class Database:
                        (hashed, fresh["uid"], device, now + USER_SESSION_SECONDS, now))
             result = {"token": token, "session_expires_at": now + USER_SESSION_SECONDS, "server_time": now,
                       "user": {"uid": fresh["uid"], "username": fresh["username"]},
-                      "products": self.products_for(db, fresh["uid"], now)}
+                      "games": self.games_for(db), "products": self.products_for(db, fresh["uid"], now)}
             return result
 
     def authenticate(self, token, device=None, admin=False):
@@ -286,18 +308,56 @@ class Database:
         except sqlite3.IntegrityError:
             raise ApiError(409, "USERNAME_TAKEN", "Этот логин уже занят.")
 
-    def create_product(self, actor, code, name):
+    def create_game(self, actor, code, name):
+        if not isinstance(code, str) or not CODE_RE.fullmatch(code):
+            raise ApiError(400, "BAD_GAME", "Код игры: строчные латинские буквы, цифры, точка, дефис или подчёркивание (до 48 символов).")
+        if not isinstance(name, str) or not 1 <= len(name.strip()) <= 80:
+            raise ApiError(400, "BAD_GAME_NAME", "Название игры: от 1 до 80 символов.")
+        try:
+            with self.connect() as db:
+                db.execute("INSERT INTO games(code,name,created_at) VALUES(?,?,?)", (code, name.strip(), unix_now()))
+                self.audit(db, actor, "create_game", None, code)
+        except sqlite3.IntegrityError:
+            raise ApiError(409, "GAME_EXISTS", "Такая игра уже существует.")
+        return {"code": code, "name": name.strip()}
+
+    def create_product(self, actor, code, name, game_code="gta5"):
         if not isinstance(code, str) or not CODE_RE.fullmatch(code):
             raise ApiError(400, "BAD_PRODUCT", "Код: строчные латинские буквы, цифры, точка, дефис или подчёркивание (до 48 символов).")
         if not isinstance(name, str) or not 1 <= len(name.strip()) <= 80:
             raise ApiError(400, "BAD_PRODUCT_NAME", "Название продукта: от 1 до 80 символов.")
+        if not isinstance(game_code, str) or not CODE_RE.fullmatch(game_code):
+            raise ApiError(400, "BAD_GAME", "Выберите игру для продукта.")
         try:
             with self.connect() as db:
-                db.execute("INSERT INTO products(code,name,created_at) VALUES(?,?,?)", (code, name.strip(), unix_now()))
-                self.audit(db, actor, "create_product", None, code)
+                db.execute("BEGIN IMMEDIATE")
+                game = db.execute("SELECT name FROM games WHERE code=?", (game_code,)).fetchone()
+                if not game:
+                    raise ApiError(404, "GAME_NOT_FOUND", "Игра не найдена.")
+                db.execute("INSERT INTO products(code,name,created_at,game_code) VALUES(?,?,?,?)",
+                           (code, name.strip(), unix_now(), game_code))
+                self.audit(db, actor, "create_product", None, game_code + "/" + code)
         except sqlite3.IntegrityError:
             raise ApiError(409, "PRODUCT_EXISTS", "Такой продукт уже существует.")
-        return {"code": code, "name": name.strip()}
+        return {"code": code, "name": name.strip(), "game_code": game_code, "game_name": game["name"]}
+
+    def update_product(self, actor, code, name, game_code):
+        if not isinstance(code, str) or not CODE_RE.fullmatch(code):
+            raise ApiError(400, "BAD_PRODUCT", "Некорректный код продукта.")
+        if not isinstance(name, str) or not 1 <= len(name.strip()) <= 80:
+            raise ApiError(400, "BAD_PRODUCT_NAME", "Название продукта: от 1 до 80 символов.")
+        if not isinstance(game_code, str) or not CODE_RE.fullmatch(game_code):
+            raise ApiError(400, "BAD_GAME", "Выберите игру для продукта.")
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            game = db.execute("SELECT name FROM games WHERE code=?", (game_code,)).fetchone()
+            if not game:
+                raise ApiError(404, "GAME_NOT_FOUND", "Игра не найдена.")
+            if not db.execute("SELECT code FROM products WHERE code=?", (code,)).fetchone():
+                raise ApiError(404, "PRODUCT_NOT_FOUND", "Продукт не найден.")
+            db.execute("UPDATE products SET name=?,game_code=? WHERE code=?", (name.strip(), game_code, code))
+            self.audit(db, actor, "update_product", None, game_code + "/" + code)
+        return {"code": code, "name": name.strip(), "game_code": game_code, "game_name": game["name"]}
 
     def admin_users(self, query=""):
         now = unix_now()
@@ -315,9 +375,14 @@ class Database:
                  "hwid_bound": r["hwid_hash"] is not None, "created_at": r["created_at"],
                  "products": self.products_for(db, r["uid"], now)} for r in rows]}
 
+    def admin_games(self):
+        with self.connect() as db:
+            return {"games": self.games_for(db)}
+
     def admin_products(self):
         with self.connect() as db:
-            return {"products": [dict(r) for r in db.execute("SELECT code,name FROM products ORDER BY code")]}
+            return {"products": [dict(r) for r in db.execute("""SELECT p.code,p.name,p.game_code,g.name AS game_name
+                FROM products p JOIN games g ON g.code=p.game_code ORDER BY g.name COLLATE NOCASE,p.name COLLATE NOCASE,p.code""")]}
 
     def audit_rows(self):
         with self.connect() as db:
@@ -333,10 +398,10 @@ class Database:
         if action == "status" and type(body.get("enabled")) is not bool:
             raise ApiError(400, "BAD_STATUS", "Укажите состояние аккаунта.")
         product = body.get("product")
-        if action in ("grant", "revoke") and (not isinstance(product, str) or not CODE_RE.fullmatch(product)):
+        if action in ("grant", "set", "revoke") and (not isinstance(product, str) or not CODE_RE.fullmatch(product)):
             raise ApiError(400, "BAD_PRODUCT", "Некорректный код продукта.")
         duration = body.get("seconds")
-        if action == "grant" and (type(duration) is not int or not 60 <= duration <= 10 * 366 * 86400):
+        if action in ("grant", "set") and (type(duration) is not int or not 60 <= duration <= 10 * 366 * 86400):
             raise ApiError(400, "BAD_DURATION", "Срок должен быть от одной минуты до десяти лет.")
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -357,15 +422,17 @@ class Database:
                 if not enabled:
                     db.execute("DELETE FROM sessions WHERE uid=?", (uid,))
                 self.audit(db, actor, "enable" if enabled else "disable", uid)
-            elif action in ("grant", "revoke"):
+            elif action in ("grant", "set", "revoke"):
                 if not db.execute("SELECT code FROM products WHERE code=?", (product,)).fetchone():
                     raise ApiError(404, "PRODUCT_NOT_FOUND", "Продукт не найден.")
                 now = unix_now()
                 current = db.execute("SELECT expires_at FROM subscriptions WHERE uid=? AND product_code=?", (uid, product)).fetchone()
-                expiry = (max(now, current["expires_at"] if current else now) + duration) if action == "grant" else now
+                if action == "revoke" and current is None:
+                    raise ApiError(404, "SUBSCRIPTION_NOT_FOUND", "У пользователя нет этой подписки.")
+                expiry = (max(now, current["expires_at"] if current else now) + duration) if action == "grant" else (now + duration if action == "set" else now)
                 db.execute("""INSERT INTO subscriptions(uid,product_code,expires_at) VALUES(?,?,?)
                     ON CONFLICT(uid,product_code) DO UPDATE SET expires_at=excluded.expires_at""", (uid, product, expiry))
-                self.audit(db, actor, action, uid, product + (" +%ds" % duration if action == "grant" else ""))
+                self.audit(db, actor, action, uid, product + (" +%ds" % duration if action == "grant" else " =%ds" % duration if action == "set" else ""))
                 result["expires_at"] = expiry
             else:
                 raise ApiError(404, "NOT_FOUND", "Действие не найдено.")
@@ -514,6 +581,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.authenticate(admin=True)
                 query = parse_qs(parsed.query).get("q", [""])[0]
                 return self.send_json(200, db.admin_users(query))
+            if path == "/api/admin/games":
+                self.authenticate(admin=True)
+                return self.send_json(200, db.admin_games())
             if path == "/api/admin/products":
                 self.authenticate(admin=True)
                 return self.send_json(200, db.admin_products())
@@ -548,10 +618,17 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/admin/users":
                 actor = self.authenticate(admin=True)
                 return self.send_json(201, db.create_user(actor["username"], body.get("username"), body.get("password")))
+            if path == "/api/admin/games":
+                actor = self.authenticate(admin=True)
+                return self.send_json(201, db.create_game(actor["username"], body.get("code"), body.get("name")))
             if path == "/api/admin/products":
                 actor = self.authenticate(admin=True)
-                return self.send_json(201, db.create_product(actor["username"], body.get("code"), body.get("name")))
-            match = re.fullmatch(r"/api/admin/users/([1-9][0-9]{0,18})/(reset-hwid|password|status|grant|revoke)", path)
+                return self.send_json(201, db.create_product(actor["username"], body.get("code"), body.get("name"), body.get("game_code", "gta5")))
+            product_match = re.fullmatch(r"/api/admin/products/([a-z0-9][a-z0-9_.-]{0,47})", path)
+            if product_match:
+                actor = self.authenticate(admin=True)
+                return self.send_json(200, db.update_product(actor["username"], product_match.group(1), body.get("name"), body.get("game_code")))
+            match = re.fullmatch(r"/api/admin/users/([1-9][0-9]{0,18})/(reset-hwid|password|status|grant|set|revoke)", path)
             if match:
                 actor = self.authenticate(admin=True)
                 uid = int(match.group(1))
@@ -593,6 +670,58 @@ def loopback_bind(host):
         return False
 
 
+# The address is embedded by the owner for convenience, not as a secret: it
+# is necessarily observable in the user's client and network connection.
+LOADER_CONFIG_MAGIC = b"RMACRO_URL_V1"
+LOADER_CONFIG_MAX = 1024
+
+
+def validate_loader_url(value):
+    if not isinstance(value, str) or not value or len(value) > LOADER_CONFIG_MAX or not value.isascii():
+        raise ValueError("Адрес должен быть полным ASCII URL; для домена используйте Punycode.")
+    if any(ord(c) <= 32 or ord(c) == 127 for c in value) or "\\" in value:
+        raise ValueError("Недопустимые символы в адресе сервера.")
+    try:
+        parsed = urlsplit(value)
+        if (parsed.scheme.lower() not in ("http", "https") or not parsed.hostname or
+                parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment or
+                parsed.path not in ("", "/") or (parsed.port is not None and not 1 <= parsed.port <= 65535)):
+            raise ValueError("Нужен адрес вида https://домен или http://127.0.0.1:8765 без пути и пароля.")
+        if parsed.scheme.lower() == "http" and not loopback_bind(parsed.hostname):
+            raise ValueError("Удалённый адрес должен использовать HTTPS.")
+    except ValueError as exc:
+        raise ValueError(str(exc))
+    return value.rstrip("/")
+
+
+def configure_loader(source, destination, address):
+    address = validate_loader_url(address)
+    source, destination = Path(source).expanduser().resolve(), Path(destination).expanduser().resolve()
+    if source == destination:
+        raise ValueError("Исходный EXE и результат должны быть разными файлами.")
+    content = source.read_bytes()
+    marker_utf16 = LOADER_CONFIG_MAGIC.decode("ascii").encode("utf-16le")
+    if not content.startswith(b"MZ") or marker_utf16 not in content:
+        raise ValueError("Выберите RMacro.exe версии с поддержкой настройки адреса (0.1.0-beta.2 или новее).")
+    footer_size = 4 + len(LOADER_CONFIG_MAGIC)
+    if content.endswith(LOADER_CONFIG_MAGIC):
+        if len(content) < footer_size:
+            raise ValueError("Повреждённая настройка лоадера.")
+        old_size = struct.unpack("<I", content[-footer_size:-len(LOADER_CONFIG_MAGIC)])[0]
+        if old_size < 1 or old_size > LOADER_CONFIG_MAX or len(content) < footer_size + old_size:
+            raise ValueError("Повреждённая настройка лоадера.")
+        content = content[:-footer_size - old_size]
+    payload = address.encode("ascii")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    # Never overwrite an existing customer build or the original EXE.
+    with destination.open("xb") as output:
+        output.write(content)
+        output.write(payload)
+        output.write(struct.pack("<I", len(payload)))
+        output.write(LOADER_CONFIG_MAGIC)
+    return destination
+
+
 def password_prompt():
     password = getpass.getpass("Пароль (не менее 12 символов): ")
     again = getpass.getpass("Повторите пароль: ")
@@ -607,6 +736,10 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("init-admin", help="Create the first administrator interactively")
     commands.add_parser("reset-admin", help="Reset an administrator password locally")
+    configure = commands.add_parser("configure-client", help="Create a client EXE with the server URL embedded")
+    configure.add_argument("--source", help="Original RMacro.exe; prompted if omitted")
+    configure.add_argument("--output", help="New RMacro.exe path; prompted if omitted")
+    configure.add_argument("--url", help="Server URL; prompted if omitted")
     backup = commands.add_parser("backup", help="Create a consistent SQLite backup")
     backup.add_argument("destination", nargs="?")
     serve = commands.add_parser("serve", help="Run the API and admin web UI")
@@ -617,6 +750,16 @@ def main(argv=None):
     serve.add_argument("--tls-key", help="PEM private key (required for public binding)")
     args = parser.parse_args(argv)
     try:
+        if args.command == "configure-client":
+            source = args.source or input("Путь к распакованному RMacro.exe: ").strip().strip('"')
+            address = args.url or input("Адрес сервера (HTTPS для удалённого доступа): ").strip()
+            default_output = ROOT / "configured-client" / "RMacro.exe"
+            destination = args.output or input("Новый EXE (Enter: configured-client/RMacro.exe): ").strip().strip('"') or str(default_output)
+            configured = configure_loader(source, destination, address)
+            print("Готово: " + str(configured))
+            print("Замените RMacro.exe в копии клиентского архива этим файлом, оставив аварийные BAT рядом.")
+            print("Адрес не отображается в лоадере, но может быть обнаружен в клиенте или сети.")
+            return 0
         database = Database(args.db)
         if args.command in ("init-admin", "reset-admin"):
             username = input("Логин администратора (латиница): ").strip()

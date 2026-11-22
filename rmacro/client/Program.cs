@@ -9,8 +9,8 @@ using RMFish;
 [assembly: AssemblyDescription("RMacro — лоадер продуктов и подписок")]
 [assembly: AssemblyProduct("RMacro")]
 [assembly: AssemblyVersion("0.1.0.0")]
-[assembly: AssemblyFileVersion("0.1.0.1")]
-[assembly: AssemblyInformationalVersion("0.1.0-beta.1")]
+[assembly: AssemblyFileVersion("0.1.0.2")]
+[assembly: AssemblyInformationalVersion("0.1.0-beta.2")]
 
 namespace RMacro
 {
@@ -31,7 +31,8 @@ namespace RMacro
                 string directory = Path.Combine(local, "RMacro"); Directory.CreateDirectory(directory);
                 string device = DeviceId.Get();
                 Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
-                using (LoaderForm form = new LoaderForm(directory, device)) Application.Run(form);
+                string serverAddress = ServerSettings.ReadFromExecutable(Application.ExecutablePath);
+                using (LoaderForm form = new LoaderForm(directory, device, serverAddress)) Application.Run(form);
                 return 0;
             }
             catch (Exception ex)

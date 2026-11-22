@@ -3,6 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sqlite3
+import struct
 import tempfile
 import threading
 import unittest
@@ -126,6 +127,39 @@ class ServerTests(unittest.TestCase):
         self.assertTrue(any(e["action"] == "password" for e in events))
         self.assertNotIn("new-password", json.dumps(events))
 
+    def test_games_products_and_subscriptions(self):
+        uid = self.create()
+        games = self.request("/api/admin/games", token=self.admin)[1]["games"]
+        self.assertEqual(games[0]["code"], "gta5")
+        self.assertEqual(self.request("/api/admin/games", {"code": "another-game", "name": "Другая игра"}, self.admin)[0], 201)
+        self.assertEqual(self.request("/api/admin/games", {"code": "another-game", "name": "Дубль"}, self.admin)[0], 409)
+        self.assertEqual(self.request("/api/admin/games", {"code": "BAD code", "name": "Ошибка"}, self.admin)[0], 400)
+        self.assertEqual(self.request("/api/admin/products", {"code": "other", "name": "Другой макрос", "game_code": "missing"}, self.admin)[0], 404)
+        status, created, _ = self.request("/api/admin/products", {"code": "other", "name": "Другой макрос", "game_code": "another-game"}, self.admin)
+        self.assertEqual(status, 201)
+        self.assertEqual(created["game_name"], "Другая игра")
+        self.assertEqual(self.admin_action(uid, "grant", {"product": "other", "seconds": 3600})[0], 200)
+        status, login, _ = self.login()
+        self.assertEqual(status, 200)
+        self.assertEqual({game["code"] for game in login["games"]}, {"gta5", "another-game"})
+        self.assertEqual({p["code"]: p["game_code"] for p in login["products"]}, {"rmfish": "gta5", "other": "another-game"})
+        self.assertTrue(next(p for p in login["products"] if p["code"] == "other")["active"])
+        self.assertFalse(next(p for p in login["products"] if p["code"] == "rmfish")["active"])
+        self.assertEqual(self.admin_action(uid, "revoke", {"product": "rmfish"})[0], 404)
+        self.assertIsNone(next(p for p in self.db.user_info(uid)["products"] if p["code"] == "rmfish")["expires_at"])
+        before = self.admin_action(uid, "grant", {"product": "other", "seconds": 7200})[1]["expires_at"]
+        status, reset, _ = self.admin_action(uid, "set", {"product": "other", "seconds": 60})
+        self.assertEqual(status, 200)
+        self.assertGreater(before - reset["expires_at"], 7000)
+        self.assertEqual(self.admin_action(uid, "set", {"product": "other", "seconds": -1})[0], 400)
+        self.assertEqual(self.request("/api/authorize", {"product": "other"}, login["token"], self.device_a)[0], 200)
+        self.assertEqual(self.request("/api/authorize", {"product": "rmfish"}, login["token"], self.device_a)[0], 403)
+        self.assertEqual(self.request("/api/admin/products/other", {"name": "Переименован", "game_code": "gta5"}, self.admin)[0], 200)
+        moved = next(p for p in self.request("/api/me", token=login["token"], device=self.device_a)[1]["products"] if p["code"] == "other")
+        self.assertEqual((moved["name"], moved["game_code"], moved["active"]), ("Переименован", "gta5", True))
+        self.assertEqual(self.request("/api/admin/products/other", {"name": "X", "game_code": "missing"}, self.admin)[0], 404)
+        self.assertEqual(self.request("/api/admin/games")[0], 401)
+
     def test_concurrent_first_login_binds_only_one_device(self):
         self.create()
         barrier = threading.Barrier(2)
@@ -203,6 +237,59 @@ class ServerTests(unittest.TestCase):
         self.db.reset_admin("owner", "new administrator password")
         self.assertEqual(self.request("/api/admin/users", token=self.admin)[0], 401)
         self.assertEqual(self.request("/api/admin/login", {"username": "owner", "password": "new administrator password"})[0], 200)
+
+
+class MigrationAndConfigurationTests(unittest.TestCase):
+    def test_existing_database_is_migrated_without_losing_access(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "old.db"
+            token, device = "a" * 43, "b" * 64
+            with sqlite3.connect(path) as db:
+                db.executescript("""
+                    CREATE TABLE products(code TEXT PRIMARY KEY, name TEXT NOT NULL, created_at INTEGER NOT NULL);
+                    CREATE TABLE users(uid INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                        salt BLOB NOT NULL, password_hash BLOB NOT NULL, rounds INTEGER NOT NULL,
+                        disabled INTEGER NOT NULL DEFAULT 0, hwid_hash TEXT, created_at INTEGER NOT NULL);
+                    CREATE TABLE subscriptions(uid INTEGER NOT NULL REFERENCES users(uid), product_code TEXT NOT NULL REFERENCES products(code),
+                        expires_at INTEGER NOT NULL, PRIMARY KEY(uid,product_code));
+                    CREATE TABLE sessions(token_hash TEXT PRIMARY KEY, uid INTEGER NOT NULL REFERENCES users(uid),
+                        device_hash TEXT NOT NULL, expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL);
+                """)
+                db.execute("INSERT INTO users VALUES(?,?,?,?,?,?,?,?)", (42,"old-user",b"salt",b"hash",310000,0,device,1))
+                db.execute("INSERT INTO products VALUES(?,?,?)", ("rmfish","RMFish",1))
+                db.execute("INSERT INTO products VALUES(?,?,?)", ("other","Другой",1))
+                db.execute("INSERT INTO subscriptions VALUES(?,?,?)", (42,"rmfish",srv.unix_now()+7200))
+                db.execute("INSERT INTO sessions VALUES(?,?,?,?,?)", (srv.token_hash(token),42,device,srv.unix_now()+7200,1))
+            migrated = srv.Database(path)
+            self.assertEqual(migrated.authenticate(token, device)["uid"], 42)
+            self.assertEqual(migrated.authorize(42,"rmfish")["code"], "rmfish")
+            profile = migrated.user_info(42)
+            self.assertEqual(profile["user"]["username"], "old-user")
+            self.assertEqual({p["game_code"] for p in profile["products"]}, {"gta5"})
+            self.assertEqual(len(profile["products"]), 2)
+            self.assertEqual(srv.Database(path).authorize(42,"rmfish")["code"], "rmfish")
+
+    def test_owner_can_embed_url_without_overwriting_or_remote_http(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            original, first, second = base / "source.exe", base / "first.exe", base / "second.exe"
+            original_data = b"MZfake" + srv.LOADER_CONFIG_MAGIC.decode().encode("utf-16le") + b"original"
+            original.write_bytes(original_data)
+            srv.configure_loader(original, first, "https://macro.example.com:8443/")
+            data = first.read_bytes()
+            footer = len(srv.LOADER_CONFIG_MAGIC) + 4
+            size = struct.unpack("<I", data[-footer:-len(srv.LOADER_CONFIG_MAGIC)])[0]
+            self.assertEqual(data[-footer-size:-footer], b"https://macro.example.com:8443")
+            self.assertEqual(original.read_bytes(), original_data)
+            srv.configure_loader(first, second, "http://127.0.0.1:8765")
+            self.assertEqual(second.read_bytes().count(srv.LOADER_CONFIG_MAGIC), 1)
+            self.assertTrue(second.read_bytes().startswith(original_data))
+            with self.assertRaises(FileExistsError): srv.configure_loader(original, first, "https://example.com")
+            with self.assertRaises(ValueError): srv.configure_loader(original, original, "https://example.com")
+            for bad in ["http://192.168.1.7", "https://user:pass@example.com", "https://example.com/path", "https://example.com?x=1"]:
+                with self.assertRaises(ValueError): srv.validate_loader_url(bad)
+            old = base / "old.exe"; old.write_bytes(b"MZlegacy")
+            with self.assertRaises(ValueError): srv.configure_loader(old, base / "bad.exe", "https://example.com")
 
 
 if __name__ == "__main__":

@@ -33,7 +33,9 @@ namespace RMFish
         private readonly EngineOptions options;
         private bool initialized, castClicked;
         private int castSeen, biteSeen, missing;
-        private long phaseSince, lastClick;
+        private long phaseSince, lastClick, targetSeenAt;
+        private int targetLeft = -1, targetRight = -1, targetBandLeft, targetBandRight, stableTargetFrames;
+        private const int TargetMemoryMilliseconds = 200;
 
         public FishingPhase Phase { get; private set; }
         public string Title { get; private set; }
@@ -62,6 +64,7 @@ namespace RMFish
             initialized = false;
             castClicked = false;
             castSeen = biteSeen = missing = 0;
+            ForgetTarget();
             Phase = FishingPhase.Searching;
             Title = "Ожидание рыбалки";
             Detail = "Проверяем экран игры.";
@@ -77,6 +80,7 @@ namespace RMFish
             }
 
             CastInfo cast = Vision.FindCast(frame);
+            ObserveTarget(cast, nowMilliseconds);
             bool bite = Vision.BiteActive(frame);
             LastDetection = Describe(cast, bite);
             biteSeen = bite ? biteSeen + 1 : 0;
@@ -173,24 +177,51 @@ namespace RMFish
             return FishingAction.None;
         }
 
+        // A white hook can temporarily obscure a narrow patch. Remember only
+        // a target seen in two matching frames on the same bar, for 200 ms;
+        // never invent a target from the wide green region or a timer.
+        private void ForgetTarget()
+        {
+            targetLeft = targetRight = -1; stableTargetFrames = 0; targetSeenAt = 0;
+        }
+        private void ObserveTarget(CastInfo cast, long now)
+        {
+            if (cast == null) { ForgetTarget(); return; }
+            if (!cast.HasTarget) return;
+            bool same = targetLeft >= 0 && now >= targetSeenAt && now - targetSeenAt <= TargetMemoryMilliseconds &&
+                Math.Abs(cast.Left - targetBandLeft) <= 12 && Math.Abs(cast.Right - targetBandRight) <= 12 &&
+                Math.Abs(cast.TargetLeft - targetLeft) <= 12 && Math.Abs(cast.TargetRight - targetRight) <= 12;
+            stableTargetFrames = same ? Math.Min(2, stableTargetFrames + 1) : 1;
+            targetLeft = cast.TargetLeft; targetRight = cast.TargetRight;
+            targetBandLeft = cast.Left; targetBandRight = cast.Right; targetSeenAt = now;
+        }
+
         private FishingAction TryCast(CastInfo cast, long now)
         {
+            int left = cast.TargetLeft, right = cast.TargetRight;
+            bool remembered = false;
             if (!cast.HasTarget)
             {
-                Detail = "Светлый зелёный участок не найден — ожидаем, не нажимая.";
-                return FishingAction.None;
+                remembered = stableTargetFrames >= 2 && now >= targetSeenAt && now - targetSeenAt <= TargetMemoryMilliseconds &&
+                    Math.Abs(cast.Left - targetBandLeft) <= 12 && Math.Abs(cast.Right - targetBandRight) <= 12;
+                if (!remembered)
+                {
+                    Detail = "Светлый зелёный участок не найден — ожидаем, не нажимая.";
+                    return FishingAction.None;
+                }
+                left = targetLeft; right = targetRight;
             }
             if (cast.Hook < 0)
             {
                 Detail = "Светлый участок найден, ищем белый крючок.";
                 return FishingAction.None;
             }
-            Detail = String.Format("Крючок {0} · светлый участок {1}–{2} · центр {3}.",
-                cast.Hook, cast.TargetLeft, cast.TargetRight, cast.Center);
-            // Prefer the inner portion of the observed bright target, never the
-            // broad dark-green band or a guessed position after a timeout.
-            int margin = Math.Max(2, (cast.TargetRight - cast.TargetLeft) / 6);
-            bool insideTarget = cast.Hook >= cast.TargetLeft + margin && cast.Hook <= cast.TargetRight - margin;
+            Detail = String.Format("Крючок {0} · светлый участок {1}–{2}{3}.",
+                cast.Hook, left, right, remembered ? " (последние кадры)" : "");
+            // A small inset still stays entirely within the observed light strip,
+            // while allowing more sampling time than the old one-sixth inset.
+            int margin = Math.Max(2, (right - left) / 10);
+            bool insideTarget = cast.Hook >= left + margin && cast.Hook <= right - margin;
             if (insideTarget && (!castClicked || now - lastClick >= 350))
             {
                 castClicked = true;
@@ -207,7 +238,7 @@ namespace RMFish
             Detail = detail;
             phaseSince = now;
             castSeen = biteSeen = missing = 0;
-            castClicked = false;
+            castClicked = false; ForgetTarget();
         }
 
         private FishingAction Stop(string reason)

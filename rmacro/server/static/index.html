@@ -55,7 +55,7 @@
         <section class="card user-card">
           <div class="card-heading"><div><div class="eyebrow">БАЗА ПОЛЬЗОВАТЕЛЕЙ</div><h2>Аккаунты</h2></div><span id="user-count" class="count">0</span></div>
           <label class="search"><span>⌕</span><input id="search" placeholder="Поиск по логину или UID" aria-label="Поиск по логину или UID"></label>
-          <div class="table-header"><span>ПОЛЬЗОВАТЕЛЬ</span><span>ДОСТУП RMFISH</span></div>
+          <div class="table-header"><span>ПОЛЬЗОВАТЕЛЬ</span><span>ПОДПИСКИ</span></div>
           <div id="user-list" class="user-list"><p class="empty">Нет пользователей</p></div>
           <div class="list-foot">Показаны до 500 совпадений. Нажмите на аккаунт для управления.</div>
         </section>
@@ -68,7 +68,8 @@
             <div class="section-label">ДОБАВИТЬ ВРЕМЯ</div>
             <label for="grant-product">Продукт</label><select id="grant-product"></select>
             <div class="inline-fields"><div><label for="grant-amount">Количество</label><input id="grant-amount" type="number" min="1" max="87600" value="30"></div><div><label for="grant-unit">Единица</label><select id="grant-unit"><option value="86400">Дней</option><option value="3600">Часов</option><option value="60">Минут</option></select></div></div>
-            <button id="grant" class="button primary full" type="button">＋ &nbsp; Добавить подписку</button>
+            <button id="grant" class="button primary full" type="button">＋ &nbsp; Добавить время</button>
+            <button id="set-subscription" class="button outline full" type="button">Задать срок с текущего момента</button>
             <div id="current-subscriptions" class="subscriptions"></div>
             <div class="divider"></div>
             <div class="actions"><button id="reset-hwid" class="button outline" type="button">Сбросить HWID</button><button id="toggle-user" class="button outline" type="button">Заблокировать</button><button id="revoke" class="button danger" type="button">Отозвать выбранную подписку</button></div>
@@ -81,10 +82,17 @@
           <form id="create-user" class="create-form"><div><label for="new-user">Логин</label><input id="new-user" minlength="3" maxlength="32" placeholder="Например, user123" autocomplete="off" required></div><div><label for="user-password">Пароль</label><input id="user-password" type="password" minlength="8" maxlength="256" placeholder="Не менее 8 символов" autocomplete="new-password" required></div><button type="submit" class="button primary">Создать аккаунт &nbsp; ↗</button></form>
         </section>
         <section id="products" class="card create-card">
-          <div class="card-heading"><div><div class="eyebrow">КАТАЛОГ</div><h2>Продукты</h2></div><span class="icon-box">◇</span></div>
-          <div id="product-list" class="product-list"></div>
-          <p class="hint">Новый продукт можно выдать уже сейчас, но запуск появится только в поддерживающей его сборке лоадера.</p>
-          <form id="create-product" class="create-form"><div><label for="product-code">Код (латиница)</label><input id="product-code" maxlength="48" placeholder="product-name" required></div><div><label for="product-name">Название</label><input id="product-name" maxlength="80" placeholder="Название продукта" required></div><button type="submit" class="button outline">Добавить продукт</button></form>
+          <div class="card-heading"><div><div class="eyebrow">КАТАЛОГ</div><h2>Игры и макросы</h2></div><span class="icon-box">◇</span></div>
+          <p class="hint">Создайте игру, затем добавьте к ней макросы. Выдайте время пользователю в его карточке.</p>
+          <div class="section-label">ИГРЫ</div><div id="game-list" class="product-list"></div>
+          <form id="create-game" class="create-form catalog-form"><div><label for="game-code">Код игры</label><input id="game-code" maxlength="48" placeholder="game-code" required></div><div><label for="game-name">Название игры</label><input id="game-name" maxlength="80" placeholder="Название игры" required></div><button type="submit" class="button outline">Добавить игру</button></form>
+          <div class="divider"></div>
+          <div class="section-label">МАКРОСЫ / DLC</div><div id="product-list" class="product-list"></div>
+          <p class="hint">Новый макрос можно выдать сейчас; запуск появится только в сборке лоадера с его реализацией.</p>
+          <form id="create-product" class="create-form catalog-form"><div class="wide-field"><label for="product-game">Игра</label><select id="product-game" required></select></div><div><label for="product-code">Код макроса</label><input id="product-code" maxlength="48" placeholder="macro-code" required></div><div><label for="product-name">Название макроса</label><input id="product-name" maxlength="80" placeholder="Название" required></div><button type="submit" class="button outline">Добавить макрос</button></form>
+          <div class="divider"></div><div class="section-label">НАСТРОЙКА МАКРОСА</div>
+          <p class="hint">Можно переименовать макрос или перенести его в другую игру, не меняя подписки пользователей.</p>
+          <form id="edit-product" class="create-form catalog-form"><div class="wide-field"><label for="edit-product-code">Макрос</label><select id="edit-product-code" required></select></div><div><label for="edit-product-game">Игра</label><select id="edit-product-game" required></select></div><div><label for="edit-product-name">Название</label><input id="edit-product-name" maxlength="80" required></div><button type="submit" class="button outline">Сохранить макрос</button></form>
         </section>
         <section id="audit" class="card audit-card"><div class="card-heading"><div><div class="eyebrow">ПОСЛЕДНИЕ СОБЫТИЯ</div><h2>Журнал действий</h2></div><span class="icon-box">≡</span></div><div id="audit-list" class="audit-list"></div></section>
       </div>

@@ -1,10 +1,10 @@
 'use strict';
 (() => {
   const $ = id => document.getElementById(id);
-  let token = '', adminName = '', selected = null, users = [], products = [], searchTimer;
-  const labels = {admin_login:'Вход администратора',create_user:'Создан аккаунт',create_product:'Добавлен продукт',
+  let token = '', adminName = '', selected = null, users = [], games = [], products = [], searchTimer;
+  const labels = {admin_login:'Вход администратора',create_user:'Создан аккаунт',create_product:'Добавлен макрос',update_product:'Изменён макрос',create_game:'Добавлена игра',
     'reset-hwid':'Сброшена привязка устройства',password:'Изменён пароль',enable:'Аккаунт разблокирован',
-    disable:'Аккаунт заблокирован',grant:'Добавлено время',revoke:'Подписка отозвана'};
+    disable:'Аккаунт заблокирован',grant:'Добавлено время',set:'Изменён срок подписки',revoke:'Подписка отозвана'};
   const text = (element, value) => { element.textContent = value == null ? '' : String(value); };
   const error = (element, message) => text(element, message || '');
   const uidText = n => String(n).padStart(8, '0');
@@ -24,7 +24,7 @@
     return data;
   }
   function showLogin() {
-    token = ''; selected = null; users = []; products = [];
+    token = ''; selected = null; users = []; games = []; products = [];
     $('login-view').hidden = false; $('app-view').hidden = true; $('admin-password').value = '';
   }
   function showApp() {
@@ -37,9 +37,9 @@
       const row = element('button','user-row' + (u.uid === selected ? ' selected' : '')); row.type = 'button';
       row.append(element('span','person-avatar',(u.username[0] || 'R').toUpperCase()));
       const info = element('span','user-info'); info.append(element('strong','',u.username),element('small','','UID ' + uidText(u.uid))); row.append(info);
-      const fish = u.products.find(p => p.code === 'rmfish');
-      const status = u.disabled ? 'Заблокирован' : fish && fish.active ? 'Активен' : 'Нет подписки';
-      row.append(element('span','pill' + (status === 'Активен' ? '' : ' inactive'),status));
+      const active = u.products.filter(p => p.active).length;
+      const status = u.disabled ? 'Заблокирован' : active ? 'Активных: ' + active : 'Нет подписки';
+      row.append(element('span','pill' + (active && !u.disabled ? '' : ' inactive'),status));
       row.addEventListener('click', () => { selected = u.uid; renderUsers(); renderDetail(); }); list.append(row);
     }
   }
@@ -54,18 +54,35 @@
     text($('toggle-user'),u.disabled ? 'Разблокировать' : 'Заблокировать');
     const container = $('current-subscriptions'); container.replaceChildren();
     for (const p of u.products.filter(p => p.expires_at)) {
-      const row = element('div','subscription'); row.append(element('span','',p.name),element('strong','',p.active ? 'До ' + dateText(p.expires_at) : 'Истекла ' + dateText(p.expires_at))); container.append(row);
+      const row = element('div','subscription'); row.append(element('span','',(p.game_name ? p.game_name + ' · ' : '') + p.name),element('strong','',p.active ? 'До ' + dateText(p.expires_at) : 'Истекла ' + dateText(p.expires_at))); container.append(row);
     }
   }
   function renderProducts() {
+    const gameList = $('game-list'), gameSelect = $('product-game'), editGame = $('edit-product-game'), previousGame = gameSelect.value;
+    gameList.replaceChildren(); gameSelect.replaceChildren(); editGame.replaceChildren();
+    for (const game of games) {
+      gameList.append(element('span','product-tag',game.name + ' · ' + game.code));
+      const option = element('option','',game.name); option.value = game.code; gameSelect.append(option);
+      const editOption = element('option','',game.name); editOption.value = game.code; editGame.append(editOption);
+    }
+    if (games.some(game => game.code === previousGame)) gameSelect.value = previousGame;
     const list = $('product-list'); list.replaceChildren();
-    const select = $('grant-product'), previous = select.value; select.replaceChildren();
+    const select = $('grant-product'), previous = select.value, editSelect = $('edit-product-code'), previousEdit = editSelect.value;
+    select.replaceChildren(); editSelect.replaceChildren();
     for (const p of products) {
-      list.append(element('span','product-tag',p.name + ' · ' + p.code));
-      const option = element('option','',p.name); option.value = p.code; select.append(option);
+      list.append(element('span','product-tag',p.game_name + ' / ' + p.name + ' · ' + p.code));
+      const option = element('option','',p.game_name + ' / ' + p.name); option.value = p.code; select.append(option);
+      const editOption = element('option','',p.game_name + ' / ' + p.name); editOption.value = p.code; editSelect.append(editOption);
     }
     if (products.some(p => p.code === previous)) select.value = previous;
     else if (products.some(p => p.code === 'rmfish')) select.value = 'rmfish';
+    if (products.some(p => p.code === previousEdit)) editSelect.value = previousEdit;
+    syncProductEditor();
+  }
+  function syncProductEditor() {
+    const product = products.find(p => p.code === $('edit-product-code').value);
+    $('edit-product-name').value = product ? product.name : '';
+    $('edit-product-game').value = product ? product.game_code : '';
   }
   function renderAudit(events) {
     const list = $('audit-list'); list.replaceChildren();
@@ -81,9 +98,9 @@
   async function refresh() {
     error($('app-message'),'');
     try {
-      const [userData, productData, auditData] = await Promise.all([
-        api('/api/admin/users?q=' + encodeURIComponent($('search').value)), api('/api/admin/products'), api('/api/admin/audit')]);
-      users = userData.users; products = productData.products; renderUsers(); renderDetail(); renderProducts(); renderAudit(auditData.events);
+      const [userData, gameData, productData, auditData] = await Promise.all([
+        api('/api/admin/users?q=' + encodeURIComponent($('search').value)), api('/api/admin/games'), api('/api/admin/products'), api('/api/admin/audit')]);
+      users = userData.users; games = gameData.games; products = productData.products; renderUsers(); renderDetail(); renderProducts(); renderAudit(auditData.events);
     } catch (e) { error($('app-message'), e.message); }
   }
   async function change(action, body, success) {
@@ -103,14 +120,31 @@
     event.preventDefault(); try { const data=await api('/api/admin/users',{username:$('new-user').value.trim(),password:$('user-password').value}); $('user-password').value=''; $('new-user').value=''; $('search').value=''; selected=data.uid; await refresh(); text($('app-message'),'Пользователь создан. UID ' + uidText(data.uid)); }
     catch(e) { error($('app-message'),e.message); }
   });
-  $('create-product').addEventListener('submit',async event => {
-    event.preventDefault(); try { await api('/api/admin/products',{code:$('product-code').value.trim(),name:$('product-name').value.trim()}); $('product-code').value=''; $('product-name').value=''; await refresh(); text($('app-message'),'Продукт добавлен.'); }
+  $('create-game').addEventListener('submit',async event => {
+    event.preventDefault(); try { const code=$('game-code').value.trim(); await api('/api/admin/games',{code,name:$('game-name').value.trim()}); $('game-code').value=''; $('game-name').value=''; await refresh(); $('product-game').value=code; text($('app-message'),'Игра добавлена.'); }
     catch(e) { error($('app-message'),e.message); }
   });
-  $('grant').addEventListener('click',() => {
+  $('edit-product-code').addEventListener('change',syncProductEditor);
+  $('edit-product').addEventListener('submit',async event => {
+    event.preventDefault(); try { const code=$('edit-product-code').value; await api('/api/admin/products/' + encodeURIComponent(code),{name:$('edit-product-name').value.trim(),game_code:$('edit-product-game').value}); await refresh(); text($('app-message'),'Макрос изменён; подписки сохранены.'); }
+    catch(e) { error($('app-message'),e.message); }
+  });
+  $('create-product').addEventListener('submit',async event => {
+    event.preventDefault(); try { await api('/api/admin/products',{code:$('product-code').value.trim(),name:$('product-name').value.trim(),game_code:$('product-game').value}); $('product-code').value=''; $('product-name').value=''; await refresh(); text($('app-message'),'Макрос добавлен.'); }
+    catch(e) { error($('app-message'),e.message); }
+  });
+  function duration() {
     const amount=Number($('grant-amount').value), unit=Number($('grant-unit').value), seconds=amount*unit;
-    if (!Number.isInteger(amount) || amount < 1 || seconds > 10*366*86400) return error($('app-message'),'Укажите целое положительное количество времени, не более 10 лет.');
-    change('grant',{product:$('grant-product').value,seconds},'Подписка продлена.');
+    if (!Number.isInteger(amount) || amount < 1 || seconds > 10*366*86400) { error($('app-message'),'Укажите целое положительное количество времени, не более 10 лет.'); return null; }
+    return seconds;
+  }
+  $('grant').addEventListener('click',() => {
+    const seconds=duration(); if (seconds !== null) change('grant',{product:$('grant-product').value,seconds},'Подписка продлена.');
+  });
+  $('set-subscription').addEventListener('click',() => {
+    const seconds=duration();
+    if (seconds !== null && confirm('Задать указанный срок с текущего момента? Прежний остаток будет заменён.'))
+      change('set',{product:$('grant-product').value,seconds},'Срок подписки изменён.');
   });
   $('reset-hwid').addEventListener('click',() => { if (confirm('Сбросить HWID? Все текущие сессии пользователя будут завершены.')) change('reset-hwid',{},'Привязка сброшена; следующий вход привяжет новое устройство.'); });
   $('toggle-user').addEventListener('click',() => { const u=users.find(item => item.uid===selected); if (u && confirm(u.disabled ? 'Разблокировать пользователя?' : 'Заблокировать пользователя и завершить его сессии?')) change('status',{enabled:u.disabled},u.disabled ? 'Аккаунт разблокирован.' : 'Аккаунт заблокирован.'); });

@@ -100,7 +100,11 @@ namespace RMFish
 
         private static bool White(int r, int g, int b)
         {
-            return r >= 200 && g >= 190 && b >= 175 && Math.Max(r, Math.Max(g, b)) - Math.Min(r, Math.Min(g, b)) <= 65;
+            // A dimmed / captured HUD can turn the white hook into neutral
+            // grey (for example 178 at 70% brightness). Keep a tight neutral
+            // colour constraint and require a compact, tall shape below; the
+            // surrounding green/red bar alone must never count as a hook.
+            return r >= 155 && g >= 155 && b >= 145 && Math.Max(r, Math.Max(g, b)) - Math.Min(r, Math.Min(g, b)) <= 45;
         }
 
         public static CastInfo FindCast(PixelFrame frame)
@@ -156,16 +160,18 @@ namespace RMFish
             if (bestLeft < 0) return null;
 
             int left = bestLeft + SearchLeft, right = bestRight + SearchLeft;
-            int leftRed = 0, rightRed = 0;
+            int leftRed = 0, rightRed = 0, barLeft = left, barRight = right;
             for (int x = Math.Max(SearchLeft, left - 160); x < left - 5; x++)
-                if (red[x - SearchLeft]) leftRed++;
+                if (red[x - SearchLeft]) { leftRed++; barLeft = Math.Min(barLeft, x); }
             for (int x = right + 6; x <= Math.Min(SearchRight, right + 160); x++)
-                if (red[x - SearchLeft]) rightRed++;
+                if (red[x - SearchLeft]) { rightRed++; barRight = Math.Max(barRight, x); }
             // Red ends plus a wide green middle identify a candidate bar. The
             // worker still requires a white hook and a bright target before clicking.
             if (leftRed < 12 || rightRed < 12) return null;
 
-            int hook = FindHook(frame, Math.Max(SearchLeft, left - 160), Math.Min(SearchRight, right + 160));
+            // Exclude pale pixels outside the red ends (e.g. the crop or
+            // overlay border) so they cannot outrank the actual hook.
+            int hook = FindHook(frame, barLeft, barRight);
             int targetLeft, targetRight;
             FindBrightTarget(green, chroma, left, right, out targetLeft, out targetRight);
             return new CastInfo(left, right, hook, targetLeft, targetRight);
@@ -308,7 +314,9 @@ namespace RMFish
                                          ref int bestHook, ref int bestScore)
         {
             int width = end - start + 1, height = bottom - top + 1;
-            if (width < 3 || width > 36 || height < 8 || pixels < 8) return;
+            // The sprite is a thin outline. Reject solid pale borders or
+            // rectangular highlights that can otherwise outrank the hook.
+            if (width < 3 || width > 36 || height < 8 || pixels < 8 || pixels * 100 > width * height * 65) return;
             int score = pixels + height * 2;
             if (score > bestScore)
             {

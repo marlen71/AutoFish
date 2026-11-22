@@ -14,3 +14,6 @@ dist/
 # Python bytecode is generated locally
 __pycache__/
 *.py[cod]
+
+# Owner-configured customer executables are distribution artifacts.
+rmacro/server/configured-client/

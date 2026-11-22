@@ -5,6 +5,7 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Windows.Forms;
@@ -27,6 +28,12 @@ internal static class RMacroTestRunner
         if (root.Name == name && root is T) return (T)root;
         foreach (Control child in root.Controls) { T found = Find<T>(child, name); if (found != null) return found; }
         return null;
+    }
+    private static bool VisibleTextContains(Control root, string value)
+    {
+        if (root.Visible && ((root.Text ?? "").Contains(value) || (root.AccessibleName ?? "").Contains(value))) return true;
+        foreach (Control child in root.Controls) if (VisibleTextContains(child, value)) return true;
+        return false;
     }
     private static void WaitUntil(Func<bool> test, int milliseconds, string reason)
     {
@@ -78,6 +85,23 @@ internal static class RMacroTestRunner
     }
     private static void Reset(ApiClient api, string admin, long uid)
     { api.Request("/api/admin/users/" + uid + "/reset-hwid", ApiClient.Body(), admin, null); }
+    private static void WriteFooter(string path, byte[] payload, uint declaredLength)
+    {
+        using (BinaryWriter writer = new BinaryWriter(File.Create(path)))
+        {
+            writer.Write(new byte[] { 0x4d, 0x5a });
+            writer.Write(payload); writer.Write(declaredLength);
+            writer.Write(Encoding.ASCII.GetBytes("RMACRO_URL_V1"));
+        }
+    }
+    private static void WriteInvalidSession(string directory)
+    {
+        Directory.CreateDirectory(directory);
+        string text = "{\"server\":\"not a url\",\"token\":\"" + new string('x', 43) + "\"}";
+        byte[] encrypted = ProtectedData.Protect(Encoding.UTF8.GetBytes(text),
+            Encoding.UTF8.GetBytes("RMacro/session/v1"), DataProtectionScope.CurrentUser);
+        File.WriteAllBytes(Path.Combine(directory, "session.dat"), encrypted);
+    }
     private static void CheckCore(ApiClient api, string root)
     {
         try { new ApiClient("http://192.168.1.7:8765"); throw new Exception("Insecure remote HTTP accepted"); }
@@ -90,6 +114,24 @@ internal static class RMacroTestRunner
         Profile profile = api.Login(User, UserPassword, Device, out token);
         Check(profile.Uid > 0 && profile.Username == User, "login profile/UID");
         Check(profile.Find("rmfish") != null && profile.Remaining(profile.Find("rmfish")) > 0, "subscription in login");
+        Check(profile.Games.Count == 2 && profile.Find("test-macro").GameCode == "test-game", "game/product catalog in login");
+        Check(profile.Find("unowned-macro").ExpiresAt == null, "unowned product has no entitlement");
+        string configuredPath = Environment.GetEnvironmentVariable("RMACRO_CONFIGURED_EXE");
+        if (!String.IsNullOrEmpty(configuredPath))
+            Check(ServerSettings.ReadFromExecutable(configuredPath) == api.BaseUrl, "owner-configured EXE endpoint");
+        string configProbe = Path.Combine(root, "config-probe.exe");
+        File.WriteAllBytes(configProbe, new byte[] { 0x4d, 0x5a });
+        Check(ServerSettings.ReadFromExecutable(configProbe) == "http://127.0.0.1:8765", "unconfigured EXE uses local default");
+        byte[] insecure = Encoding.ASCII.GetBytes("http://192.168.1.7");
+        WriteFooter(configProbe, insecure, (uint)insecure.Length);
+        try { ServerSettings.ReadFromExecutable(configProbe); throw new Exception("Insecure configured endpoint accepted"); }
+        catch (InvalidOperationException) { Check(true, "configured remote HTTP is rejected"); }
+        WriteFooter(configProbe, new byte[] { 0xff }, 1);
+        try { ServerSettings.ReadFromExecutable(configProbe); throw new Exception("Malformed configuration accepted"); }
+        catch (InvalidOperationException) { Check(true, "configured endpoint must be valid UTF-8"); }
+        WriteFooter(configProbe, new byte[] { 0 }, 10000);
+        try { ServerSettings.ReadFromExecutable(configProbe); throw new Exception("Oversized configuration accepted"); }
+        catch (InvalidOperationException) { Check(true, "oversized configured endpoint is rejected"); }
         Check(api.GetProfile(token, Device).Uid == profile.Uid, "saved token profile");
         try { api.GetProfile(token, OtherDevice); throw new Exception("wrong device accepted"); }
         catch (ApiException ex) { Check(ex.Status == 401, "session must be bound to the device"); }
@@ -101,6 +143,8 @@ internal static class RMacroTestRunner
         Check(!Encoding.UTF8.GetString(File.ReadAllBytes(Path.Combine(sessionDir, "session.dat"))).Contains(token), "token stored in plaintext");
         store.Save(api.BaseUrl, token); Check(store.Load() != null, "atomic session replacement");
         store.Delete(); Check(store.Load() == null, "logout deletes session");
+        WriteInvalidSession(sessionDir);
+        Check(store.Load() == null, "malformed saved server URL is ignored without exposing its token");
         Trace("lease and remote reset");
         string admin = AdminToken(api);
         LeaseInfo initial = api.Authorize(token, Device, "rmfish");
@@ -129,7 +173,7 @@ internal static class RMacroTestRunner
         public LoaderForm Form;
         private readonly ApplicationContext context;
 
-        public UiHost(ApplicationContext context, string directory)
+        public UiHost(ApplicationContext context, string directory, string address)
         {
             this.context = context;
             // Creation must be dispatched to the UI thread; supplied context is
@@ -137,7 +181,7 @@ internal static class RMacroTestRunner
             if (uiDispatcher == null) throw new Exception("UI dispatcher unavailable");
             uiDispatcher.Invoke((MethodInvoker)delegate
             {
-                Form = new LoaderForm(directory, Device);
+                Form = new LoaderForm(directory, Device, address);
                 context.MainForm = Form;
                 Form.Show();
             });
@@ -173,17 +217,18 @@ internal static class RMacroTestRunner
         Trace("open login window");
         string local = Path.Combine(root, "profile", "RMacro");
         Directory.CreateDirectory(local);
-        using (UiHost first = new UiHost(context, local))
+        using (UiHost first = new UiHost(context, local, api.BaseUrl))
         {
             first.Run(delegate(LoaderForm form)
             {
                 Check(form.FormBorderStyle == FormBorderStyle.None, "branded title bar");
                 Check(Find<Control>(form, "loginPage").Visible, "login page opens first");
                 Check(!Find<Control>(form, "dashboardPage").Visible, "dashboard must be hidden before login");
+                Check(Find<Control>(form, "serverEditor") == null, "server address is not a login field");
+                Check(!VisibleTextContains(form, api.BaseUrl), "server address is not displayed on login");
                 Capture(form, false, "01-login");
                 Find<TextBox>(form, "usernameEditor").Text = User;
                 Find<TextBox>(form, "passwordEditor").Text = UserPassword;
-                Find<TextBox>(form, "serverEditor").Text = api.BaseUrl;
                 Trace("submit GUI login");
                 Find<SoftButton>(form, "loginButton").PerformClick();
             });
@@ -195,11 +240,20 @@ internal static class RMacroTestRunner
                 Check(banner.Contains("RMFish"), "soon-expiring subscription warning; banner length=" + banner.Length);
                 Check(Find<Label>(form, "uidValue").Text.Length >= 8, "UID shown");
                 Check(new SessionStore(local).Load() != null, "remembered login saved");
+                CatalogList games = Find<CatalogList>(form, "gameList"), macros = Find<CatalogList>(form, "macroList");
+                Check(games.Count == 2 && games.SelectedCode == "gta5", "game chooser includes GTA5 and the second game");
+                Check(macros.Count == 1 && macros.SelectedCode == "rmfish", "only owned GTA5 macros are listed");
+                games.SelectCode("test-game");
+                Check(macros.Count == 1 && macros.SelectedCode == "test-macro", "game selection filters owned macros");
+                Check(!Find<SoftButton>(form, "launchButton").Enabled, "unimplemented macro cannot launch RMFish");
+                games.SelectCode("gta5");
+                Check(macros.SelectedCode == "rmfish" && Find<SoftButton>(form, "launchButton").Enabled, "RMFish selected and launch enabled");
+                Check(!VisibleTextContains(form, api.BaseUrl), "server address is not displayed in library");
                 Trace("GUI login complete"); Capture(form, true, "02-products");
             });
         }
         Trace("restore saved session");
-        using (UiHost restored = new UiHost(context, local))
+        using (UiHost restored = new UiHost(context, local, api.BaseUrl))
         {
             try { WaitUntil(delegate { return restored.Value(delegate(LoaderForm f) { return Find<Control>(f, "dashboardPage").Visible && !Field<bool>(f, "busy"); }); }, 12000, "automatic login"); }
             catch { restored.Run(TraceUi); throw; }
@@ -209,6 +263,8 @@ internal static class RMacroTestRunner
                 Find<SoftButton>(form, "navProfile").PerformClick();
                 Check(Find<Control>(form, "profilePage").Visible, "profile navigation");
                 Check(Find<DarkLogBox>(form, "subscriptionList").Editor.Text.Contains("RMFish"), "profile lists product");
+                Check(!Find<DarkLogBox>(form, "subscriptionList").Editor.Text.Contains("Невыданный"), "profile does not list unowned macros");
+                Check(!VisibleTextContains(form, api.BaseUrl), "server address is not displayed in profile");
                 Find<SoftButton>(form, "navProducts").PerformClick();
                 Trace("open embedded product"); Find<SoftButton>(form, "launchButton").PerformClick();
             });
@@ -266,6 +322,28 @@ internal static class RMacroTestRunner
             });
             WaitUntil(delegate { return new SessionStore(local).Load() == null; }, 7000, "logout clears remembered session");
             Check(new SessionStore(local).Load() == null, "logout clears remembered session");
+        }
+        Trace("reject saved token from a different server");
+        new SessionStore(local).Save("https://example.com", new string('x', 43));
+        using (UiHost changed = new UiHost(context, local, api.BaseUrl))
+        {
+            WaitUntil(delegate { return new SessionStore(local).Load() == null; }, 5000, "different-server token must be removed");
+            changed.Run(delegate(LoaderForm form)
+            {
+                Check(Find<Control>(form, "loginPage").Visible, "server change requires new login");
+                Check(Field<Profile>(form, "profile") == null, "old server token was not reused");
+            });
+        }
+        Trace("ignore a malformed saved server address");
+        WriteInvalidSession(local);
+        using (UiHost malformed = new UiHost(context, local, api.BaseUrl))
+        {
+            Thread.Sleep(250); // allow Shown/RestoreAsync to run
+            malformed.Run(delegate(LoaderForm form)
+            {
+                Check(Find<Control>(form, "loginPage").Visible && Field<Profile>(form, "profile") == null,
+                    "a malformed saved endpoint leaves a usable login rather than crashing or sending a token");
+            });
         }
     }
     [STAThread]

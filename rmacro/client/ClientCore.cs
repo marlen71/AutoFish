@@ -19,9 +19,14 @@ namespace RMacro
         public ApiException(int status, string code, string message) : base(message) { Status = status; Code = code; }
     }
 
-    internal sealed class ProductInfo
+    internal sealed class GameInfo
     {
         public string Code, Name;
+    }
+
+    internal sealed class ProductInfo
+    {
+        public string Code, Name, GameCode, GameName;
         public long? ExpiresAt;
         public bool Active;
     }
@@ -30,6 +35,7 @@ namespace RMacro
     {
         public long Uid, ServerTime;
         public string Username;
+        public List<GameInfo> Games;
         public List<ProductInfo> Products;
         public long ReceivedAt;
 
@@ -174,7 +180,7 @@ namespace RMacro
                         throw new ApiException((int)response.StatusCode, code, message);
                     }
                 }
-                throw new ApiException(0, "NETWORK", "Не удалось связаться с сервером. Проверьте адрес, интернет и HTTPS-сертификат.");
+                throw new ApiException(0, "NETWORK", "Не удалось связаться с сервером. Проверьте интернет или обратитесь к администратору.");
             }
             catch (InvalidOperationException) { throw new ApiException(0, "BAD_RESPONSE", "Некорректный ответ сервера."); }
             catch (ArgumentException) { throw new ApiException(0, "BAD_RESPONSE", "Некорректный ответ сервера."); }
@@ -199,6 +205,19 @@ namespace RMacro
             profile.Uid = JsonValues.Integer(user, "uid");
             profile.Username = JsonValues.String(user, "username");
             profile.ReceivedAt = Stopwatch.GetTimestamp();
+            profile.Games = new List<GameInfo>();
+            object gamesRaw;
+            if (value.TryGetValue("games", out gamesRaw))
+            {
+                object[] games = gamesRaw as object[];
+                if (games == null || games.Length > 1000) throw new ApiException(0, "BAD_RESPONSE", "Некорректный ответ сервера.");
+                foreach (object item in games)
+                {
+                    Dictionary<string, object> game = JsonValues.Object(item);
+                    profile.Games.Add(new GameInfo { Code = JsonValues.String(game, "code"), Name = JsonValues.String(game, "name") });
+                }
+            }
+            else profile.Games.Add(new GameInfo { Code = "gta5", Name = "GTA5 · RMRP" }); // beta.1 server
             profile.Products = new List<ProductInfo>();
             foreach (object item in items)
             {
@@ -206,6 +225,9 @@ namespace RMacro
                 ProductInfo product = new ProductInfo();
                 product.Code = JsonValues.String(entry, "code");
                 product.Name = JsonValues.String(entry, "name");
+                object gameCode, gameName;
+                product.GameCode = entry.TryGetValue("game_code", out gameCode) && gameCode is string ? (string)gameCode : "gta5";
+                product.GameName = entry.TryGetValue("game_name", out gameName) && gameName is string ? (string)gameName : "GTA5 · RMRP";
                 product.Active = JsonValues.Boolean(entry, "active");
                 object expires;
                 if (!entry.TryGetValue("expires_at", out expires)) throw new ApiException(0, "BAD_RESPONSE", "Некорректный ответ сервера.");
@@ -233,6 +255,43 @@ namespace RMacro
                 RoundTripMilliseconds = watch.ElapsedMilliseconds };
         }
         public void Logout(string token, string device) { Request("/api/logout", Body(), token, device); }
+    }
+
+    // The owner may append a validated endpoint to a copy of the executable.
+    // This keeps the address out of the UI; it is not a secret or a security boundary.
+    internal static class ServerSettings
+    {
+        private const string DefaultAddress = "http://127.0.0.1:8765";
+        private const string Marker = "RMACRO_URL_V1";
+        private const int MaxAddressBytes = 1024;
+
+        public static string ReadFromExecutable(string path)
+        {
+            byte[] marker = Encoding.ASCII.GetBytes(Marker);
+            using (FileStream stream = File.OpenRead(path))
+            {
+                if (stream.Length < marker.Length + 4) return DefaultAddress;
+                stream.Seek(-marker.Length, SeekOrigin.End);
+                byte[] tail = new byte[marker.Length];
+                if (stream.Read(tail, 0, tail.Length) != tail.Length) throw new InvalidOperationException("Не удалось прочитать настройки лоадера.");
+                for (int i = 0; i < marker.Length; i++) if (tail[i] != marker[i]) return DefaultAddress;
+                stream.Seek(-marker.Length - 4, SeekOrigin.End);
+                byte[] size = new byte[4];
+                if (stream.Read(size, 0, 4) != 4) throw new InvalidOperationException("Настройки лоадера повреждены.");
+                uint length = (uint)size[0] | ((uint)size[1] << 8) | ((uint)size[2] << 16) | ((uint)size[3] << 24);
+                if (length == 0 || length > MaxAddressBytes || stream.Length < marker.Length + 4L + length)
+                    throw new InvalidOperationException("Настройки лоадера повреждены. Обратитесь к администратору.");
+                stream.Seek(-marker.Length - 4L - length, SeekOrigin.End);
+                byte[] payload = new byte[(int)length];
+                if (stream.Read(payload, 0, payload.Length) != payload.Length) throw new InvalidOperationException("Настройки лоадера повреждены.");
+                try
+                {
+                    string value = new UTF8Encoding(false, true).GetString(payload);
+                    return new ApiClient(value).BaseUrl;
+                }
+                catch (Exception) { throw new InvalidOperationException("Настройки подключения повреждены. Обратитесь к администратору."); }
+            }
+        }
     }
 
     internal static class DeviceId
