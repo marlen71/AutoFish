@@ -18,12 +18,14 @@ $null = New-Item -ItemType Directory -Path $OutputDirectory -Force
 $output = Join-Path (Resolve-Path -LiteralPath $OutputDirectory).Path 'RMFish.exe'
 $sources = @(
     (Join-Path $PSScriptRoot 'src\Vision.cs'),
+    (Join-Path $PSScriptRoot 'src\Relocation.cs'),
     (Join-Path $PSScriptRoot 'src\StateMachine.cs'),
     (Join-Path $PSScriptRoot 'src\Engine.cs'),
     (Join-Path $PSScriptRoot 'src\Safety.cs'),
     (Join-Path $PSScriptRoot 'src\WindowsGame.cs'),
     (Join-Path $PSScriptRoot 'src\UiComponents.cs'),
     (Join-Path $PSScriptRoot 'src\ChromeControls.cs'),
+    (Join-Path $PSScriptRoot 'src\RelocationUi.cs'),
     (Join-Path $PSScriptRoot 'src\MainForm.cs'),
     (Join-Path $PSScriptRoot 'src\Program.cs')
 )

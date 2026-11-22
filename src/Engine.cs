@@ -11,6 +11,8 @@ namespace RMFish
         public int X, Y, Width, Height;
     }
 
+    public enum ClickResult { Sent, Suppressed, Failed }
+
     // Kept behind an interface so the whole worker can be tested without a game
     // or mouse input. All coordinates are physical game-client pixels.
     public interface IGamePort : IDisposable
@@ -18,7 +20,11 @@ namespace RMFish
         bool TryGetForeground(out GameBounds bounds, out string reason);
         bool IsForeground(GameBounds bounds);
         PixelFrame Capture(GameBounds bounds);
-        bool Click(GameBounds bounds, WaitHandle stop, out string error);
+        PixelFrame CaptureArea(GameBounds bounds, int left, int top, int right, int bottom);
+        ClickResult Click(GameBounds bounds, WaitHandle stop, out string error);
+        bool MoveCursor(GameBounds bounds, int x, int y, WaitHandle stop, out string error);
+        ClickResult ClickAt(GameBounds bounds, int x, int y, bool right, WaitHandle stop, out string error);
+        bool HoldKey(GameBounds bounds, GameKey key, int milliseconds, WaitHandle stop, out string error);
         bool StopFileExists();
         // Called by the worker on the same thread that captured the frame.
         void ReleaseCapture();
@@ -76,6 +82,11 @@ namespace RMFish
                 if (expectedStopVersion.HasValue && stopVersion != expectedStopVersion.Value) return false;
                 if (worker != null && worker.IsAlive) return false;
                 EngineOptions options = requested.CopyValidated();
+                if (options.AutoRelocate && (options.Notice == null || options.Gear == null))
+                    throw new InvalidOperationException("Сначала запишите уведомление и три элемента инвентаря в настройках автоотхода.");
+                if (options.AutoRelocate && (options.Notice.ClientWidth != options.Gear.ClientWidth ||
+                    options.Notice.ClientHeight != options.Gear.ClientHeight))
+                    throw new InvalidOperationException("Образец уведомления и инвентарь записаны при разном разрешении.");
                 stop.Reset();
                 requestedStopReason = null;
                 int generation = ++runGeneration;
@@ -211,6 +222,18 @@ namespace RMFish
             }
         }
 
+        private void PublishRelocation(string detail)
+        {
+            lock (gate)
+            {
+                if (stop.WaitOne(0)) return;
+                current.Phase = FishingPhase.Relocating;
+                current.Title = "Автоотход";
+                current.Detail = detail;
+                AddEvent("Автоотход: " + detail);
+            }
+        }
+
         // While tracking a moving hook, the configured period is measured from
         // cycle start, not added on top of capture/processing time. At least a
         // millisecond still yields the worker, and stop can wake it at once.
@@ -230,6 +253,8 @@ namespace RMFish
             FishingStateMachine machine = new FishingStateMachine(options);
             string finalReason = "Остановлено пользователем.";
             bool wasFocused = false;
+            NoticeGate noticeGate = options.AutoRelocate ? new NoticeGate() : null;
+            long nextNoticeCheck = 0;
             try
             {
                 while (!stop.WaitOne(0))
@@ -252,6 +277,7 @@ namespace RMFish
                     if (!port.TryGetForeground(out bounds, out reason))
                     {
                         if (wasFocused) machine.Pause();
+                        if (noticeGate != null) noticeGate.Pause();
                         wasFocused = false;
                         Publish(machine, true, reason);
                         stop.WaitOne(125);
@@ -263,6 +289,39 @@ namespace RMFish
                     // A stop may have arrived during the native capture. Do not
                     // analyze or act on a frame obtained before that request.
                     if (stop.WaitOne(0)) break;
+                    if (options.AutoRelocate && watch.ElapsedMilliseconds >= nextNoticeCheck)
+                    {
+                        nextNoticeCheck = watch.ElapsedMilliseconds + 120;
+                        if (bounds.Width != options.Notice.ClientWidth || bounds.Height != options.Notice.ClientHeight)
+                        {
+                            finalReason = "Разрешение игры изменилось. Автоотход остановлен: запишите образцы заново.";
+                            break;
+                        }
+                        PixelFrame noticeFrame = port.CaptureArea(bounds, NoticeTemplate.RegionLeft, NoticeTemplate.RegionTop,
+                            NoticeTemplate.RegionRight, NoticeTemplate.RegionBottom);
+                        if (stop.WaitOne(0)) break;
+                        if (!port.IsForeground(bounds))
+                        {
+                            machine.Pause(); noticeGate.Pause(); wasFocused = false;
+                            Publish(machine, true, "Фокус изменился во время проверки уведомления.");
+                            continue;
+                        }
+                        if (noticeGate.Observe(options.Notice.Matches(noticeFrame), watch.ElapsedMilliseconds))
+                        {
+                            string routeError;
+                            if (!RelocationRunner.Execute(port, bounds, stop, options.Gear, new RelocationTimings(),
+                                PublishRelocation, out routeError))
+                            {
+                                finalReason = "Автоотход прерван: " + (String.IsNullOrEmpty(routeError) ? "проверьте игру и положение персонажа." : routeError) +
+                                    " Продолжите вручную; автоматического повтора нет.";
+                                break;
+                            }
+                            machine.Pause();
+                            Log("Автоотход завершён. Ждём следующую шкалу заброса; точность возврата не проверяется.");
+                            Publish(machine, false, null);
+                            continue;
+                        }
+                    }
                     FishingAction action = machine.Step(frame, watch.ElapsedMilliseconds);
                     if (stop.WaitOne(0)) break;
                     Publish(machine, false, null);
@@ -289,6 +348,7 @@ namespace RMFish
                         if (!port.IsForeground(bounds))
                         {
                             machine.Pause();
+                            if (noticeGate != null) noticeGate.Pause();
                             wasFocused = false;
                             Publish(machine, true, "Вернитесь в GTA5 — клики приостановлены.");
                             continue;
@@ -299,7 +359,15 @@ namespace RMFish
                             break;
                         }
                         string inputError;
-                        if (!port.Click(bounds, stop, out inputError))
+                        ClickResult result = port.Click(bounds, stop, out inputError);
+                        if (result == ClickResult.Sent)
+                            machine.ConfirmClick(action, watch.ElapsedMilliseconds);
+                        else if (result == ClickResult.Suppressed)
+                        {
+                            machine.ClickSuppressed();
+                            Publish(machine, false, null);
+                        }
+                        else
                         {
                             if (stop.WaitOne(0)) break;
                             if (port.StopFileExists())
@@ -310,6 +378,7 @@ namespace RMFish
                             if (!port.IsForeground(bounds))
                             {
                                 machine.Pause();
+                                if (noticeGate != null) noticeGate.Pause();
                                 wasFocused = false;
                                 continue;
                             }

@@ -288,6 +288,23 @@ namespace RMacro
         private const string Marker = "RMACRO_URL_V1";
         private const int MaxAddressBytes = 1024;
 
+        // Append the *current* validated endpoint to the verified update. The
+        // footer is configuration, not a credential; the server URL never goes
+        // to GitHub and need not be shown in the loader UI.
+        public static void AppendToExecutable(string path, string address)
+        {
+            string normalized = new ApiClient(address).BaseUrl;
+            byte[] payload = Encoding.UTF8.GetBytes(normalized);
+            if (payload.Length == 0 || payload.Length > MaxAddressBytes) throw new InvalidOperationException("Настройки подключения слишком велики.");
+            using (FileStream stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.None))
+            using (BinaryWriter writer = new BinaryWriter(stream))
+            {
+                writer.Write(payload);
+                writer.Write((uint)payload.Length);
+                writer.Write(Encoding.ASCII.GetBytes(Marker));
+            }
+        }
+
         public static string ReadFromExecutable(string path)
         {
             byte[] marker = Encoding.ASCII.GetBytes(Marker);

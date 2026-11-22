@@ -43,9 +43,9 @@ try {
     $csc = Join-Path ([System.Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()) 'csc.exe'
     $testExe = Join-Path $directory 'RMacroTests.exe'
     $sources = @(
-        'src\Vision.cs', 'src\StateMachine.cs', 'src\Engine.cs', 'src\Safety.cs',
-        'src\WindowsGame.cs', 'src\UiComponents.cs', 'src\ChromeControls.cs', 'src\MainForm.cs',
-        'rmacro\client\ClientCore.cs', 'rmacro\client\ClientUi.cs', 'rmacro\tests\RMacroTestRunner.cs'
+        'src\Vision.cs', 'src\Relocation.cs', 'src\StateMachine.cs', 'src\Engine.cs', 'src\Safety.cs',
+        'src\WindowsGame.cs', 'src\UiComponents.cs', 'src\ChromeControls.cs', 'src\RelocationUi.cs', 'src\MainForm.cs',
+        'rmacro\client\UpdatePolicy.cs', 'rmacro\client\Updater.cs', 'rmacro\client\ClientCore.cs', 'rmacro\client\ClientUi.cs', 'rmacro\tests\RMacroTestRunner.cs'
     ) | ForEach-Object { Join-Path $root $_ }
     $references = @(
         [System.Diagnostics.Process].Assembly.Location, [System.Linq.Enumerable].Assembly.Location,

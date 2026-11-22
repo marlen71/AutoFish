@@ -13,12 +13,14 @@ try {
     Add-Type -AssemblyName System.Drawing
     $sources = @(
         (Join-Path $root 'src\Vision.cs'),
+        (Join-Path $root 'src\Relocation.cs'),
         (Join-Path $root 'src\StateMachine.cs'),
         (Join-Path $root 'src\Engine.cs'),
         (Join-Path $root 'src\Safety.cs'),
         (Join-Path $root 'src\WindowsGame.cs'),
         (Join-Path $root 'src\UiComponents.cs'),
         (Join-Path $root 'src\ChromeControls.cs'),
+        (Join-Path $root 'src\RelocationUi.cs'),
         (Join-Path $root 'src\MainForm.cs'),
         (Join-Path $root 'tests\GuiSafetyRunner.cs')
     )

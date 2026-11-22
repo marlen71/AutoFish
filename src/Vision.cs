@@ -15,6 +15,8 @@ namespace RMFish
 
         private readonly byte[] pixels;
         private readonly int width, height, stride, clientWidth, clientHeight, originX, originY;
+        public int ClientWidth { get { return clientWidth; } }
+        public int ClientHeight { get { return clientHeight; } }
 
         public PixelFrame(byte[] pixels, int width, int height, int stride,
                           int clientWidth, int clientHeight, int originX, int originY)
@@ -52,6 +54,8 @@ namespace RMFish
     {
         public int Left { get; private set; }
         public int Right { get; private set; }
+        // Reference-space vertical centre; the HUD is not always at the same Y.
+        public int Y { get; private set; }
         // The narrower, brighter target inside the broad green region. -1 means
         // it could not be identified reliably, so the worker must not click.
         public int TargetLeft { get; private set; }
@@ -61,19 +65,20 @@ namespace RMFish
         // -1 means that the bar is visible but the white hook isn't reliable.
         public int Hook { get; private set; }
 
-        public CastInfo(int left, int right, int hook, int targetLeft, int targetRight)
+        public CastInfo(int left, int right, int hook, int targetLeft, int targetRight, int y)
         {
             Left = left;
             Right = right;
             Hook = hook;
             TargetLeft = targetLeft;
             TargetRight = targetRight;
+            Y = y;
         }
     }
 
     public static class Vision
     {
-        private static readonly int[] CastRows = new int[] { 493, 499, 506, 513, 519 };
+        private static readonly int[] CastOffsets = new int[] { -13, -7, 0, 7, 13 };
         private const int SearchLeft = 620, SearchRight = 1160;
 
         private static bool CastGreen(int r, int g, int b)
@@ -110,17 +115,48 @@ namespace RMFish
         public static CastInfo FindCast(PixelFrame frame)
         {
             if (frame == null) throw new ArgumentNullException("frame");
+            CastInfo best = null;
+            int bestScore = -1;
+            // The user's full-screen image shows this HUD around y=430, whereas
+            // earlier frames put it around y=505. A cheap single-row prefilter
+            // limits the more expensive shape test to plausible locations.
+            for (int y = 385; y <= 535; y += 5)
+            {
+                int leftRed = 0, rightRed = 0, greens = 0;
+                for (int x = SearchLeft; x <= SearchRight; x += 4)
+                {
+                    int r, g, b;
+                    frame.Read(x, y, out r, out g, out b);
+                    if (CastGreen(r, g, b)) greens++;
+                    if (CastRed(r, g, b))
+                    {
+                        if (x < 820) leftRed++;
+                        if (x > 960) rightRed++;
+                    }
+                }
+                if (greens < 18 || leftRed < 3 || rightRed < 3) continue;
+                int score;
+                CastInfo candidate = FindCastAt(frame, y, out score);
+                if (candidate != null && score > bestScore) { best = candidate; bestScore = score; }
+            }
+            return best;
+        }
+
+        private static CastInfo FindCastAt(PixelFrame frame, int centerY, out int score)
+        {
+            score = 0;
             int n = SearchRight - SearchLeft + 1;
             bool[] green = new bool[n];
             bool[] red = new bool[n];
-            int[] chroma = new int[n], rowChroma = new int[CastRows.Length];
+            int[] greenCounts = new int[n], redCounts = new int[n];
+            int[] chroma = new int[n], rowChroma = new int[CastOffsets.Length];
             for (int x = SearchLeft; x <= SearchRight; x++)
             {
                 int greens = 0, reds = 0;
-                for (int row = 0; row < CastRows.Length; row++)
+                for (int row = 0; row < CastOffsets.Length; row++)
                 {
                     int r, g, b;
-                    frame.Read(x, CastRows[row], out r, out g, out b);
+                    frame.Read(x, centerY + CastOffsets[row], out r, out g, out b);
                     if (CastGreen(r, g, b)) greens++;
                     if (CastRed(r, g, b)) reds++;
                     // Relative green strength is less sensitive than raw green
@@ -131,6 +167,8 @@ namespace RMFish
                 chroma[x - SearchLeft] = rowChroma[rowChroma.Length / 2];
                 green[x - SearchLeft] = greens >= 3;
                 red[x - SearchLeft] = reds >= 3;
+                greenCounts[x - SearchLeft] = greens;
+                redCounts[x - SearchLeft] = reds;
             }
 
             // The hook can cover the zone. Merge small holes rather than treating
@@ -171,10 +209,17 @@ namespace RMFish
 
             // Exclude pale pixels outside the red ends (e.g. the crop or
             // overlay border) so they cannot outrank the actual hook.
-            int hook = FindHook(frame, barLeft, barRight);
+            int hook = FindHook(frame, barLeft, barRight, centerY);
             int targetLeft, targetRight;
             FindBrightTarget(green, chroma, left, right, out targetLeft, out targetRight);
-            return new CastInfo(left, right, hook, targetLeft, targetRight);
+            // Prefer the slice whose five scan lines actually lie on the bar,
+            // not a partly overlapping slice above or below it. Reliable hook
+            // and target recognition still take precedence over raw coverage.
+            for (int x = barLeft; x <= barRight; x++)
+                score += x >= left && x <= right ? greenCounts[x - SearchLeft] : redCounts[x - SearchLeft];
+            if (hook >= 0) score += 5000;
+            if (targetLeft >= 0) score += 5000;
+            return new CastInfo(left, right, hook, targetLeft, targetRight, centerY);
         }
 
         // The HUD's bright centre is substantially greener than the surrounding
@@ -258,7 +303,7 @@ namespace RMFish
             }
         }
 
-        private static int FindHook(PixelFrame frame, int left, int right)
+        private static int FindHook(PixelFrame frame, int left, int right, int centerY)
         {
             int bestHook = -1, bestScore = 0;
             int runStart = -1, last = -1, pixels = 0, sumX = 0, top = 1000, bottom = -1;
@@ -267,7 +312,7 @@ namespace RMFish
                 int columnCount = 0, columnTop = 1000, columnBottom = -1;
                 if (x <= right)
                 {
-                    for (int y = 488; y <= 521; y++)
+                    for (int y = centerY - 18; y <= centerY + 15; y++)
                     {
                         int r, g, b;
                         frame.Read(x, y, out r, out g, out b);

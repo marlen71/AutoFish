@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Drawing;
 using System.Diagnostics;
 using System.Collections.Generic;
@@ -278,6 +278,10 @@ namespace RMacro
         private readonly System.Windows.Forms.Timer clockTimer = new System.Windows.Forms.Timer();
         private readonly System.Windows.Forms.Timer refreshTimer = new System.Windows.Forms.Timer();
         private readonly System.Windows.Forms.Timer drainTimer = new System.Windows.Forms.Timer();
+        private readonly System.Windows.Forms.Timer updateTimer = new System.Windows.Forms.Timer();
+        private readonly bool automaticUpdates;
+        private bool updateChecking, updateApplying;
+        private UpdateRelease pendingUpdate;
         private Panel loginPage, dashboardPage, workspacePage, profilePage, sidebar;
         private DarkField usernameField, passwordField, keyField, oldPasswordField, newPasswordField, confirmPasswordField;
         private CatalogList gameList, macroList;
@@ -299,7 +303,11 @@ namespace RMacro
         private int generation, profileRevision;
 
         public LoaderForm(string localDirectory, string device, string serverAddress)
+            : this(localDirectory, device, serverAddress, false) { }
+
+        internal LoaderForm(string localDirectory, string device, string serverAddress, bool automaticUpdates)
         {
+            this.automaticUpdates = automaticUpdates;
             this.localDirectory = localDirectory; this.device = device;
             this.serverAddress = new ApiClient(serverAddress).BaseUrl;
             store = new SessionStore(localDirectory);
@@ -322,16 +330,25 @@ namespace RMacro
                 if (drainingFish != null && drainingFish.FinishWorkerShutdown())
                 { drainingFish = null; drainTimer.Stop(); ReleaseFishMutex(); UpdateProfileView(); }
             };
-            Shown += async delegate { await RestoreAsync(); };
+            updateTimer.Interval = 5000;
+            updateTimer.Tick += async delegate { await OfferPendingUpdateAsync(); };
+            Shown += async delegate
+            {
+                // Let the startup health marker run before networking or any
+                // update prompt can delay the Shown event.
+                await Task.Yield();
+                await RestoreAsync();
+                if (this.automaticUpdates && !closing) await CheckUpdatesAsync(false);
+            };
             FormClosing += delegate
             {
                 closing = true; generation++;
-                clockTimer.Stop(); refreshTimer.Stop();
+                clockTimer.Stop(); refreshTimer.Stop(); updateTimer.Stop();
                 CloseProduct("Закрытие Eternal Core. Запрошена остановка.");
             };
             FormClosed += delegate
             {
-                clockTimer.Dispose(); refreshTimer.Dispose(); drainTimer.Dispose();
+                clockTimer.Dispose(); refreshTimer.Dispose(); drainTimer.Dispose(); updateTimer.Dispose();
             };
         }
 
@@ -388,6 +405,8 @@ namespace RMacro
             loginMessage = Label(loginPage, "", 478, 450, 423, 55, 8.8f, Theme.Warn, FontStyle.Regular); loginMessage.Name = "loginMessage";
             SoftButton support = Button(loginPage, "Тех. Поддержка   ↗", 478, 517, 220, 38, false); support.Name = "loginSupport";
             support.Click += delegate { OpenSupport(loginMessage); };
+            SoftButton update = Button(loginPage, "Обновления", 709, 517, 192, 38, false); update.Name = "loginUpdates";
+            update.Click += async delegate { await CheckUpdatesAsync(true); };
             bool plainLan = new Uri(serverAddress).Scheme == Uri.UriSchemeHttp && !new Uri(serverAddress).IsLoopback;
             sessionNote = Label(loginPage, plainLan ? "HTTP в LAN не шифрует данные · пароль не сохраняется" :
                 "Пароль не сохраняется · Защита Windows", 478, 565, 440, 20, 8f, Theme.Muted, FontStyle.Regular);
@@ -407,6 +426,8 @@ namespace RMacro
             navProfile = Button(sidebar, "Профиль", 15, 187, 160, 40, false); navProfile.Name = "navProfile";
             navProfile.AlignLeft = true; navProfile.IconKind = MenuIcon.Journal;
             navProfile.Click += delegate { ShowDashboardPage(true); };
+            SoftButton update = Button(sidebar, "Обновления", 15, 239, 160, 40, false); update.Name = "dashboardUpdates";
+            update.Click += async delegate { await CheckUpdatesAsync(true); };
             SoftCard security = Card(sidebar, 15, 372, 160, 121); security.Fill = Color.FromArgb(19, 23, 39);
             Label(security, "◆", 12, 13, 22, 22, 12f, Theme.Accent, FontStyle.Bold);
             Label(security, "ВАШ ДОСТУП", 38, 14, 110, 20, 7.5f, Theme.Text, FontStyle.Bold);
@@ -547,6 +568,68 @@ namespace RMacro
             if (changePasswordButton != null) changePasswordButton.Enabled = !value;
             if (value) { if (launchButton != null) launchButton.Enabled = false; if (productPower != null) productPower.Enabled = false; }
             else UpdateProfileView();
+        }
+
+        private async Task CheckUpdatesAsync(bool manual)
+        {
+            if (closing || updateChecking || updateApplying) return;
+            if (pendingUpdate != null) { await OfferPendingUpdateAsync(); return; }
+            updateChecking = true;
+            try
+            {
+                Version current = Assembly.GetExecutingAssembly().GetName().Version;
+                UpdateRelease release = await Task.Run(delegate { return LoaderUpdater.FindNewer(current); });
+                if (closing) return;
+                if (release == null)
+                {
+                    if (manual) MessageBox.Show(this, "Установлена последняя доступная стабильная версия Eternal Core.",
+                        "Обновления", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+                pendingUpdate = release; updateTimer.Start();
+                if (fishForm != null || drainingFish != null)
+                    connectionText.Text = "Доступно обновление лоадера. Закройте RMFish для установки.";
+                await OfferPendingUpdateAsync();
+            }
+            catch (Exception)
+            {
+                if (manual && !closing) MessageBox.Show(this,
+                    "Не удалось проверить обновления в GitHub. Приложение продолжит работать; попробуйте позже.",
+                    "Обновления", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            finally { updateChecking = false; }
+        }
+
+        private async Task OfferPendingUpdateAsync()
+        {
+            if (closing || updateApplying || busy || fishForm != null || drainingFish != null || pendingUpdate == null) return;
+            updateApplying = true;
+            UpdateRelease release = pendingUpdate; pendingUpdate = null; updateTimer.Stop();
+            StagedUpdate staged = null;
+            try
+            {
+                if (MessageBox.Show(this, "Доступна версия Eternal Core " + release.Version.ToString(3) +
+                    ". Загрузить проверенное обновление и перезапустить лоадер? Сервер и другие компоненты не изменятся.",
+                    "Обновление лоадера", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+                SetBusy(true);
+                string executable = Application.ExecutablePath;
+                staged = await Task.Run(delegate { return LoaderUpdater.Prepare(release, executable); });
+                if (closing || fishForm != null || drainingFish != null) return;
+                LoaderUpdater.LaunchHelper(staged);
+                staged = null; // helper owns the staged files now
+                Close();
+            }
+            catch (Exception ex)
+            {
+                if (!closing) MessageBox.Show(this, "Обновление не установлено; текущий лоадер сохранён.\n\n" + ex.Message,
+                    "Обновления", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            finally
+            {
+                if (staged != null) LoaderUpdater.Discard(staged);
+                updateApplying = false;
+                if (!closing) SetBusy(false);
+            }
         }
 
         private async Task RestoreAsync()

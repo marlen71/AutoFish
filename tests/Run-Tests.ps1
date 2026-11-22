@@ -2,6 +2,7 @@
 $root = Split-Path -Parent $PSScriptRoot
 $sources = @(
     (Join-Path $root 'src\Vision.cs'),
+    (Join-Path $root 'src\Relocation.cs'),
     (Join-Path $root 'src\StateMachine.cs'),
     (Join-Path $root 'src\Engine.cs'),
     (Join-Path $root 'src\Safety.cs'),

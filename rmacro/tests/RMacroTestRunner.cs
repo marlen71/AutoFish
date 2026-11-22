@@ -129,6 +129,13 @@ internal static class RMacroTestRunner
         string configProbe = Path.Combine(root, "config-probe.exe");
         File.WriteAllBytes(configProbe, new byte[] { 0x4d, 0x5a });
         Check(ServerSettings.ReadFromExecutable(configProbe) == "http://192.168.0.105:8765", "unconfigured EXE uses owner LAN default");
+        ServerSettings.AppendToExecutable(configProbe, api.BaseUrl);
+        string stagedProbe = Path.Combine(root, "staged-probe.exe");
+        File.WriteAllBytes(stagedProbe, new byte[] { 0x4d, 0x5a });
+        ServerSettings.AppendToExecutable(stagedProbe, ServerSettings.ReadFromExecutable(configProbe));
+        Check(ServerSettings.ReadFromExecutable(stagedProbe) == api.BaseUrl, "updater preserves owner-configured endpoint");
+        ServerSettings.AppendToExecutable(stagedProbe, "http://192.168.0.105:8765");
+        Check(ServerSettings.ReadFromExecutable(stagedProbe) == "http://192.168.0.105:8765", "last verified footer wins deterministically");
         byte[] insecure = Encoding.ASCII.GetBytes("http://8.8.8.8");
         WriteFooter(configProbe, insecure, (uint)insecure.Length);
         try { ServerSettings.ReadFromExecutable(configProbe); throw new Exception("Insecure configured endpoint accepted"); }

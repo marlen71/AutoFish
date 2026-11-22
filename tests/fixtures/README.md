@@ -6,4 +6,6 @@ The 1920×1080 reference frames are 541×381 pixels, cropped at `[620, 360, 1161
 
 `cast-boat` comes from a later user-supplied 681×232 crop. Only its bar and hook were kept; the player name and surrounding screen are not included. Its original full-screen position is unknown, so the bar was **reconstructed** at the expected reference position rather than used as evidence of its real client coordinates. The 720p version is a scaled reconstruction. Tests that move its white pixels simulate motion and are not a recorded game sequence.
 
+`cast-dock-1920` is a crop from the user's later full-width screenshot (1919×1037; the bottom of the image is absent). The bar is at approximately y=430 in the uncropped top of that screenshot, not at the reconstructed y=505 used for `cast-user`. Tests assume the original client was 1920×1080; the image alone cannot establish its actual client geometry. The 720p and moved-hook tests are simulated, not a recording of the game.
+
 `TestRunner.cs` supplies the matching client dimensions and crop origin to `PixelFrame`. No image library or game installation is required to run the tests.

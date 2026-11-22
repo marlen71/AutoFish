@@ -1,4 +1,4 @@
-﻿# RMFish launcher for Windows PowerShell 5.1. No packages need to be installed.
+# RMFish launcher for Windows PowerShell 5.1. No packages need to be installed.
 param([switch]$HideConsole)
 $ErrorActionPreference = 'Stop'
 $mutex = $null
@@ -21,12 +21,14 @@ try {
 
     $sources = @(
         (Join-Path $PSScriptRoot 'src\Vision.cs'),
+        (Join-Path $PSScriptRoot 'src\Relocation.cs'),
         (Join-Path $PSScriptRoot 'src\StateMachine.cs'),
         (Join-Path $PSScriptRoot 'src\Engine.cs'),
         (Join-Path $PSScriptRoot 'src\Safety.cs'),
         (Join-Path $PSScriptRoot 'src\WindowsGame.cs'),
         (Join-Path $PSScriptRoot 'src\UiComponents.cs'),
         (Join-Path $PSScriptRoot 'src\ChromeControls.cs'),
+        (Join-Path $PSScriptRoot 'src\RelocationUi.cs'),
         (Join-Path $PSScriptRoot 'src\MainForm.cs')
     )
     $references = @(

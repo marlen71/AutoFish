@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Diagnostics;
+using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Text;
@@ -9,7 +10,13 @@ namespace RMFish
 {
     public sealed class MainForm : Form
     {
-        private readonly string baseDirectory, stopFile, settingsPath;
+        private readonly string baseDirectory, stopFile, settingsPath, noticePath, gearPath;
+        private readonly object calibrationGate = new object();
+        private readonly List<GearPoint> gearSamples = new List<GearPoint>();
+        // 0: idle, 1: capture notice with F9, 2: record gear with F9,
+        // 3: finish/save the captured sample on the UI or worker thread.
+        private int calibrationMode;
+        private bool autoRelocate, rodRight = true, captureRodRight;
         private readonly FishingEngine engine;
         private readonly Func<bool> accessAllowed;
         private readonly SafetyKeyMonitor safetyKeys;
@@ -52,6 +59,8 @@ namespace RMFish
             if (String.IsNullOrEmpty(local)) local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             if (String.IsNullOrEmpty(local)) local = directory;
             settingsPath = Path.Combine(local, "RMFish", "settings.ini");
+            noticePath = Path.Combine(local, "RMFish", "fish-notice.dat");
+            gearPath = Path.Combine(local, "RMFish", "fish-gear.dat");
             engine = new FishingEngine(new WindowsGamePort(stopFile));
             safetyKeys = new SafetyKeyMonitor(
                 delegate(int key) { return (WindowsNative.GetAsyncKeyState(key) & 0x8000) != 0; },
@@ -108,6 +117,7 @@ namespace RMFish
             FormClosing += delegate
             {
                 closing = true;
+                CancelCalibration();
                 refreshTimer.Stop(); probeTimer.Stop(); engine.RequestStop();
                 safetyKeys.Dispose(); UnregisterKeys();
             };
@@ -265,7 +275,7 @@ namespace RMFish
             AddLabel(shortcut, "Esc  ·  держать 2 сек", 12, 57, 139, 20, 8f, Theme.Muted, FontStyle.Regular);
             AddLabel(shortcut, "ЛКМ + ПКМ  ·  2 сек", 12, 80, 139, 20, 8f, Theme.Muted, FontStyle.Regular);
             AddLabel(shortcut, "Проверьте F10 в игре", 12, 111, 139, 21, 7.8f, Theme.Text, FontStyle.Regular);
-            hotkeyLabel = AddLabel(sidebar, "F8  ·  старт / стоп\nF9  ·  проверка экрана\nВерсия 1.27 beta.5", 19, 560, 154, 55, 8f, Theme.Muted, FontStyle.Regular);
+            hotkeyLabel = AddLabel(sidebar, "F8  ·  старт / стоп\nF9  ·  проверка экрана\nВерсия 1.28 beta.1", 19, 560, 154, 55, 8f, Theme.Muted, FontStyle.Regular);
         }
 
         private void BuildDashboard()
@@ -396,8 +406,11 @@ namespace RMFish
             SoftButton save = Button(page, "Сохранить настройки", 30, 466, 220, 42, true);
             save.Name = "saveSettings";
             save.Click += delegate { SaveSettings(true); };
-            settingsFeedback = AddLabel(page, "Новые параметры применяются при следующем запуске.", 266, 469, 490, 35, 8.8f, Theme.Muted, FontStyle.Regular);
+            settingsFeedback = AddLabel(page, "Изменения — при следующем запуске.", 266, 469, 260, 35, 8.5f, Theme.Muted, FontStyle.Regular);
             settingsFeedback.Name = "settingsFeedback";
+            SoftButton relocate = Button(page, "Автоотход…", 551, 466, 209, 42, false);
+            relocate.Name = "relocationSettings";
+            relocate.Click += delegate { ShowRelocationSetup(); };
             SoftCard safety = Card(page, 30, 527, 730, 80);
             safety.Fill = Color.FromArgb(42, 39, 29);
             safety.Stroke = Color.FromArgb(98, 82, 54);
@@ -511,7 +524,8 @@ namespace RMFish
                 ReelClickMilliseconds = (int)clickInput.Value,
                 WaitTimeoutSeconds = (int)timeoutInput.Value,
                 SessionLimitSeconds = (int)sessionInput.Value,
-                MinimizeOnStart = minimizeInput.Checked
+                MinimizeOnStart = minimizeInput.Checked,
+                AutoRelocate = autoRelocate
             };
         }
 
@@ -533,6 +547,8 @@ namespace RMFish
                         if (pair[0] == "wait_seconds" && Int32.TryParse(pair[1], out number)) options.WaitTimeoutSeconds = number;
                         if (pair[0] == "session_seconds" && Int32.TryParse(pair[1], out number)) options.SessionLimitSeconds = number;
                         if (pair[0] == "minimize" && Boolean.TryParse(pair[1], out flag)) options.MinimizeOnStart = flag;
+                        if (pair[0] == "auto_relocate" && Boolean.TryParse(pair[1], out flag)) autoRelocate = flag;
+                        if (pair[0] == "rod_right_button" && Boolean.TryParse(pair[1], out flag)) rodRight = flag;
                     }
                 }
             }
@@ -553,7 +569,8 @@ namespace RMFish
                 Directory.CreateDirectory(Path.GetDirectoryName(settingsPath));
                 string text = "poll_ms=" + options.PollMilliseconds + "\r\nreel_click_ms=" + options.ReelClickMilliseconds +
                     "\r\nwait_seconds=" + options.WaitTimeoutSeconds + "\r\nsession_seconds=" + options.SessionLimitSeconds +
-                    "\r\nminimize=" + options.MinimizeOnStart + "\r\n";
+                    "\r\nminimize=" + options.MinimizeOnStart + "\r\nauto_relocate=" + autoRelocate +
+                    "\r\nrod_right_button=" + rodRight + "\r\n";
                 File.WriteAllText(settingsPath, text, Encoding.UTF8);
                 if (inform)
                 {
@@ -571,6 +588,55 @@ namespace RMFish
                     settingsFeedback.ForeColor = Theme.Warn;
                 }
                 return false;
+            }
+        }
+
+        private void ShowRelocationSetup()
+        {
+            if (engine.Snapshot().Running)
+            {
+                MessageBox.Show(this, "Сначала остановите рыбалку и дождитесь завершения рабочего потока.", "Автоотход",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            if (CancelCalibration())
+            {
+                engine.Log("Запись образцов отменена.");
+                MessageBox.Show(this, "Запись образцов отменена. Откройте настройки ещё раз для новой записи.", "Автоотход");
+                return;
+            }
+            using (RelocationSetupForm dialog = new RelocationSetupForm(autoRelocate, rodRight, File.Exists(noticePath), File.Exists(gearPath)))
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                autoRelocate = dialog.AutoEnabled; rodRight = dialog.RodRightButton;
+                SaveSettings(false);
+                if (dialog.Command == "notice")
+                {
+                    if (MessageBox.Show(this,
+                        "Остановите рыбалку. Переключитесь в GTA5 и дождитесь именно сообщения об окончании рыбы над миникартой. Пока сообщение видно, нажмите F9; затем в открывшемся окне выделите всю надпись. F10 отменяет запись.",
+                        "Образец уведомления", MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK) return;
+                    lock (calibrationGate) calibrationMode = 1;
+                    engine.Log("Ожидаем F9 на уведомлении об окончании рыбы. F10 отменяет запись.");
+                }
+                else if (dialog.Command == "gear")
+                {
+                    string button = rodRight ? "правой" : "левой";
+                    if (MessageBox.Show(this,
+                        "Запись выполняется вручную в игре, без автоматических кликов.\n\n1. Откройте инвентарь I/Ш, наведите курсор на удочку и нажмите F9. После сигнала нажмите на удочку " + button + " кнопкой.\n\n2. Наведите на «Ловить рыбу», нажмите F9 и после сигнала нажмите ЛКМ.\n\n3. Наведите на «Хлебный мякиш», нажмите F9 и после сигнала нажмите ЛКМ.\n\nНе меняйте размер окна. Подводите курсор к узнаваемому значку/тексту, не к пустому месту. F10 отменяет запись.",
+                        "Запись инвентаря", MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK) return;
+                    lock (calibrationGate) { gearSamples.Clear(); captureRodRight = rodRight; calibrationMode = 2; }
+                    engine.Log("Запись инвентаря: наведите на удочку и нажмите F9. F10 отменяет запись.");
+                }
+            }
+        }
+
+        private bool CancelCalibration()
+        {
+            lock (calibrationGate)
+            {
+                bool wasActive = calibrationMode != 0;
+                calibrationMode = 0; gearSamples.Clear();
+                return wasActive;
             }
         }
 
@@ -607,6 +673,14 @@ namespace RMFish
         private void StartFishing()
         {
             if (closing || engine.Snapshot().Running) return;
+            lock (calibrationGate)
+            {
+                if (calibrationMode != 0)
+                {
+                    engine.Log("Сначала завершите запись образцов или отмените её с F10.");
+                    return;
+                }
+            }
             // Record intent before checking the lease: a concurrent revocation
             // increments StopVersion and must win over this start attempt.
             long stopVersion = engine.StopVersion;
@@ -643,6 +717,15 @@ namespace RMFish
             SaveSettings(false);
             try
             {
+                if (options.AutoRelocate)
+                {
+                    if (!File.Exists(noticePath) || !File.Exists(gearPath))
+                        throw new InvalidOperationException("Для автоотхода сначала запишите уведомление и элементы инвентаря в настройках.");
+                    options.Notice = NoticeTemplate.Load(noticePath);
+                    options.Gear = GearMacro.Load(gearPath);
+                    if (options.Gear.Point(0).RightButton != rodRight)
+                        throw new InvalidOperationException("Способ нажатия на удочку изменился. Запишите инвентарь заново.");
+                }
                 if (engine.Start(options, stopVersion))
                 {
                     // A fault or held emergency key must win over Start.
@@ -716,6 +799,7 @@ namespace RMFish
             // This callback also runs on the independent polling thread: it
             // never waits for the WinForms UI to process a hotkey message.
             engine.RequestStop(reason);
+            if (CancelCalibration() && first) engine.Log("Запись образцов отменена аварийной остановкой.");
             if (!first) return;
             if (signal == EmergencySignal.F10)
             {
@@ -764,6 +848,17 @@ namespace RMFish
                     ReportProbe(reason, "Диагностика: ");
                     return;
                 }
+                int mode;
+                lock (calibrationGate) mode = calibrationMode;
+                if (mode != 0 && engine.Snapshot().Running)
+                {
+                    CancelCalibration();
+                    ReportProbe("Запись отменена: рыбалка уже работает.", "Автоотход: ");
+                    return;
+                }
+                if (mode == 1) { CaptureNoticeSample(port, bounds); return; }
+                if (mode == 2) { CaptureGearSample(port, bounds); return; }
+                if (mode == 3) { ReportProbe("Дождитесь завершения текущей записи.", "Автоотход: "); return; }
                 PixelFrame frame = port.Capture(bounds);
                 if (!port.IsForeground(bounds))
                 {
@@ -772,6 +867,94 @@ namespace RMFish
                 }
                 string result = String.Format("{0}×{1}. {2}", bounds.Width, bounds.Height, Vision.Describe(frame));
                 ReportProbe(result, "F9: ");
+            }
+        }
+
+        private void CaptureNoticeSample(WindowsGamePort port, GameBounds bounds)
+        {
+            PixelFrame frame = port.CaptureArea(bounds, NoticeTemplate.RegionLeft, NoticeTemplate.RegionTop,
+                NoticeTemplate.RegionRight, NoticeTemplate.RegionBottom);
+            if (!port.IsForeground(bounds)) throw new InvalidOperationException("Фокус изменился. Дождитесь уведомления и нажмите F9 ещё раз.");
+            lock (calibrationGate)
+            {
+                if (calibrationMode != 1) return;
+                calibrationMode = 3;
+            }
+            try
+            {
+                BeginInvoke((MethodInvoker)delegate
+                {
+                    try
+                    {
+                        if (closing) return;
+                        lock (calibrationGate) { if (calibrationMode != 3) return; }
+                        using (NoticeSelectionForm dialog = new NoticeSelectionForm(frame))
+                        {
+                            if (dialog.ShowDialog(this) != DialogResult.OK || dialog.Result == null) return;
+                            lock (calibrationGate) { if (calibrationMode != 3) return; }
+                            dialog.Result.Save(noticePath);
+                            engine.Log("Образец текста уведомления сохранён. Проверьте его с реальным сообщением перед использованием.");
+                        }
+                    }
+                    catch (Exception ex) { engine.Log("Не удалось сохранить образец: " + ex.Message); }
+                    finally { lock (calibrationGate) { if (calibrationMode == 3) calibrationMode = 0; } }
+                });
+            }
+            catch
+            {
+                lock (calibrationGate) { if (calibrationMode == 3) calibrationMode = 0; }
+                throw;
+            }
+        }
+
+        private void CaptureGearSample(WindowsGamePort port, GameBounds bounds)
+        {
+            WindowsNative.Point cursor, after;
+            if (!WindowsNative.GetCursorPos(out cursor)) throw new InvalidOperationException("Не удалось определить положение курсора.");
+            int x = (int)Math.Round((cursor.X - bounds.X) * (double)PixelFrame.ReferenceWidth / bounds.Width);
+            int y = (int)Math.Round((cursor.Y - bounds.Y) * (double)PixelFrame.ReferenceHeight / bounds.Height);
+            if (x < GearPoint.HalfWidth || x >= PixelFrame.ReferenceWidth - GearPoint.HalfWidth ||
+                y < GearPoint.HalfHeight || y >= PixelFrame.ReferenceHeight - GearPoint.HalfHeight)
+                throw new InvalidOperationException("Наведите курсор на элемент внутри окна игры.");
+            int index; bool right;
+            lock (calibrationGate)
+            {
+                if (calibrationMode != 2) return;
+                index = gearSamples.Count; right = index == 0 && captureRodRight;
+            }
+            PixelFrame frame = port.CaptureArea(bounds, x - GearPoint.HalfWidth, y - GearPoint.HalfHeight,
+                x + GearPoint.HalfWidth, y + GearPoint.HalfHeight);
+            if (!port.IsForeground(bounds) || !WindowsNative.GetCursorPos(out after) ||
+                Math.Abs(after.X - cursor.X) > 1 || Math.Abs(after.Y - cursor.Y) > 1)
+                throw new InvalidOperationException("Фокус или курсор изменился. Наведите его на элемент и нажмите F9 ещё раз.");
+            GearPoint point = GearPoint.Create(frame, x, y, right);
+            GearMacro finished = null;
+            lock (calibrationGate)
+            {
+                if (calibrationMode != 2 || gearSamples.Count != index) return;
+                gearSamples.Add(point);
+                if (gearSamples.Count == 3)
+                {
+                    finished = new GearMacro(gearSamples[0], gearSamples[1], gearSamples[2]);
+                    calibrationMode = 3;
+                }
+            }
+            try { System.Media.SystemSounds.Asterisk.Play(); } catch (Exception) { }
+            if (finished != null)
+            {
+                try
+                {
+                    lock (calibrationGate) { if (calibrationMode != 3) return; }
+                    finished.Save(gearPath);
+                    ReportProbe("Три элемента инвентаря сохранены. Проверьте настройки перед запуском.", "Автоотход: ");
+                }
+                finally { lock (calibrationGate) { if (calibrationMode == 3) calibrationMode = 0; gearSamples.Clear(); } }
+            }
+            else
+            {
+                string next = index == 0 ? "Теперь нажмите на удочку, наведите на «Ловить рыбу» и нажмите F9." :
+                    "Теперь нажмите «Ловить рыбу», наведите на «Хлебный мякиш» и нажмите F9.";
+                ReportProbe("Сохранён шаг " + (index + 1) + ". " + next, "Автоотход: ");
             }
         }
 
@@ -797,7 +980,7 @@ namespace RMFish
             hotF9 = WindowsNative.RegisterHotKey(Handle, HotF9, NoRepeat, 0x78);
             hotF10 = WindowsNative.RegisterHotKey(Handle, HotF10, NoRepeat, 0x79);
             if (hotF8 && hotF9 && hotF10)
-                hotkeyLabel.Text = "F8  ·  старт / стоп\nF9  ·  проверка экрана\nВерсия 1.27 beta.5";
+                hotkeyLabel.Text = "F8  ·  старт / стоп\nF9  ·  проверка экрана\nВерсия 1.28 beta.1";
             else
             {
                 hotkeyLabel.Text = "Часть клавиш занята.\nПроверьте F10 в игре.";

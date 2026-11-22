@@ -41,6 +41,10 @@ jobs:
             throw "Server integration tests failed: $testExit"
           }
 
+      - name: Test trusted loader update selection
+        shell: powershell
+        run: .\rmacro\tests\Run-UpdatePolicy.ps1
+
       - name: Build the single-file Eternal Core loader
         shell: powershell
         run: |
@@ -51,6 +55,15 @@ jobs:
             Write-Output "::error title=RMacro build::$detail"
             throw
           }
+
+      - name: Test client prerequisites without installing anything
+        shell: powershell
+        run: .\rmacro\tests\Smoke-Setup.ps1
+
+      - name: Test atomic loader update and rollback
+        timeout-minutes: 3
+        shell: powershell
+        run: .\rmacro\tests\Smoke-Updater.ps1
 
       - name: Test Windows login, DPAPI, embedded product and revoked access
         timeout-minutes: 3
@@ -92,6 +105,8 @@ jobs:
           Copy-Item 'dist\EternalCore.exe' (Join-Path $client 'EternalCore.exe')
           Copy-Item 'rmacro\client\STOP-ETERNAL-CORE.bat' (Join-Path $client 'STOP-ETERNAL-CORE.bat')
           Copy-Item 'rmacro\client\EMERGENCY-ETERNAL-CORE.bat' (Join-Path $client 'EMERGENCY-ETERNAL-CORE.bat')
+          Copy-Item 'rmacro\client\SETUP-ETERNAL-CORE.bat' (Join-Path $client 'SETUP-ETERNAL-CORE.bat')
+          Copy-Item 'rmacro\client\SETUP-ETERNAL-CORE.ps1' (Join-Path $client 'SETUP-ETERNAL-CORE.ps1')
           $instruction = (Get-Content 'rmacro\client\INSTRUCTIONS.txt' -Raw -Encoding UTF8).Replace("`r`n", "`n").Replace("`n", "`r`n")
           [IO.File]::WriteAllText((Join-Path $client 'INSTRUCTIONS.txt'), $instruction, [Text.UTF8Encoding]::new($true))
           foreach ($name in @('server.py','README-SERVER.md','RUN-PYTHON.bat','SETUP-ADMIN.bat','START-SERVER.bat','RESET-ADMIN.bat','BACKUP.bat','CONFIGURE-LOADER.bat')) {
@@ -107,10 +122,10 @@ jobs:
           $serverVerify = Join-Path $env:RUNNER_TEMP 'rmacro-server-verify'
           Expand-Archive (Join-Path $assets $clientName) -DestinationPath $clientVerify
           Expand-Archive (Join-Path $assets $serverName) -DestinationPath $serverVerify
-          foreach ($name in @('EternalCore.exe','STOP-ETERNAL-CORE.bat','EMERGENCY-ETERNAL-CORE.bat','INSTRUCTIONS.txt')) {
+          foreach ($name in @('EternalCore.exe','STOP-ETERNAL-CORE.bat','EMERGENCY-ETERNAL-CORE.bat','SETUP-ETERNAL-CORE.bat','SETUP-ETERNAL-CORE.ps1','INSTRUCTIONS.txt')) {
             if (-not (Test-Path -LiteralPath (Join-Path $clientVerify $name) -PathType Leaf)) { throw "Missing client file $name" }
           }
-          if (@(Get-ChildItem $clientVerify -File -Recurse).Count -ne 4) { throw 'Unexpected client files.' }
+          if (@(Get-ChildItem $clientVerify -File -Recurse).Count -ne 6) { throw 'Unexpected client files.' }
           foreach ($name in @('server.py','README-SERVER.md','RUN-PYTHON.bat','SETUP-ADMIN.bat','START-SERVER.bat','RESET-ADMIN.bat','BACKUP.bat','CONFIGURE-LOADER.bat','static\index.html','static\app.js','static\style.css','static\logo.png','static\mark.png','static\favicon.ico')) {
             if (-not (Test-Path -LiteralPath (Join-Path $serverVerify $name) -PathType Leaf)) { throw "Missing server file $name" }
           }

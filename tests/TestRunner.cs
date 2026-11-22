@@ -1,5 +1,6 @@
-﻿using System;
+using System;
 using System.Diagnostics;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Runtime.InteropServices;
@@ -142,6 +143,29 @@ public static class TestRunner
         return new PixelFrame(data, width, height, width * 4, 1920, 1080, PixelFrame.CropLeft, PixelFrame.CropTop);
     }
 
+    // The latest user screenshot contains the whole HUD, at its observed Y
+    // rather than the reconstructed position of cast-user. Move just its real
+    // hook pixels to exercise later parts of the bar; this is not game video.
+    private static PixelFrame DockWithHook(int hookX)
+    {
+        int width = PixelFrame.CropRight - PixelFrame.CropLeft;
+        int height = PixelFrame.CropBottom - PixelFrame.CropTop;
+        byte[] original = FixturePixels("cast-dock", 1920), data = (byte[])original.Clone();
+        for (int y = 411; y <= 447; y++)
+            for (int x = 673; x <= 694; x++)
+            {
+                int i = ((y - PixelFrame.CropTop) * width + x - PixelFrame.CropLeft) * 4;
+                int b = original[i], g = original[i + 1], r = original[i + 2];
+                bool white = r >= 155 && g >= 155 && b >= 145 &&
+                    Math.Max(r, Math.Max(g, b)) - Math.Min(r, Math.Min(g, b)) <= 45;
+                if (!white) continue;
+                int replacement = ((y - PixelFrame.CropTop) * width + 700 - PixelFrame.CropLeft) * 4;
+                Array.Copy(original, replacement, data, i, 4);
+                if (hookX >= 0) Set(data, x + hookX - 683, y, r, g, b);
+            }
+        return new PixelFrame(data, width, height, width * 4, 1920, 1080, PixelFrame.CropLeft, PixelFrame.CropTop);
+    }
+
     private static PixelFrame ShiftCast(PixelFrame frame, int offset)
     {
         int width = PixelFrame.CropRight - PixelFrame.CropLeft;
@@ -216,6 +240,16 @@ public static class TestRunner
         CastInfo user = Vision.FindCast(Fixture("cast-user", 1920, 1080));
         Check(user != null && user.HasTarget && user.Hook >= 780 && user.Hook <= 795 &&
             user.TargetLeft >= 850 && user.TargetRight <= 925, "new user screenshot recognizes the hook and the central bright patch");
+        CastInfo dock = Vision.FindCast(Fixture("cast-dock", 1920, 1080));
+        Check(dock != null && dock.Y >= 420 && dock.Y <= 440 && dock.Hook >= 678 && dock.Hook <= 690 &&
+            dock.HasTarget && dock.TargetLeft >= 815 && dock.TargetRight <= 880,
+            "latest full-HUD screenshot is recognized at its actual higher vertical position");
+        CastInfo dockSmall = Vision.FindCast(ScaleTo720(Fixture("cast-dock", 1920, 1080)));
+        Check(dockSmall != null && dockSmall.Y >= 420 && dockSmall.Y <= 440 && dockSmall.HasTarget &&
+            dockSmall.Hook >= 676 && dockSmall.Hook <= 692, "higher bar survives simulated 720p scaling");
+        CastInfo dockMoved = Vision.FindCast(DockWithHook(850));
+        Check(dockMoved != null && dockMoved.HasTarget && dockMoved.Hook >= 846 && dockMoved.Hook <= 854,
+            "the real dock hook can be located inside its bright target");
         foreach (double brightness in new double[] { 1.0, 0.85, 0.70 })
         {
             PixelFrame frame = UserBarWithHook(890, brightness);
@@ -252,17 +286,51 @@ public static class TestRunner
         Check(machine.Step(wait, 0) == FishingAction.None, "idle never clicks");
         Check(machine.Step(cast, 30) == FishingAction.None, "cast is confirmed across two frames");
         Check(machine.Step(cast, 60) == FishingAction.CastClick, "hook near center triggers cast");
+        machine.ConfirmClick(FishingAction.CastClick, 60);
         Check(machine.Step(cast, 100) == FishingAction.None, "cast click is not immediately repeated");
         Check(machine.Step(wait, 200) == FishingAction.None, "one missing cast frame is tolerated");
         machine.Step(wait, 230); machine.Step(wait, 260);
         Check(machine.Phase == FishingPhase.WaitingBite && machine.Casts == 1, "cast disappearance increments exactly once");
         Check(machine.Step(bite, 500) == FishingAction.None, "bite needs two frames");
         Check(machine.Step(bite, 530) == FishingAction.ReelClick, "confirmed bite starts clicking");
+        machine.ConfirmClick(FishingAction.ReelClick, 530);
         Check(machine.Step(bite, 550) == FishingAction.None, "reel click interval is respected");
         Check(machine.Step(bite, 590) == FishingAction.ReelClick, "reel repeats while the bar is visible");
+        machine.ConfirmClick(FishingAction.ReelClick, 590);
         Check(machine.Step(wait, 610) == FishingAction.None, "stop clicking on the first missing bite frame");
         machine.Step(wait, 640); machine.Step(wait, 670);
         Check(machine.Reels == 1 && machine.Phase == FishingPhase.Searching, "completed reeling phase is counted once");
+        Check(machine.Step(DockWithHook(815), 700) == FishingAction.None, "next higher cast is observed without a blind click");
+        Check(machine.Step(DockWithHook(850), 730) == FishingAction.CastClick, "next cast can fire after a completed reel");
+        machine.ConfirmClick(FishingAction.CastClick, 730);
+        machine.Step(wait, 760); machine.Step(wait, 790); machine.Step(wait, 820);
+        Check(machine.Casts == 2 && machine.Phase == FishingPhase.WaitingBite, "second cast is counted once after actual input");
+
+        machine = new FishingStateMachine(options);
+        machine.Step(bite, 0);
+        Check(machine.Step(bite, 30) == FishingAction.ReelClick, "reel phase starts for immediate transition test");
+        machine.ConfirmClick(FishingAction.ReelClick, 30);
+        Check(machine.Step(DockWithHook(815), 60) == FishingAction.None, "no reeling click when the next cast appears");
+        Check(machine.Step(DockWithHook(850), 90) == FishingAction.CastClick && machine.Reels == 1 &&
+            machine.Phase == FishingPhase.Casting, "two cast frames transition straight from reeling and allow the click");
+        machine.ConfirmClick(FishingAction.CastClick, 90);
+        machine.Step(wait, 120); machine.Step(wait, 150); machine.Step(wait, 180);
+        Check(machine.Casts == 1 && machine.Reels == 1, "direct reeling-to-cast transition counts each phase once");
+
+        machine = new FishingStateMachine(options);
+        machine.Step(cast, 0);
+        Check(machine.Step(cast, 30) == FishingAction.CastClick, "cast action can be requested before input confirmation");
+        machine.ClickSuppressed();
+        Check(machine.Detail.Contains("не отправлен"), "suppressed input is explained honestly");
+        Check(machine.Step(cast, 60) == FishingAction.CastClick, "suppressed click is requested again while the hook is visible");
+        machine.Step(wait, 90); machine.Step(wait, 120); machine.Step(wait, 150);
+        Check(machine.Casts == 0 && machine.Phase == FishingPhase.Searching,
+            "disappearance without an actual click must not count as a cast");
+        machine.Step(cast, 180);
+        Check(machine.Step(cast, 210) == FishingAction.CastClick, "a later cast can still be requested after suppression");
+        machine.ConfirmClick(FishingAction.CastClick, 210);
+        machine.Step(wait, 240); machine.Step(wait, 270); machine.Step(wait, 300);
+        Check(machine.Casts == 1, "a subsequently sent click is counted");
 
         machine = new FishingStateMachine(options);
         machine.Step(edge, 0);
@@ -371,10 +439,14 @@ public static class TestRunner
     private sealed class FakePort : IGamePort
     {
         public volatile bool Focus, StopFile;
-        public int Clicks, Captures, CaptureThread, ReleaseThread, Releases;
+        public int Clicks, Attempts, Captures, CaptureThread, ReleaseThread, Releases;
+        public volatile bool SuppressClick;
         public int BlockAtCapture;
         public ManualResetEvent CaptureEntered, ContinueCapture, ClickEntered, ContinueClick;
         public volatile PixelFrame Frame;
+        public PixelFrame Area, NoticeArea;
+        public readonly List<GameKey> Keys = new List<GameKey>();
+        public int RouteClicks, CursorMoves, FailKeyAt = -1;
         public bool TryGetForeground(out GameBounds bounds, out string reason)
         {
             bounds = Focus ? new GameBounds { Handle = new IntPtr(42), Width = 1920, Height = 1080 } : null;
@@ -393,17 +465,39 @@ public static class TestRunner
             }
             return Frame;
         }
-        public bool Click(GameBounds bounds, WaitHandle stop, out string error)
+        public ClickResult Click(GameBounds bounds, WaitHandle stop, out string error)
         {
             error = "";
-            if (!Focus || StopFile || stop.WaitOne(0)) return false;
+            if (!Focus || StopFile || stop.WaitOne(0)) return ClickResult.Failed;
+            Interlocked.Increment(ref Attempts);
+            if (SuppressClick) return ClickResult.Suppressed;
             Interlocked.Increment(ref Clicks);
             if (ClickEntered != null && ContinueClick != null)
             {
                 ClickEntered.Set();
                 ContinueClick.WaitOne();
             }
-            return true;
+            return ClickResult.Sent;
+        }
+        public PixelFrame CaptureArea(GameBounds bounds, int left, int top, int right, int bottom)
+        { return left == NoticeTemplate.RegionLeft && NoticeArea != null ? NoticeArea : Area; }
+        public bool MoveCursor(GameBounds bounds, int x, int y, WaitHandle stop, out string error)
+        {
+            error = "";
+            if (!Focus || StopFile || stop.WaitOne(0)) { error = "not ready"; return false; }
+            CursorMoves++; return true;
+        }
+        public ClickResult ClickAt(GameBounds bounds, int x, int y, bool right, WaitHandle stop, out string error)
+        {
+            error = "";
+            if (!Focus || StopFile || stop.WaitOne(0)) return ClickResult.Failed;
+            RouteClicks++; return ClickResult.Sent;
+        }
+        public bool HoldKey(GameBounds bounds, GameKey key, int milliseconds, WaitHandle stop, out string error)
+        {
+            error = "";
+            if (!Focus || StopFile || stop.WaitOne(0) || Keys.Count == FailKeyAt) { error = "interrupted"; return false; }
+            Keys.Add(key); return true;
         }
         public bool StopFileExists() { return StopFile; }
         public void ReleaseCapture()
@@ -457,6 +551,24 @@ public static class TestRunner
             Check(!engine.Snapshot().Running, "manual stop updates status");
         }
 
+        FakePort held = new FakePort { Frame = SyntheticCast(880, true), Focus = true, SuppressClick = true };
+        using (FishingEngine engine = new FishingEngine(held))
+        {
+            Check(engine.Start(new EngineOptions()), "worker starts while user holds LMB");
+            Check(WaitUntil(delegate { return held.Attempts >= 2; }, 2000), "held LMB suppresses click attempts");
+            held.Frame = Fixture("waiting", 1920, 1080);
+            Check(WaitUntil(delegate { return engine.Snapshot().Phase == FishingPhase.Searching; }, 2000),
+                "worker returns to searching after a suppressed cast vanishes");
+            Check(held.Clicks == 0 && engine.Snapshot().Casts == 0, "no suppressed input is counted as a cast");
+            held.SuppressClick = false;
+            held.Frame = SyntheticCast(880, true);
+            Check(WaitUntil(delegate { return held.Clicks == 1; }, 2000), "worker can click once LMB is released");
+            held.Frame = Fixture("waiting", 1920, 1080);
+            Check(WaitUntil(delegate { return engine.Snapshot().Casts == 1; }, 2000), "sent cast is counted when the bar disappears");
+            engine.RequestStop();
+            Check(engine.WaitForStop(2000), "held-LMB worker stops normally");
+        }
+
         FakePort moving = new FakePort { Frame = BoatWithHook(840), Focus = true };
         using (FishingEngine engine = new FishingEngine(moving))
         {
@@ -468,6 +580,121 @@ public static class TestRunner
             engine.RequestStop();
             Check(engine.WaitForStop(2000), "moving-hook worker stops normally");
         }
+    }
+
+    private static PixelFrame NoticeFixture()
+    {
+        using (FileStream file = File.OpenRead(Path.Combine(fixtures, "notice-cast.bgra.gz")))
+        using (GZipStream gzip = new GZipStream(file, CompressionMode.Decompress))
+        using (MemoryStream output = new MemoryStream())
+        {
+            gzip.CopyTo(output);
+            return new PixelFrame(output.ToArray(), 390, 75, 390 * 4, 1920, 1080, 20, 735);
+        }
+    }
+
+    private static PixelFrame GearFrame(bool changed, int clientWidth, int clientHeight)
+    {
+        const int width = 240, height = 120, originX = 400, originY = 350;
+        byte[] data = new byte[width * height * 4];
+        for (int y = 0; y < height; y++)
+            for (int x = 0; x < width; x++)
+            {
+                int i = (y * width + x) * 4;
+                byte value = changed ? (byte)15 : (byte)(((x / 4 + y / 3) % 2 == 0) ? 210 : 35);
+                data[i] = value; data[i + 1] = value; data[i + 2] = value; data[i + 3] = 255;
+            }
+        return new PixelFrame(data, width, height, width * 4, clientWidth, clientHeight, originX, originY);
+    }
+
+    private static void RelocationTests()
+    {
+        PixelFrame noticeFrame = NoticeFixture();
+        NoticeTemplate notice = NoticeTemplate.Create(noticeFrame, 69, 768, 165, 24);
+        Check(notice.Matches(noticeFrame), "a recorded notification matches its own text mask");
+        Check(!notice.Matches(Fixture("waiting", 1920, 1080)), "unrelated screens do not match a notification");
+        try { NoticeTemplate.Create(noticeFrame, 21, 740, 30, 20); throw new Exception("small notice selection accepted"); }
+        catch (InvalidDataException) { Check(true, "a short or ambiguous selection is rejected"); }
+
+        string temp = Path.Combine(Path.GetTempPath(), "rmfish-calibration-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(temp);
+        try
+        {
+            string noticePath = Path.Combine(temp, "notice.dat"), gearPath = Path.Combine(temp, "gear.dat");
+            notice.Save(noticePath); notice = NoticeTemplate.Load(noticePath);
+            Check(notice.Matches(noticeFrame), "notice calibration survives persistence");
+            NoticeTemplate.Create(noticeFrame, 69, 768, 165, 24).Save(noticePath);
+            Check(NoticeTemplate.Load(noticePath).Matches(noticeFrame), "notice calibration is atomically replaced");
+            File.WriteAllBytes(noticePath, new byte[] { 1, 2, 3 });
+            bool bad = false;
+            try { NoticeTemplate.Load(noticePath); } catch (Exception) { bad = true; }
+            Check(bad, "damaged notification calibration fails closed");
+
+            PixelFrame gearFrame = GearFrame(false, 1920, 1080), changed = GearFrame(true, 1920, 1080);
+            GearPoint one = GearPoint.Create(gearFrame, 480, 400, true);
+            GearPoint two = GearPoint.Create(gearFrame, 520, 400, false);
+            GearPoint three = GearPoint.Create(gearFrame, 560, 400, false);
+            Check(one.Matches(gearFrame) && !one.Matches(changed), "inventory target must visually match before clicking");
+            Check(!one.Matches(GearFrame(false, 1280, 720)), "inventory samples reject a different client resolution");
+            try { GearPoint.Create(changed, 480, 400, false); throw new Exception("uniform gear target accepted"); }
+            catch (InvalidDataException) { Check(true, "empty inventory pixels cannot become a click target"); }
+            GearMacro gear = new GearMacro(one, two, three);
+            gear.Save(gearPath); gear = GearMacro.Load(gearPath);
+            Check(gear.Point(0).RightButton && !gear.Point(1).RightButton && gear.ClientWidth == 1920,
+                "all three inventory actions and button types survive persistence");
+
+            NoticeGate gate = new NoticeGate();
+            Check(!gate.Observe(true, 0) && !gate.Observe(true, 120) && gate.Observe(true, 240), "notice needs three timed confirmations");
+            Check(!gate.Observe(true, 60000) && !gate.Observe(true, 80000), "the same persistent notice cannot repeat the route");
+            Check(!gate.Observe(false, 80100) && !gate.Observe(false, 82200), "notice must be absent before rearming");
+            Check(!gate.Observe(true, 82300) && !gate.Observe(true, 82420) && gate.Observe(true, 82540),
+                "a later distinct notice can rearm after the cooldown");
+            gate = new NoticeGate(); gate.Observe(true, 0); gate.Pause();
+            Check(!gate.Observe(true, 120) && !gate.Observe(true, 240) && gate.Observe(true, 360),
+                "focus loss discards partial notice confirmations");
+
+            GameBounds bounds = new GameBounds { Handle = new IntPtr(42), Width = 1920, Height = 1080 };
+            RelocationTimings timing = new RelocationTimings { Open = 1, Hover = 1, Between = 1 };
+            using (ManualResetEvent stop = new ManualResetEvent(false))
+            {
+                FakePort ok = new FakePort { Focus = true, Area = gearFrame };
+                string error;
+                Check(RelocationRunner.Execute(ok, bounds, stop, gear, timing, delegate(string ignored) { }, out error), "calibrated route completes");
+                Check(ok.Keys.Count == 4 && ok.Keys[0] == GameKey.Space && ok.Keys[1] == GameKey.Back &&
+                    ok.Keys[2] == GameKey.Forward && ok.Keys[3] == GameKey.Inventory,
+                    "route sends exactly one space, then S, W and I in order");
+                Check(timing.Walk == 7000 && ok.RouteClicks == 3, "route uses seven seconds per direction and three guarded clicks");
+                FakePort interrupted = new FakePort { Focus = true, Area = gearFrame, FailKeyAt = 2 };
+                Check(!RelocationRunner.Execute(interrupted, bounds, stop, gear, timing, delegate(string ignored) { }, out error) &&
+                    interrupted.Keys.Count == 2 && interrupted.RouteClicks == 0,
+                    "an interrupted walk never starts the return or inventory sequence");
+                FakePort mismatch = new FakePort { Focus = true, Area = changed };
+                Check(!RelocationRunner.Execute(mismatch, bounds, stop, gear, timing, delegate(string ignored) { }, out error) &&
+                    mismatch.RouteClicks == 0 && error.Contains("не совпал"), "unexpected inventory contents stop before the first click");
+                stop.Set();
+                FakePort stopped = new FakePort { Focus = true, Area = gearFrame };
+                Check(!RelocationRunner.Execute(stopped, bounds, stop, gear, timing, delegate(string ignored) { }, out error) &&
+                    stopped.Keys.Count == 0, "an already-requested stop forbids every route action");
+            }
+
+            FakePort automatic = new FakePort { Focus = true, Frame = Fixture("waiting", 1920, 1080), Area = gearFrame, NoticeArea = noticeFrame };
+            using (FishingEngine engine = new FishingEngine(automatic))
+            {
+                Check(engine.Start(new EngineOptions { AutoRelocate = true, Notice = notice, Gear = gear, SessionLimitSeconds = 30 }),
+                    "opt-in worker starts with both calibrations");
+                Check(WaitUntil(delegate { return automatic.RouteClicks == 3; }, 9000), "worker detects a stable calibrated notice and runs the guarded route");
+                Thread.Sleep(500);
+                Check(automatic.Keys.Count == 4 && automatic.Keys[0] == GameKey.Space, "persistent notification does not repeat space");
+                engine.RequestStop(); Check(engine.WaitForStop(2000), "auto-relocation worker stops");
+            }
+            using (FishingEngine engine = new FishingEngine(new FakePort()))
+            {
+                bool refused = false;
+                try { engine.Start(new EngineOptions { AutoRelocate = true }); } catch (InvalidOperationException) { refused = true; }
+                Check(refused, "auto-relocation is refused without both calibrations");
+            }
+        }
+        finally { Directory.Delete(temp, true); }
     }
 
     private sealed class FakeKeys
@@ -776,6 +1003,7 @@ public static class TestRunner
             VisionTests();
             StateTests();
             EngineTests();
+            RelocationTests();
             KeySafetyTests();
             BackgroundProbeSafetyTests();
             InFlightStopTests();

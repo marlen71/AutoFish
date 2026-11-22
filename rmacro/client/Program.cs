@@ -8,17 +8,18 @@ using RMFish;
 [assembly: AssemblyTitle("Eternal Core")]
 [assembly: AssemblyDescription("Eternal Core — лоадер игр, макросов и подписок")]
 [assembly: AssemblyProduct("Eternal Core")]
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
-[assembly: AssemblyInformationalVersion("1.0.0")]
+[assembly: AssemblyVersion("1.1.0.0")]
+[assembly: AssemblyFileVersion("1.1.0.0")]
+[assembly: AssemblyInformationalVersion("1.1.0")]
 
 namespace RMacro
 {
     internal static class Program
     {
         [STAThread]
-        private static int Main()
+        private static int Main(string[] args)
         {
+            if (LoaderUpdater.IsApply(args)) return LoaderUpdater.Apply(args);
             Mutex mutex = null; bool owns = false;
             try
             {
@@ -32,7 +33,11 @@ namespace RMacro
                 string device = DeviceId.Get();
                 Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
                 string serverAddress = ServerSettings.ReadFromExecutable(Application.ExecutablePath);
-                using (LoaderForm form = new LoaderForm(directory, device, serverAddress)) Application.Run(form);
+                using (LoaderForm form = new LoaderForm(directory, device, serverAddress, !LoaderUpdater.SkipCheck(args)))
+                {
+                    form.Shown += delegate { LoaderUpdater.MarkHealthy(args, Application.ExecutablePath); };
+                    Application.Run(form);
+                }
                 return 0;
             }
             catch (Exception ex)

@@ -15,9 +15,9 @@ if (-not (Test-Path -LiteralPath $csc)) { throw 'The .NET Framework C# compiler 
 $null = New-Item -ItemType Directory -Path $OutputDirectory -Force
 $output = Join-Path (Resolve-Path -LiteralPath $OutputDirectory).Path 'EternalCore.exe'
 $sources = @(
-    'src\Vision.cs', 'src\StateMachine.cs', 'src\Engine.cs', 'src\Safety.cs',
-    'src\WindowsGame.cs', 'src\UiComponents.cs', 'src\ChromeControls.cs', 'src\MainForm.cs',
-    'rmacro\client\ClientCore.cs', 'rmacro\client\ClientUi.cs', 'rmacro\client\Program.cs'
+    'src\Vision.cs', 'src\Relocation.cs', 'src\StateMachine.cs', 'src\Engine.cs', 'src\Safety.cs',
+    'src\WindowsGame.cs', 'src\UiComponents.cs', 'src\ChromeControls.cs', 'src\RelocationUi.cs', 'src\MainForm.cs',
+    'rmacro\client\UpdatePolicy.cs', 'rmacro\client\Updater.cs', 'rmacro\client\ClientCore.cs', 'rmacro\client\ClientUi.cs', 'rmacro\client\Program.cs'
 ) | ForEach-Object { Join-Path $PSScriptRoot $_ }
 $references = @(
     [System.Diagnostics.Process].Assembly.Location,
