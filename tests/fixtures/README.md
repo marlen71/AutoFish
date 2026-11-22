@@ -8,4 +8,6 @@ The 1920×1080 reference frames are 541×381 pixels, cropped at `[620, 360, 1161
 
 `cast-dock-1920` is a crop from the user's later full-width screenshot (1919×1037; the bottom of the image is absent). The bar is at approximately y=430 in the uncropped top of that screenshot, not at the reconstructed y=505 used for `cast-user`. Tests assume the original client was 1920×1080; the image alone cannot establish its actual client geometry. The 720p and moved-hook tests are simulated, not a recording of the game.
 
+`notice-cast.bgra.gz` is a 390×75 crop at `[20,735,410,810)` from that screenshot. It shows the *different* green “Забросьте удочку” notice and is used to exercise template calibration and rejection; it is **not** an example of a fish-depleted notice. No image of the latter was available.
+
 `TestRunner.cs` supplies the matching client dimensions and crop origin to `PixelFrame`. No image library or game installation is required to run the tests.

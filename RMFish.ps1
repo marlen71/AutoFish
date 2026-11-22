@@ -1,4 +1,4 @@
-# RMFish launcher for Windows PowerShell 5.1. No packages need to be installed.
+﻿# RMFish launcher for Windows PowerShell 5.1. No packages need to be installed.
 param([switch]$HideConsole)
 $ErrorActionPreference = 'Stop'
 $mutex = $null

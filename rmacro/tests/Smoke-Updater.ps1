@@ -93,7 +93,22 @@ try {
             if ($p) { $restored = $true; break }
         }
     }
-    if (-not $restored) { throw 'Failed update did not restore and reopen the previous loader.' }
+    if (-not $restored) {
+        $helper.Refresh()
+        $actual = if (Test-Path -LiteralPath $target) { (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant() } else { 'missing' }
+        $files = @(Get-ChildItem -LiteralPath $operation.Stage -File -ErrorAction SilentlyContinue | ForEach-Object { $_.Name + ':' + $_.Length }) -join ','
+        $processes = @(Get-Process -Name EternalCore -ErrorAction SilentlyContinue | ForEach-Object { try { $_.Id.ToString() + ':' + $_.Path } catch { $_.Id.ToString() } }) -join ','
+        $dialog = ''
+        if ($helper.MainWindowHandle -ne 0) {
+            try {
+                Add-Type -AssemblyName UIAutomationClient; Add-Type -AssemblyName UIAutomationTypes
+                $element = [System.Windows.Automation.AutomationElement]::FromHandle($helper.MainWindowHandle)
+                $parts = $element.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+                $dialog = (($parts | ForEach-Object { $_.Current.Name } | Where-Object { $_ }) -join ' | ')
+            } catch { $dialog = $_.Exception.Message }
+        }
+        throw "Failed update did not restore and reopen. Expected=$beforeFailure actual=$actual; helperExited=$($helper.HasExited) window=$($helper.MainWindowTitle); files=$files; loaders=$processes; dialog=$dialog"
+    }
     # Dismiss the helper's warning without hiding its exit status.
     for ($i = 0; $i -lt 40; $i++) {
         $helper.Refresh(); if ($helper.HasExited) { break }
