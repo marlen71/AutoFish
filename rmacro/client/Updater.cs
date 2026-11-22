@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -25,6 +26,11 @@ namespace RMacro
     {
         private const string Api = "https://api.github.com/repos/marlen71/AutoFish/releases?per_page=100&page=";
         private const int MetadataLimit = 8 * 1024 * 1024;
+        // Only set on the short-lived update helper, never on the main loader.
+        // Ask Windows to return launch errors instead of blocking recovery with
+        // a critical-error or executable-open dialog.
+        [DllImport("kernel32.dll")] private static extern uint SetErrorMode(uint mode);
+        private const uint SuppressSystemErrorDialogs = 0x0001u | 0x0002u | 0x8000u;
         private static readonly Regex NoncePattern = new Regex(@"^[0-9a-f]{32}$", RegexOptions.CultureInvariant);
         private static readonly Regex HashPattern = new Regex(@"^[0-9a-f]{64}$", RegexOptions.CultureInvariant);
 
@@ -201,6 +207,7 @@ namespace RMacro
         // atomic on a supported local Windows volume and retains the old EXE.
         public static int Apply(string[] args)
         {
+            SetErrorMode(SuppressSystemErrorDialogs);
             string target = null, backup = null;
             Process child = null;
             bool replaced = false, parentGone = false;
