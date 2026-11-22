@@ -13,7 +13,7 @@ Add-Type -AssemblyName System.Security
 $csc = Join-Path ([System.Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()) 'csc.exe'
 if (-not (Test-Path -LiteralPath $csc)) { throw 'The .NET Framework C# compiler csc.exe was not found.' }
 $null = New-Item -ItemType Directory -Path $OutputDirectory -Force
-$output = Join-Path (Resolve-Path -LiteralPath $OutputDirectory).Path 'RMacro.exe'
+$output = Join-Path (Resolve-Path -LiteralPath $OutputDirectory).Path 'EternalCore.exe'
 $sources = @(
     'src\Vision.cs', 'src\StateMachine.cs', 'src\Engine.cs', 'src\Safety.cs',
     'src\WindowsGame.cs', 'src\UiComponents.cs', 'src\ChromeControls.cs', 'src\MainForm.cs',
@@ -28,12 +28,13 @@ $references = @(
     [System.Security.Cryptography.ProtectedData].Assembly.Location
 ) | Select-Object -Unique
 $arguments = @(
-    '/nologo', '/noconfig', '/target:winexe', '/platform:anycpu', '/optimize+', '/utf8output', '/warnaserror+',
-    "/win32icon:$(Join-Path $PSScriptRoot 'assets\rmfish.ico')",
+    '/nologo', '/noconfig', '/target:winexe', '/platform:anycpu', '/optimize+', '/utf8output', '/warnaserror+', '/define:ETERNAL_CORE',
+    "/win32icon:$(Join-Path $PSScriptRoot 'assets\eternal-core.ico')",
     "/win32manifest:$(Join-Path $PSScriptRoot 'rmacro\client\app.manifest')",
     "/resource:$(Join-Path $PSScriptRoot 'assets\rmfish-logo.png'),RMFish.BrandLogo.png",
     "/resource:$(Join-Path $PSScriptRoot 'assets\rmfish-icon-original.png'),RMacro.FishIcon.png",
-    "/resource:$(Join-Path $PSScriptRoot 'assets\rmacro-city.png'),RMacro.City.png",
+    "/resource:$(Join-Path $PSScriptRoot 'assets\eternal-core-logo.png'),EternalCore.Logo.png",
+    "/resource:$(Join-Path $PSScriptRoot 'assets\eternal-core-icon.png'),EternalCore.Icon.png",
     "/out:$output"
 )
 foreach ($reference in $references) { $arguments += "/reference:$reference" }

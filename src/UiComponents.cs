@@ -7,6 +7,20 @@ namespace RMFish
 {
     internal static class Theme
     {
+#if ETERNAL_CORE
+        // The loader has its own cyan/violet palette; standalone RMFish keeps
+        // its original theme and settings when built without this symbol.
+        public static readonly Color Background = Color.FromArgb(14, 15, 25);
+        public static readonly Color Sidebar = Color.FromArgb(10, 11, 19);
+        public static readonly Color Card = Color.FromArgb(23, 25, 39);
+        public static readonly Color Raised = Color.FromArgb(30, 32, 49);
+        public static readonly Color Border = Color.FromArgb(54, 58, 82);
+        public static readonly Color Text = Color.FromArgb(237, 242, 255);
+        public static readonly Color Muted = Color.FromArgb(151, 161, 190);
+        public static readonly Color Accent = Color.FromArgb(71, 224, 242);
+        public static readonly Color AccentDark = Color.FromArgb(8, 27, 38);
+        public static readonly Color Warn = Color.FromArgb(244, 195, 133);
+#else
         public static readonly Color Background = Color.FromArgb(6, 24, 26);
         public static readonly Color Sidebar = Color.FromArgb(5, 20, 22);
         public static readonly Color Card = Color.FromArgb(13, 35, 38);
@@ -17,6 +31,7 @@ namespace RMFish
         public static readonly Color Accent = Color.FromArgb(75, 222, 175);
         public static readonly Color AccentDark = Color.FromArgb(7, 38, 31);
         public static readonly Color Warn = Color.FromArgb(237, 192, 114);
+#endif
 
         public static GraphicsPath Round(Rectangle rect, int radius)
         {
@@ -96,9 +111,14 @@ namespace RMFish
         {
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
             e.Graphics.Clear(Theme.ParentColor(this));
+#if ETERNAL_CORE
+            Color fill = Enabled ? Fill : Color.FromArgb(35, 36, 51);
+            Color ink = Enabled ? Ink : Color.FromArgb(106, 112, 138);
+#else
             Color fill = Enabled ? Fill : Color.FromArgb(24, 39, 40);
-            if (Enabled && hovered) fill = ControlPaint.Light(fill, 0.12f);
             Color ink = Enabled ? Ink : Color.FromArgb(101, 118, 115);
+#endif
+            if (Enabled && hovered) fill = ControlPaint.Light(fill, 0.12f);
             using (GraphicsPath path = Theme.Round(new Rectangle(0, 0, Math.Max(1, Width - 1), Math.Max(1, Height - 1)), 9))
             using (SolidBrush brush = new SolidBrush(fill))
             using (Pen pen = new Pen(Selected ? Theme.Accent : Border))
@@ -189,7 +209,11 @@ namespace RMFish
             Color ring = Enabled ? Theme.Accent : Theme.Muted;
             using (Pen glow = new Pen(Color.FromArgb(20, ring), 8))
                 e.Graphics.DrawEllipse(glow, Rectangle.Inflate(circle, 3, 3));
+#if ETERNAL_CORE
+            using (SolidBrush bg = new SolidBrush(hovered || working ? Color.FromArgb(35, 44, 70) : Color.FromArgb(22, 25, 42)))
+#else
             using (SolidBrush bg = new SolidBrush(hovered || working ? Color.FromArgb(16, 58, 50) : Color.FromArgb(10, 39, 38)))
+#endif
                 e.Graphics.FillEllipse(bg, circle);
             using (Pen outline = new Pen(ring, 2.5f)) e.Graphics.DrawEllipse(outline, circle);
             float cx = Width / 2f, cy = Height / 2f;

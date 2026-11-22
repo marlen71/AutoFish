@@ -104,12 +104,25 @@ namespace RMacro
                 !String.IsNullOrEmpty(parsed.UserInfo) || !String.IsNullOrEmpty(parsed.Query) ||
                 !String.IsNullOrEmpty(parsed.Fragment) || (parsed.AbsolutePath != "/" && parsed.AbsolutePath != ""))
                 throw new ApiException(0, "BAD_ADDRESS", "Укажите адрес сервера целиком: https://домен или http://127.0.0.1:8765.");
-            if (parsed.Scheme == Uri.UriSchemeHttp && !parsed.IsLoopback)
-                throw new ApiException(0, "HTTPS_REQUIRED", "Для удалённого сервера необходим HTTPS с действительным сертификатом.");
+            if (parsed.Scheme == Uri.UriSchemeHttp && !IsLanAddress(parsed))
+                throw new ApiException(0, "HTTPS_REQUIRED", "HTTP разрешён только для локальной сети; для публичного сервера необходим HTTPS.");
             baseUri = parsed;
             // Do not override certificate validation or allow automatic redirects
             // to a different host. Windows verifies the HTTPS certificate.
             ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072; // TLS 1.2 on .NET Framework 4.5
+        }
+
+        internal static bool IsLanAddress(Uri uri)
+        {
+            if (uri.IsLoopback) return true;
+            // Match the server's HTTP policy: literal RFC1918 IPv4, not a
+            // hostname that might resolve to a different/public destination.
+            IPAddress address;
+            if (!IPAddress.TryParse(uri.DnsSafeHost, out address) ||
+                address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork) return false;
+            byte[] octets = address.GetAddressBytes();
+            return octets[0] == 10 || (octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31) ||
+                (octets[0] == 192 && octets[1] == 168);
         }
 
         private static string ReadBounded(Stream stream)
@@ -138,7 +151,7 @@ namespace RMacro
             request.ReadWriteTimeout = 8000;
             request.AllowAutoRedirect = false;
             request.AutomaticDecompression = DecompressionMethods.None;
-            if (baseUri.IsLoopback) request.Proxy = null;
+            if (IsLanAddress(baseUri)) request.Proxy = null;
             if (!String.IsNullOrEmpty(token)) request.Headers[HttpRequestHeader.Authorization] = "Bearer " + token;
             if (!String.IsNullOrEmpty(device)) request.Headers["X-RMacro-Device"] = device;
             JavaScriptSerializer json = new JavaScriptSerializer();
@@ -245,6 +258,16 @@ namespace RMacro
             return ParseProfile(result);
         }
         public Profile GetProfile(string token, string device) { return ParseProfile(Request("/api/me", null, token, device)); }
+        public void ChangePassword(string token, string device, string oldPassword, string newPassword, string confirmation)
+        {
+            Request("/api/me/password", Body("old_password", oldPassword, "new_password", newPassword,
+                "confirmation", confirmation), token, device);
+        }
+        public long ActivateKey(string token, string device, string key, string requestId)
+        {
+            Dictionary<string, object> result = Request("/api/me/activate-key", Body("key", key, "request_id", requestId), token, device);
+            return JsonValues.Integer(result, "expires_at");
+        }
         public LeaseInfo Authorize(string token, string device, string product)
         {
             Stopwatch watch = Stopwatch.StartNew();
@@ -261,7 +284,7 @@ namespace RMacro
     // This keeps the address out of the UI; it is not a secret or a security boundary.
     internal static class ServerSettings
     {
-        private const string DefaultAddress = "http://127.0.0.1:8765";
+        private const string DefaultAddress = "http://192.168.0.105:8765";
         private const string Marker = "RMACRO_URL_V1";
         private const int MaxAddressBytes = 1024;
 
@@ -346,7 +369,8 @@ namespace RMacro
                 string text = Encoding.UTF8.GetString(ProtectedData.Unprotect(encrypted, Entropy, DataProtectionScope.CurrentUser));
                 Dictionary<string, object> values = JsonValues.Object(new JavaScriptSerializer().DeserializeObject(text));
                 SavedSession saved = new SavedSession { Server = JsonValues.String(values, "server"), Token = JsonValues.String(values, "token") };
-                // An altered URL is never allowed to downgrade a remote connection.
+                // An altered URL cannot send a token to public HTTP; RestoreAsync
+                // additionally requires an exact match with this build's endpoint.
                 new ApiClient(saved.Server);
                 if (!Regex.IsMatch(saved.Token, "^[A-Za-z0-9_-]{40,64}$")) return null;
                 return saved;

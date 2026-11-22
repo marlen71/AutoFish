@@ -1,7 +1,7 @@
 @echo off
 setlocal
 if not defined LOCALAPPDATA (
-  echo LOCALAPPDATA is unavailable. Use F10 or Task Manager to stop RMacro.exe.
+  echo LOCALAPPDATA is unavailable. Use F10 or Task Manager to stop EternalCore.exe.
   pause
   exit /b 1
 )

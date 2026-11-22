@@ -4,7 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>RMacro · Панель управления</title>
+  <title>Eternal Core · Панель управления</title>
+  <link rel="icon" href="/admin/favicon.ico">
   <link rel="stylesheet" href="/admin/style.css">
   <script src="/admin/app.js" defer></script>
 </head>
@@ -12,58 +13,65 @@
   <div class="ambient ambient-one"></div><div class="ambient ambient-two"></div>
   <main id="login-view" class="auth-shell">
     <section class="auth-aside">
-      <div class="brand"><span>R</span>Macro<i>•</i></div>
-      <span class="eyebrow">ПАНЕЛЬ УПРАВЛЕНИЯ</span>
-      <div class="auth-art"><div class="orbit orbit-a"></div><div class="orbit orbit-b"></div><span>R</span></div>
-      <h1>Доступ под<br><em>вашим контролем.</em></h1>
-      <p>Пользователи, устройства и подписки — в одном защищённом пространстве.</p>
-      <div class="aside-note"><span class="status-dot"></span> Ваш личный сервер RMacro</div>
+      <div class="brand"><img src="/admin/mark.png" alt=""><span>ETERNAL <b>CORE</b></span></div>
+      <div class="auth-art"><img src="/admin/logo.png" alt="Логотип Eternal Core"></div>
+      <div class="eyebrow"><span class="status-dot"></span> ЕДИНОЕ ПРОСТРАНСТВО</div>
+      <h1>Всё под вашим<br><em>контролем.</em></h1>
+      <p>Игры, пользователи и подписки — в одном месте. Добро пожаловать в Eternal Core.</p>
+      <div class="aside-note">ETERNAL CORE <span> / </span> RELEASE V1</div>
     </section>
     <section class="auth-form">
-      <div class="eyebrow">ДОБРО ПОЖАЛОВАТЬ</div>
-      <h2>Вход для администратора</h2>
-      <p>Используйте данные, созданные на сервере.</p>
-      <form id="login-form" autocomplete="on">
-        <label for="admin-login">Логин</label>
-        <input id="admin-login" name="username" autocomplete="username" required placeholder="Ваш логин">
-        <label for="admin-password">Пароль</label>
-        <input id="admin-password" name="password" type="password" autocomplete="current-password" required placeholder="Ваш пароль">
-        <button class="button primary" type="submit">Войти в панель <span>↗</span></button>
-      </form>
-      <div id="login-message" class="message" role="alert"></div>
-      <div class="security-note"><strong>◈ &nbsp; Безопасное подключение</strong><br>Для удалённого входа используйте только HTTPS.</div>
+      <div class="auth-topline"><span>ПАНЕЛЬ УПРАВЛЕНИЯ</span><span>01 / 01</span></div>
+      <div class="auth-content">
+        <div class="eyebrow">С ВОЗВРАЩЕНИЕМ</div>
+        <h2>Вход администратора<span>.</span></h2>
+        <p>Используйте тот же логин и пароль, что и в лоадере.</p>
+        <form id="login-form" autocomplete="on">
+          <label for="admin-login">Логин</label>
+          <input id="admin-login" name="username" autocomplete="username" required placeholder="Ваш логин">
+          <label for="admin-password">Пароль</label>
+          <input id="admin-password" name="password" type="password" autocomplete="current-password" required placeholder="Ваш пароль">
+          <button class="button primary" type="submit">Войти в панель <span>↗</span></button>
+        </form>
+        <div id="login-message" class="message" role="alert"></div>
+        <div class="security-note"><strong>◈ &nbsp; Подключение</strong><br><span id="transport-note">HTTP в локальной сети не шифрует данные. Не открывайте его в интернет.</span></div>
+      </div>
+      <div class="auth-footer">ЛИЧНЫЙ СЕРВЕР <span>•</span> ETERNAL CORE</div>
     </section>
   </main>
 
   <div id="app-view" class="app-shell" hidden>
     <aside class="sidebar">
-      <div class="brand"><span>R</span>Macro<i>•</i></div>
-      <div class="eyebrow menu-label">УПРАВЛЕНИЕ</div>
+      <div class="brand"><img src="/admin/mark.png" alt=""><span>ETERNAL <b>CORE</b></span></div>
+      <div class="eyebrow menu-label">РАБОЧЕЕ ПРОСТРАНСТВО</div>
       <a href="#users" class="nav-item active"><b>◉</b> Пользователи</a>
-      <a href="#products" class="nav-item"><b>◇</b> Продукты</a>
+      <a href="#keys" class="nav-item"><b>◇</b> Ключи подписок</a>
+      <a href="#products" class="nav-item"><b>▦</b> Игры и макросы</a>
       <a href="#audit" class="nav-item"><b>≡</b> Журнал действий</a>
       <div class="sidebar-bottom">
         <div class="server-state"><span class="status-dot"></span><span>Сервер работает<small>Данные хранятся у вас</small></span></div>
         <button id="logout" class="button quiet" type="button">Выйти из панели</button>
+        <div class="sidebar-version">ETERNAL CORE <span>·</span> RELEASE V1</div>
       </div>
     </aside>
     <section class="main-content">
-      <header class="topbar"><span>РАБОЧЕЕ ПРОСТРАНСТВО <b>/</b> ОБЗОР</span><div class="admin-badge"><span class="avatar">A</span><span id="admin-name">Администратор</span></div></header>
-      <div class="page-heading" id="users"><div><div class="eyebrow">RMacro CONTROL CENTER</div><h1>Пользователи <span>.</span></h1><p>Управляйте доступом к продуктам и привязкой устройств.</p></div><button id="refresh" class="button outline" type="button">↻ &nbsp; Обновить</button></div>
+      <header class="topbar"><span>WORKSPACE <b>/</b> CONTROL CENTER</span><div class="admin-badge"><span class="avatar">A</span><span id="admin-name">Администратор</span></div></header>
+      <div class="page-heading" id="users"><div><div class="eyebrow">ETERNAL CORE / CONTROL CENTER</div><h1>Пользователи<span>.</span></h1><p>Управление доступом, подписками и устройствами.</p></div><button id="refresh" class="button outline" type="button">↻ &nbsp; Обновить</button></div>
       <div id="app-message" class="message" role="status"></div>
       <div class="content-grid">
         <section class="card user-card">
           <div class="card-heading"><div><div class="eyebrow">БАЗА ПОЛЬЗОВАТЕЛЕЙ</div><h2>Аккаунты</h2></div><span id="user-count" class="count">0</span></div>
           <label class="search"><span>⌕</span><input id="search" placeholder="Поиск по логину или UID" aria-label="Поиск по логину или UID"></label>
-          <div class="table-header"><span>ПОЛЬЗОВАТЕЛЬ</span><span>ПОДПИСКИ</span></div>
+          <div class="table-header"><span>ПОЛЬЗОВАТЕЛЬ</span><span>СТАТУС ДОСТУПА</span></div>
           <div id="user-list" class="user-list"><p class="empty">Нет пользователей</p></div>
-          <div class="list-foot">Показаны до 500 совпадений. Нажмите на аккаунт для управления.</div>
+          <div class="list-foot">Показаны до 500 совпадений. Выберите аккаунт для управления.</div>
         </section>
         <section class="card detail-card">
           <div class="card-heading"><div><div class="eyebrow">УПРАВЛЕНИЕ ДОСТУПОМ</div><h2>Карточка пользователя</h2></div><span class="icon-box">↗</span></div>
           <div id="detail-empty" class="detail-empty"><div class="empty-icon">◎</div><strong>Выберите пользователя</strong><p>Его UID, устройство и подписки появятся здесь.</p></div>
           <div id="detail" hidden>
-            <div class="person"><div class="person-avatar">R</div><div><strong id="detail-name"></strong><small id="detail-uid"></small></div><span id="detail-state" class="pill"></span></div>
+            <div class="person"><div class="person-avatar">◉</div><div><strong id="detail-name"></strong><small id="detail-uid"></small></div><span id="detail-state" class="pill"></span></div>
+            <p id="detail-role" class="hint role-note"></p>
             <div class="device-row"><span>Привязка устройства</span><strong id="detail-device"></strong></div>
             <div class="section-label">ДОБАВИТЬ ВРЕМЯ</div>
             <label for="grant-product">Продукт</label><select id="grant-product"></select>
@@ -74,6 +82,7 @@
             <div class="divider"></div>
             <div class="actions"><button id="reset-hwid" class="button outline" type="button">Сбросить HWID</button><button id="toggle-user" class="button outline" type="button">Заблокировать</button><button id="revoke" class="button danger" type="button">Отозвать выбранную подписку</button></div>
             <form id="password-form" class="password-form"><label for="new-password">Сменить пароль пользователя</label><div class="password-line"><input id="new-password" type="password" minlength="8" maxlength="256" autocomplete="new-password" placeholder="Новый пароль" required><button class="button outline" type="submit">Сменить</button></div></form>
+            <form id="rename-form" class="password-form"><label for="rename-user">Изменить логин пользователя</label><div class="password-line"><input id="rename-user" minlength="3" maxlength="32" autocomplete="off" placeholder="Новый логин" required><button class="button outline" type="submit">Сменить</button></div></form>
           </div>
         </section>
         <section class="card create-card">
@@ -81,9 +90,26 @@
           <p class="hint">UID присваивается автоматически. Пароль сообщите пользователю по защищённому каналу.</p>
           <form id="create-user" class="create-form"><div><label for="new-user">Логин</label><input id="new-user" minlength="3" maxlength="32" placeholder="Например, user123" autocomplete="off" required></div><div><label for="user-password">Пароль</label><input id="user-password" type="password" minlength="8" maxlength="256" placeholder="Не менее 8 символов" autocomplete="new-password" required></div><button type="submit" class="button primary">Создать аккаунт &nbsp; ↗</button></form>
         </section>
-        <section id="products" class="card create-card">
-          <div class="card-heading"><div><div class="eyebrow">КАТАЛОГ</div><h2>Игры и макросы</h2></div><span class="icon-box">◇</span></div>
-          <p class="hint">Создайте игру, затем добавьте к ней макросы. Выдайте время пользователю в его карточке.</p>
+        <section id="keys" class="card keys-card">
+          <div class="card-heading"><div><div class="eyebrow">ПОДПИСКИ / АКТИВАЦИЯ</div><h2>Ключи доступа</h2></div><span class="icon-box">◇</span></div>
+          <p class="hint">Ключ продлевает выбранный продукт на указанный срок. Дата — последний момент, когда ключ можно активировать; это не дата окончания подписки.</p>
+          <form id="create-key" class="key-form">
+            <div class="key-product"><label for="key-product">Игра / макрос</label><select id="key-product" required></select></div>
+            <div><label for="key-duration">Срок подписки</label><input id="key-duration" type="number" min="1" max="87600" value="30" required></div>
+            <div><label for="key-unit">Единица</label><select id="key-unit"><option value="86400">Дней</option><option value="3600">Часов</option><option value="60">Минут</option></select></div>
+            <div class="key-deadline"><label for="key-deadline">Активировать до (местное время)</label><input id="key-deadline" type="datetime-local" required></div>
+            <div><label for="key-users">Уникальных людей</label><input id="key-users" type="number" min="1" max="1000000" value="1" required></div>
+            <div><label for="key-uses">Всего активаций</label><input id="key-uses" type="number" min="1" max="1000000" value="1" required></div>
+            <div><label for="key-per-user">На одного человека</label><input id="key-per-user" type="number" min="1" max="1000000" value="1" required></div>
+            <button class="button primary" type="submit">Создать ключ &nbsp; ↗</button>
+          </form>
+          <p class="hint key-explanation">Люди — разные UID. Активации — все использования, включая повторные: каждое добавляет срок и расходует общий лимит. Лимит на человека ограничивает повторы.</p>
+          <div id="created-key" class="created-key" hidden><strong>Ключ показан только сейчас. Сохраните и передайте его пользователям.</strong><div class="password-line"><input id="key-value" readonly aria-label="Созданный ключ"><button id="copy-key" class="button outline" type="button">Копировать</button></div><small id="copy-message"></small></div>
+          <div class="section-label">СОЗДАННЫЕ КЛЮЧИ <span class="muted-inline">/ до 500 последних</span></div><div id="key-list" class="key-list"></div>
+        </section>
+        <section id="products" class="card catalog-card">
+          <div class="card-heading"><div><div class="eyebrow">КАТАЛОГ</div><h2>Игры и макросы</h2></div><span class="icon-box">▦</span></div>
+          <p class="hint">Создайте игру, затем добавьте к ней макросы. Выдайте время пользователю или создайте ключ.</p>
           <div class="section-label">ИГРЫ</div><div id="game-list" class="product-list"></div>
           <form id="create-game" class="create-form catalog-form"><div><label for="game-code">Код игры</label><input id="game-code" maxlength="48" placeholder="game-code" required></div><div><label for="game-name">Название игры</label><input id="game-name" maxlength="80" placeholder="Название игры" required></div><button type="submit" class="button outline">Добавить игру</button></form>
           <div class="divider"></div>
@@ -96,7 +122,7 @@
         </section>
         <section id="audit" class="card audit-card"><div class="card-heading"><div><div class="eyebrow">ПОСЛЕДНИЕ СОБЫТИЯ</div><h2>Журнал действий</h2></div><span class="icon-box">≡</span></div><div id="audit-list" class="audit-list"></div></section>
       </div>
-      <footer>RMacro <span>·</span> Ваши данные остаются на вашем сервере</footer>
+      <footer>ETERNAL CORE <span>·</span> RELEASE V1 <span>·</span> Данные остаются на вашем сервере</footer>
     </section>
   </div>
 </body>

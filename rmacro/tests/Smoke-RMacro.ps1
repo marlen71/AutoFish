@@ -26,9 +26,9 @@ try {
     }
     if (-not (Test-Path -LiteralPath $ready)) { throw 'Fixture server did not start.' }
     $env:RMACRO_TEST_PORT = (Get-Content -LiteralPath $ready -Raw).Trim()
-    $configured = Join-Path $directory 'configured\RMacro.exe'
+    $configured = Join-Path $directory 'configured\EternalCore.exe'
     $ErrorActionPreference = 'Continue'
-    $configOutput = & $python (Join-Path $root 'rmacro\server\server.py') configure-client --source (Join-Path $root 'dist\RMacro.exe') --output $configured --url "http://127.0.0.1:$env:RMACRO_TEST_PORT" 2>&1
+    $configOutput = & $python (Join-Path $root 'rmacro\server\server.py') configure-client --source (Join-Path $root 'dist\EternalCore.exe') --output $configured --url "http://127.0.0.1:$env:RMACRO_TEST_PORT" 2>&1
     $configExit = $LASTEXITCODE
     $ErrorActionPreference = 'Stop'
     foreach ($line in $configOutput) { Write-Host $line }
@@ -54,11 +54,12 @@ try {
         [System.Security.Cryptography.ProtectedData].Assembly.Location
     ) | Select-Object -Unique
     $compile = @('/nologo', '/noconfig', '/target:exe', '/platform:anycpu', '/utf8output', '/warnaserror+',
-        '/main:RMacroTestRunner', "/out:$testExe",
-        "/win32icon:$(Join-Path $root 'assets\rmfish.ico')",
+        '/main:RMacroTestRunner', '/define:ETERNAL_CORE', "/out:$testExe",
+        "/win32icon:$(Join-Path $root 'assets\eternal-core.ico')",
         "/resource:$(Join-Path $root 'assets\rmfish-logo.png'),RMFish.BrandLogo.png",
         "/resource:$(Join-Path $root 'assets\rmfish-icon-original.png'),RMacro.FishIcon.png",
-        "/resource:$(Join-Path $root 'assets\rmacro-city.png'),RMacro.City.png")
+        "/resource:$(Join-Path $root 'assets\eternal-core-logo.png'),EternalCore.Logo.png",
+        "/resource:$(Join-Path $root 'assets\eternal-core-icon.png'),EternalCore.Icon.png")
     foreach ($reference in $references) { $compile += "/reference:$reference" }
     $compile += $sources
     & $csc @compile
@@ -88,22 +89,22 @@ try {
     for ($i = 0; $i -lt 40; $i++) {
         Start-Sleep -Milliseconds 500
         $configuredProcess.Refresh()
-        if ($configuredProcess.HasExited) { throw "Configured RMacro exited early: $($configuredProcess.ExitCode)" }
-        if ($configuredProcess.MainWindowHandle -ne 0 -and $configuredProcess.MainWindowTitle -like 'RMacro*продукты') { $opened = $true; break }
+        if ($configuredProcess.HasExited) { throw "Configured Eternal Core exited early: $($configuredProcess.ExitCode)" }
+        if ($configuredProcess.MainWindowHandle -ne 0 -and $configuredProcess.MainWindowTitle -like 'Eternal Core*продукты') { $opened = $true; break }
     }
-    if (-not $opened) { throw "Configured RMacro main window was not found: $($configuredProcess.MainWindowTitle)" }
+    if (-not $opened) { throw "Configured Eternal Core main window was not found: $($configuredProcess.MainWindowTitle)" }
     $null = $configuredProcess.CloseMainWindow()
-    if (-not $configuredProcess.WaitForExit(5000)) { throw 'Configured RMacro did not close cleanly.' }
+    if (-not $configuredProcess.WaitForExit(5000)) { throw 'Configured Eternal Core did not close cleanly.' }
     $configuredProcess.Refresh()
-    if ($configuredProcess.ExitCode -ne 0) { throw "Configured RMacro failed: $($configuredProcess.ExitCode)" }
-    Write-Host 'PASS: owner-configured RMacro.exe opened and closed on Windows.'
+    if ($configuredProcess.ExitCode -ne 0) { throw "Configured Eternal Core failed: $($configuredProcess.ExitCode)" }
+    Write-Host 'PASS: owner-configured EternalCore.exe opened and closed on Windows.'
 
     # Exercise the same Windows BAT that the interactive setup/start wrappers use,
     # and take a consistent backup while the fixture server is running.
     $backup = Join-Path $directory 'backup.db'
     & (Join-Path $root 'rmacro\server\RUN-PYTHON.bat') --db $db backup $backup
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $backup)) { throw 'Server BAT/online backup smoke failed.' }
-    & $python -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); assert c.execute('select count(*) from users').fetchone()[0] == 1" $backup
+    & $python -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); assert c.execute('select count(*) from users').fetchone()[0] == 2" $backup
     if ($LASTEXITCODE -ne 0) { throw 'Server BAT produced an invalid backup.' }
     Write-Output '::notice title=RMacro integration::PASS: login, DPAPI restore/logout, UID, expiry warning, product launch, remote HWID reset, blocked-UI stop, offline grace, and server BAT backup. No GTA5 or physical keyboard tested.'
 }

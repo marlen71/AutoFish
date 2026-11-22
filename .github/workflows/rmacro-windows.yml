@@ -1,4 +1,4 @@
-name: RMacro Windows and server
+name: Eternal Core Windows and server
 
 on:
   push:
@@ -41,7 +41,7 @@ jobs:
             throw "Server integration tests failed: $testExit"
           }
 
-      - name: Build the single-file RMacro loader
+      - name: Build the single-file Eternal Core loader
         shell: powershell
         run: |
           try { .\Build-RMacro.ps1 }
@@ -83,45 +83,45 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          $version = (Get-Item 'dist\RMacro.exe').VersionInfo.ProductVersion
+          $version = (Get-Item 'dist\EternalCore.exe').VersionInfo.ProductVersion
           if ($version -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') { throw "Unexpected version: $version" }
           $client = Join-Path $env:RUNNER_TEMP 'rmacro-client-stage'
           $server = Join-Path $env:RUNNER_TEMP 'rmacro-server-stage'
           $assets = Join-Path $env:RUNNER_TEMP 'rmacro-release-assets'
           New-Item -ItemType Directory -Path $client, $server, $assets -Force | Out-Null
-          Copy-Item 'dist\RMacro.exe' (Join-Path $client 'RMacro.exe')
-          Copy-Item 'rmacro\client\STOP-RMACRO.bat' (Join-Path $client 'STOP-RMACRO.bat')
-          Copy-Item 'rmacro\client\EMERGENCY-RMACRO.bat' (Join-Path $client 'EMERGENCY-RMACRO.bat')
+          Copy-Item 'dist\EternalCore.exe' (Join-Path $client 'EternalCore.exe')
+          Copy-Item 'rmacro\client\STOP-ETERNAL-CORE.bat' (Join-Path $client 'STOP-ETERNAL-CORE.bat')
+          Copy-Item 'rmacro\client\EMERGENCY-ETERNAL-CORE.bat' (Join-Path $client 'EMERGENCY-ETERNAL-CORE.bat')
           $instruction = (Get-Content 'rmacro\client\INSTRUCTIONS.txt' -Raw -Encoding UTF8).Replace("`r`n", "`n").Replace("`n", "`r`n")
           [IO.File]::WriteAllText((Join-Path $client 'INSTRUCTIONS.txt'), $instruction, [Text.UTF8Encoding]::new($true))
           foreach ($name in @('server.py','README-SERVER.md','RUN-PYTHON.bat','SETUP-ADMIN.bat','START-SERVER.bat','RESET-ADMIN.bat','BACKUP.bat','CONFIGURE-LOADER.bat')) {
             Copy-Item (Join-Path 'rmacro\server' $name) (Join-Path $server $name)
           }
           Copy-Item 'rmacro\server\static' (Join-Path $server 'static') -Recurse
-          $clientName = "RMacro-v$version-Windows.zip"
-          $serverName = "RMacro-Server-v$version-Windows.zip"
+          $clientName = "EternalCore-v$version-Windows.zip"
+          $serverName = "EternalCore-Server-v$version-Windows.zip"
           Compress-Archive -Path (Join-Path $client '*') -DestinationPath (Join-Path $assets $clientName) -CompressionLevel Optimal
           Compress-Archive -Path (Join-Path $server '*') -DestinationPath (Join-Path $assets $serverName) -CompressionLevel Optimal
-          Copy-Item 'dist\RMacro.exe' (Join-Path $assets 'RMacro.exe')
+          Copy-Item 'dist\EternalCore.exe' (Join-Path $assets 'EternalCore.exe')
           $clientVerify = Join-Path $env:RUNNER_TEMP 'rmacro-client-verify'
           $serverVerify = Join-Path $env:RUNNER_TEMP 'rmacro-server-verify'
           Expand-Archive (Join-Path $assets $clientName) -DestinationPath $clientVerify
           Expand-Archive (Join-Path $assets $serverName) -DestinationPath $serverVerify
-          foreach ($name in @('RMacro.exe','STOP-RMACRO.bat','EMERGENCY-RMACRO.bat','INSTRUCTIONS.txt')) {
+          foreach ($name in @('EternalCore.exe','STOP-ETERNAL-CORE.bat','EMERGENCY-ETERNAL-CORE.bat','INSTRUCTIONS.txt')) {
             if (-not (Test-Path -LiteralPath (Join-Path $clientVerify $name) -PathType Leaf)) { throw "Missing client file $name" }
           }
           if (@(Get-ChildItem $clientVerify -File -Recurse).Count -ne 4) { throw 'Unexpected client files.' }
-          foreach ($name in @('server.py','README-SERVER.md','RUN-PYTHON.bat','SETUP-ADMIN.bat','START-SERVER.bat','RESET-ADMIN.bat','BACKUP.bat','CONFIGURE-LOADER.bat','static\index.html','static\app.js','static\style.css')) {
+          foreach ($name in @('server.py','README-SERVER.md','RUN-PYTHON.bat','SETUP-ADMIN.bat','START-SERVER.bat','RESET-ADMIN.bat','BACKUP.bat','CONFIGURE-LOADER.bat','static\index.html','static\app.js','static\style.css','static\logo.png','static\mark.png','static\favicon.ico')) {
             if (-not (Test-Path -LiteralPath (Join-Path $serverVerify $name) -PathType Leaf)) { throw "Missing server file $name" }
           }
-          if (@(Get-ChildItem $serverVerify -File -Recurse).Count -ne 11) { throw 'Unexpected server files or private state in package.' }
-          $exeHash = (Get-FileHash (Join-Path $assets 'RMacro.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ((Get-FileHash (Join-Path $clientVerify 'RMacro.exe') -Algorithm SHA256).Hash.ToLowerInvariant() -ne $exeHash) { throw 'Client EXE hash mismatch.' }
+          if (@(Get-ChildItem $serverVerify -File -Recurse).Count -ne 14) { throw 'Unexpected server files or private state in package.' }
+          $exeHash = (Get-FileHash (Join-Path $assets 'EternalCore.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ((Get-FileHash (Join-Path $clientVerify 'EternalCore.exe') -Algorithm SHA256).Hash.ToLowerInvariant() -ne $exeHash) { throw 'Client EXE hash mismatch.' }
           $clientHash = (Get-FileHash (Join-Path $assets $clientName) -Algorithm SHA256).Hash.ToLowerInvariant()
           $serverHash = (Get-FileHash (Join-Path $assets $serverName) -Algorithm SHA256).Hash.ToLowerInvariant()
-          $checksums = "$exeHash  RMacro.exe`r`n$clientHash  $clientName`r`n$serverHash  $serverName`r`n"
-          [IO.File]::WriteAllText((Join-Path $assets 'SHA256SUMS-rmacro.txt'), $checksums, [Text.Encoding]::ASCII)
-          Write-Output "::notice title=Verified RMacro packages::Version $version; EXE $exeHash; client ZIP $clientHash; server ZIP $serverHash. Eleven server files, no database."
+          $checksums = "$exeHash  EternalCore.exe`r`n$clientHash  $clientName`r`n$serverHash  $serverName`r`n"
+          [IO.File]::WriteAllText((Join-Path $assets 'SHA256SUMS-eternal-core.txt'), $checksums, [Text.Encoding]::ASCII)
+          Write-Output "::notice title=Verified Eternal Core packages::Version $version; EXE $exeHash; client ZIP $clientHash; server ZIP $serverHash. Fourteen server files, no database."
           Write-Host $checksums
 
       - name: Keep tested client and server packages
@@ -132,26 +132,26 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Upload only to the matching draft prerelease
+      - name: Upload only to the matching draft release
         if: github.event_name == 'push'
         shell: powershell
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $version = (Get-Item 'dist\RMacro.exe').VersionInfo.ProductVersion
-          $tag = "rmacro-v$version"
+          $version = (Get-Item 'dist\EternalCore.exe').VersionInfo.ProductVersion
+          $tag = "eternal-core-v$version"
           $json = & gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100"
           if ($LASTEXITCODE -ne 0) { throw 'Could not list releases.' }
           $releases = $json | ConvertFrom-Json
           $release = $releases | Where-Object { $_.tag_name -eq $tag } | Select-Object -First 1
           if (-not $release) { Write-Output "::notice title=Release upload::No draft for $tag; skipping."; exit 0 }
-          if (-not $release.draft -or -not $release.prerelease -or $release.target_commitish -ne $env:GITHUB_REF_NAME) {
+          if (-not $release.draft -or $release.prerelease -or $release.target_commitish -ne $env:GITHUB_REF_NAME) {
             Write-Output "::notice title=Release upload::Not a matching branch draft; skipping $tag."; exit 0
           }
           $remote = & git ls-remote origin "refs/heads/$env:GITHUB_REF_NAME"
           if ($LASTEXITCODE -ne 0 -or -not $remote -or (($remote -split '\s+')[0] -ne $env:GITHUB_SHA)) { throw 'Branch moved; refusing stale build.' }
           $assets = Join-Path $env:RUNNER_TEMP 'rmacro-release-assets'
-          & gh release upload $tag (Join-Path $assets "RMacro-v$version-Windows.zip") (Join-Path $assets "RMacro-Server-v$version-Windows.zip") (Join-Path $assets 'RMacro.exe') (Join-Path $assets 'SHA256SUMS-rmacro.txt') --repo $env:GITHUB_REPOSITORY --clobber
-          if ($LASTEXITCODE -ne 0) { throw 'Could not upload RMacro assets.' }
+          & gh release upload $tag (Join-Path $assets "EternalCore-v$version-Windows.zip") (Join-Path $assets "EternalCore-Server-v$version-Windows.zip") (Join-Path $assets 'EternalCore.exe') (Join-Path $assets 'SHA256SUMS-eternal-core.txt') --repo $env:GITHUB_REPOSITORY --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Could not upload Eternal Core assets.' }
           Write-Output "::notice title=Release upload::Uploaded $tag from $env:GITHUB_REF_NAME."

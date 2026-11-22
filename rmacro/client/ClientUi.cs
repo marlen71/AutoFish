@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Drawing;
+using System.Diagnostics;
 using System.Collections.Generic;
 using System.Drawing.Drawing2D;
 using System.Globalization;
@@ -12,27 +13,50 @@ using RMFish;
 
 namespace RMacro
 {
+    internal static class SupportLink
+    {
+        public const string Url = "https://discord.gg/jVKudmmBbA";
+        // Injectable in the GUI smoke test; production always opens the fixed URL.
+        internal static Action<string> Launcher = delegate(string url)
+        { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); };
+        public static void Open() { Launcher(Url); }
+    }
+
     internal sealed class LoaderHeader : Panel
     {
+        private Image logo;
         public LoaderHeader()
         {
             DoubleBuffered = true; BackColor = Theme.Sidebar;
             AccessibleRole = AccessibleRole.TitleBar;
-            AccessibleName = "Заголовок RMacro; перетащите для перемещения";
+            AccessibleName = "Заголовок Eternal Core; перетащите для перемещения";
+            try
+            {
+                using (Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("EternalCore.Icon.png"))
+                using (Image image = stream == null ? null : Image.FromStream(stream))
+                    if (image != null) logo = new Bitmap(image);
+            }
+            catch (Exception) { }
+        }
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && logo != null) { logo.Dispose(); logo = null; }
+            base.Dispose(disposing);
         }
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e);
             e.Graphics.Clear(BackColor);
-            using (Font brand = new Font("Segoe UI", 14f, FontStyle.Bold))
+            if (logo != null) e.Graphics.DrawImage(logo, new Rectangle(12, 5, 36, 36));
+            using (Font brand = new Font("Segoe UI", 13f, FontStyle.Bold))
             {
-                TextRenderer.DrawText(e.Graphics, "R", brand, new Rectangle(18, 0, 19, Height), Theme.Text,
+                TextRenderer.DrawText(e.Graphics, "ETERNAL", brand, new Rectangle(54, 0, 91, Height), Theme.Text,
                     TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
-                TextRenderer.DrawText(e.Graphics, "Macro", brand, new Rectangle(34, 0, 85, Height), Theme.Accent,
+                TextRenderer.DrawText(e.Graphics, "CORE", brand, new Rectangle(145, 0, 62, Height), Theme.Accent,
                     TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
             }
             using (Font caption = new Font("Segoe UI", 7.3f, FontStyle.Bold))
-                TextRenderer.DrawText(e.Graphics, "ВАШИ ПРОДУКТЫ  /  В ОДНОМ МЕСТЕ", caption, new Rectangle(130, 0, 280, Height), Theme.Muted,
+                TextRenderer.DrawText(e.Graphics, "ИГРЫ  /  МАКРОСЫ  /  ПОДПИСКИ", caption, new Rectangle(244, 0, 320, Height), Theme.Muted,
                     TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
             using (Pen line = new Pen(Theme.Border)) e.Graphics.DrawLine(line, 0, Height - 1, Width, Height - 1);
         }
@@ -48,56 +72,49 @@ namespace RMacro
 
     internal sealed class HeroPanel : Panel
     {
-        private Image background;
+        private Image logo;
         public HeroPanel()
         {
             DoubleBuffered = true; BackColor = Theme.Sidebar;
             try
             {
-                using (Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("RMacro.City.png"))
+                using (Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("EternalCore.Logo.png"))
                 using (Image image = stream == null ? null : Image.FromStream(stream))
-                    if (image != null) background = new Bitmap(image);
+                    if (image != null) logo = new Bitmap(image);
             }
             catch (Exception) { }
         }
         protected override void Dispose(bool disposing)
         {
-            if (disposing && background != null) { background.Dispose(); background = null; }
+            if (disposing && logo != null) { logo.Dispose(); logo = null; }
             base.Dispose(disposing);
         }
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e);
-            Graphics g = e.Graphics;
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.Clear(Theme.Sidebar);
-            if (background != null)
-            {
-                float scale = Math.Max(Width / (float)background.Width, Height / (float)background.Height);
-                int w = (int)(background.Width * scale), h = (int)(background.Height * scale);
-                g.DrawImage(background, new Rectangle(0, (Height - h) / 2, w, h));
-            }
-            using (LinearGradientBrush overlay = new LinearGradientBrush(ClientRectangle,
-                Color.FromArgb(55, 2, 21, 24), Color.FromArgb(235, 4, 23, 25), LinearGradientMode.Vertical))
-                g.FillRectangle(overlay, ClientRectangle);
-            using (Pen edge = new Pen(Color.FromArgb(25, 70, 68))) g.DrawLine(edge, Width - 1, 0, Width - 1, Height);
-            using (SolidBrush accent = new SolidBrush(Theme.Accent)) g.FillEllipse(accent, 38, 50, 8, 8);
+            Graphics g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
+            using (LinearGradientBrush bg = new LinearGradientBrush(ClientRectangle,
+                Color.FromArgb(18, 23, 40), Color.FromArgb(12, 12, 22), LinearGradientMode.ForwardDiagonal))
+                g.FillRectangle(bg, ClientRectangle);
+            using (Pen edge = new Pen(Theme.Border)) g.DrawLine(edge, Width - 1, 0, Width - 1, Height);
+            using (SolidBrush accent = new SolidBrush(Theme.Accent)) g.FillEllipse(accent, 38, 35, 7, 7);
             using (Font mini = new Font("Segoe UI", 8f, FontStyle.Bold))
-                TextRenderer.DrawText(g, "ЕДИНОЕ ПРОСТРАНСТВО", mini, new Rectangle(54, 43, 250, 24),
-                    Color.FromArgb(176, 216, 205), TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
-            using (Font headline = new Font("Segoe UI", 25f, FontStyle.Bold))
+                TextRenderer.DrawText(g, "ТВОЁ ЕДИНОЕ ПРОСТРАНСТВО", mini, new Rectangle(53, 27, 300, 24),
+                    Theme.Muted, TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+            if (logo != null) g.DrawImage(logo, new Rectangle(80, 62, 260, 268));
+            using (Font headline = new Font("Segoe UI", 24f, FontStyle.Bold))
             {
-                TextRenderer.DrawText(g, "Всё начинается", headline, new Rectangle(35, 342, 375, 47), Theme.Text,
+                TextRenderer.DrawText(g, "Больше, чем", headline, new Rectangle(35, 348, 375, 45), Theme.Text,
                     TextFormatFlags.NoPadding | TextFormatFlags.VerticalCenter);
-                TextRenderer.DrawText(g, "с одного входа.", headline, new Rectangle(35, 386, 375, 47), Theme.Accent,
+                TextRenderer.DrawText(g, "просто игра.", headline, new Rectangle(35, 390, 375, 45), Theme.Accent,
                     TextFormatFlags.NoPadding | TextFormatFlags.VerticalCenter);
             }
             using (Font body = new Font("Segoe UI", 10f))
-                TextRenderer.DrawText(g, "Ваши продукты и подписки —\nв одном удобном месте.", body,
-                    new Rectangle(38, 451, 330, 54), Color.FromArgb(172, 204, 196), TextFormatFlags.WordBreak | TextFormatFlags.NoPadding);
-            using (Pen line = new Pen(Color.FromArgb(65, 116, 105))) g.DrawLine(line, 38, 540, 380, 540);
+                TextRenderer.DrawText(g, "Игры, макросы и подписки —\nв одном месте.", body,
+                    new Rectangle(38, 454, 330, 54), Theme.Muted, TextFormatFlags.WordBreak | TextFormatFlags.NoPadding);
+            using (Pen line = new Pen(Theme.Border)) g.DrawLine(line, 38, 540, 380, 540);
             using (Font small = new Font("Segoe UI", 8f, FontStyle.Bold))
-                TextRenderer.DrawText(g, "RMACRO  ·  LOADER", small, new Rectangle(38, 552, 260, 23), Theme.Muted, TextFormatFlags.NoPadding);
+                TextRenderer.DrawText(g, "ETERNAL CORE  ·  RELEASE V1", small, new Rectangle(38, 552, 300, 23), Theme.Muted, TextFormatFlags.NoPadding);
         }
     }
 
@@ -108,7 +125,7 @@ namespace RMacro
         {
             DoubleBuffered = true; BackColor = Theme.Raised;
             Editor = new TextBox(); Editor.Name = "editor"; Editor.BorderStyle = BorderStyle.None;
-            Editor.BackColor = Color.FromArgb(11, 33, 35); Editor.ForeColor = Theme.Text;
+            Editor.BackColor = Color.FromArgb(16, 18, 31); Editor.ForeColor = Theme.Text;
             Editor.Font = new Font("Segoe UI", 10f); Editor.UseSystemPasswordChar = secret;
             Editor.AccessibleName = accessibleName; Editor.Margin = Padding.Empty;
             Editor.Enter += delegate { Invalidate(); }; Editor.Leave += delegate { Invalidate(); };
@@ -124,7 +141,7 @@ namespace RMacro
             e.Graphics.Clear(Parent == null ? Theme.Background : Parent.BackColor);
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
             using (GraphicsPath path = Theme.Round(new Rectangle(0, 0, Math.Max(1, Width - 1), Math.Max(1, Height - 1)), 8))
-            using (SolidBrush fill = new SolidBrush(Color.FromArgb(11, 33, 35)))
+            using (SolidBrush fill = new SolidBrush(Color.FromArgb(16, 18, 31)))
             using (Pen edge = new Pen(ContainsFocus ? Theme.Accent : Theme.Border))
             { e.Graphics.FillPath(fill, path); e.Graphics.DrawPath(edge, path); }
         }
@@ -233,8 +250,8 @@ namespace RMacro
                 if (current)
                 {
                     using (GraphicsPath path = Theme.Round(bounds, 7))
-                    using (SolidBrush fill = new SolidBrush(Color.FromArgb(15, 58, 50)))
-                    using (Pen edge = new Pen(Focused ? Theme.Accent : Color.FromArgb(39, 99, 83)))
+                    using (SolidBrush fill = new SolidBrush(Color.FromArgb(27, 40, 62)))
+                    using (Pen edge = new Pen(Focused ? Theme.Accent : Color.FromArgb(56, 95, 128)))
                     { e.Graphics.FillPath(fill, path); e.Graphics.DrawPath(edge, path); }
                 }
                 using (SolidBrush dot = new SolidBrush(item.Highlight ? Theme.Accent : Theme.Muted))
@@ -262,14 +279,14 @@ namespace RMacro
         private readonly System.Windows.Forms.Timer refreshTimer = new System.Windows.Forms.Timer();
         private readonly System.Windows.Forms.Timer drainTimer = new System.Windows.Forms.Timer();
         private Panel loginPage, dashboardPage, workspacePage, profilePage, sidebar;
-        private DarkField usernameField, passwordField;
+        private DarkField usernameField, passwordField, keyField, oldPasswordField, newPasswordField, confirmPasswordField;
         private CatalogList gameList, macroList;
-        private string selectedGameCode, selectedProductCode;
+        private string selectedGameCode, selectedProductCode, pendingActivationKey, pendingActivationId;
         private DarkToggle remember;
-        private SoftButton loginButton, launchButton, navProducts, navProfile;
+        private SoftButton loginButton, launchButton, navProducts, navProfile, activateButton, changePasswordButton;
         private PowerButton productPower;
         private Label loginMessage, sessionNote, accountName, productState, uidValue, remainingValue, expiresValue;
-        private Label statusTitle, statusDescription, warningText, connectionText, profileUser, profileUid;
+        private Label statusTitle, statusDescription, warningText, connectionText, profileUser, profileUid, keyMessage, passwordMessage;
         private SoftCard warningCard;
         private DarkLogBox profileList;
         private ApiClient api;
@@ -279,14 +296,14 @@ namespace RMacro
         private ProductLease lease;
         private Mutex fishMutex;
         private bool ownsFishMutex, busy, refreshing, closing;
-        private int generation;
+        private int generation, profileRevision;
 
         public LoaderForm(string localDirectory, string device, string serverAddress)
         {
             this.localDirectory = localDirectory; this.device = device;
             this.serverAddress = new ApiClient(serverAddress).BaseUrl;
             store = new SessionStore(localDirectory);
-            Text = "RMacro — ваши продукты";
+            Text = "Eternal Core — ваши продукты";
             Name = "loaderForm"; FormBorderStyle = FormBorderStyle.None; StartPosition = FormStartPosition.CenterScreen;
             ClientSize = new Size(982, 650); MinimizeBox = true; MaximizeBox = false; ShowInTaskbar = true;
             DoubleBuffered = true; BackColor = Theme.Accent; ForeColor = Theme.Text;
@@ -310,7 +327,7 @@ namespace RMacro
             {
                 closing = true; generation++;
                 clockTimer.Stop(); refreshTimer.Stop();
-                CloseProduct("Закрытие RMacro. Запрошена остановка.");
+                CloseProduct("Закрытие Eternal Core. Запрошена остановка.");
             };
             FormClosed += delegate
             {
@@ -344,10 +361,10 @@ namespace RMacro
         {
             LoaderHeader header = new LoaderHeader(); header.Name = "loaderHeader"; header.SetBounds(1, 1, 980, 46); Controls.Add(header);
             WindowButton minimize = new WindowButton(WindowAction.Minimize); minimize.Name = "loaderMinimize";
-            minimize.AccessibleName = "Свернуть RMacro"; minimize.SetBounds(899, 6, 38, 33);
+            minimize.AccessibleName = "Свернуть Eternal Core"; minimize.SetBounds(899, 6, 38, 33);
             minimize.Click += delegate { WindowState = FormWindowState.Minimized; }; header.Controls.Add(minimize);
             WindowButton close = new WindowButton(WindowAction.Close); close.Name = "loaderClose";
-            close.AccessibleName = "Закрыть RMacro"; close.SetBounds(940, 6, 38, 33);
+            close.AccessibleName = "Закрыть Eternal Core"; close.SetBounds(940, 6, 38, 33);
             close.Click += delegate { Close(); }; header.Controls.Add(close);
         }
 
@@ -366,10 +383,14 @@ namespace RMacro
             remember = new DarkToggle(); remember.Name = "rememberSession"; remember.AccessibleName = "Запомнить вход";
             remember.SetBounds(478, 347, 42, 23); remember.Checked = true; loginPage.Controls.Add(remember);
             Label(loginPage, "Запомнить вход на этом устройстве", 528, 346, 375, 25, 9f, Theme.Text, FontStyle.Regular);
-            loginButton = Button(loginPage, "Войти в RMacro    →", 478, 396, 423, 47, true); loginButton.Name = "loginButton";
+            loginButton = Button(loginPage, "Войти в Eternal Core    →", 478, 396, 423, 47, true); loginButton.Name = "loginButton";
             loginButton.Click += async delegate { await LoginAsync(); };
-            loginMessage = Label(loginPage, "", 478, 455, 423, 60, 8.8f, Theme.Warn, FontStyle.Regular); loginMessage.Name = "loginMessage";
-            sessionNote = Label(loginPage, "Пароль не сохраняется · Защита Windows", 478, 565, 423, 20, 8f, Theme.Muted, FontStyle.Regular);
+            loginMessage = Label(loginPage, "", 478, 450, 423, 55, 8.8f, Theme.Warn, FontStyle.Regular); loginMessage.Name = "loginMessage";
+            SoftButton support = Button(loginPage, "Тех. Поддержка   ↗", 478, 517, 220, 38, false); support.Name = "loginSupport";
+            support.Click += delegate { OpenSupport(loginMessage); };
+            bool plainLan = new Uri(serverAddress).Scheme == Uri.UriSchemeHttp && !new Uri(serverAddress).IsLoopback;
+            sessionNote = Label(loginPage, plainLan ? "HTTP в LAN не шифрует данные · пароль не сохраняется" :
+                "Пароль не сохраняется · Защита Windows", 478, 565, 440, 20, 8f, Theme.Muted, FontStyle.Regular);
             sessionNote.Name = "sessionNote";
         }
 
@@ -378,7 +399,7 @@ namespace RMacro
             dashboardPage = new Panel(); dashboardPage.Name = "dashboardPage"; dashboardPage.SetBounds(1, 47, 980, 602); dashboardPage.BackColor = Theme.Background; Controls.Add(dashboardPage);
             sidebar = new Panel(); sidebar.Name = "loaderSidebar"; sidebar.SetBounds(0, 0, 190, 602); sidebar.BackColor = Theme.Sidebar; dashboardPage.Controls.Add(sidebar);
             Label(sidebar, "ПРОСТРАНСТВО", 20, 29, 160, 18, 7.5f, Theme.Muted, FontStyle.Bold);
-            Label(sidebar, "RMacro", 18, 48, 160, 40, 20f, Theme.Text, FontStyle.Bold);
+            Label(sidebar, "Eternal Core", 18, 48, 165, 40, 15f, Theme.Text, FontStyle.Bold);
             Label(sidebar, "МОИ ПРОДУКТЫ", 20, 112, 160, 20, 7.5f, Theme.Muted, FontStyle.Bold);
             navProducts = Button(sidebar, "Библиотека", 15, 139, 160, 40, false); navProducts.Name = "navProducts";
             navProducts.AlignLeft = true; navProducts.IconKind = MenuIcon.Fish;
@@ -386,13 +407,13 @@ namespace RMacro
             navProfile = Button(sidebar, "Профиль", 15, 187, 160, 40, false); navProfile.Name = "navProfile";
             navProfile.AlignLeft = true; navProfile.IconKind = MenuIcon.Journal;
             navProfile.Click += delegate { ShowDashboardPage(true); };
-            SoftCard security = Card(sidebar, 15, 372, 160, 121); security.Fill = Color.FromArgb(10, 34, 34);
+            SoftCard security = Card(sidebar, 15, 372, 160, 121); security.Fill = Color.FromArgb(19, 23, 39);
             Label(security, "◆", 12, 13, 22, 22, 12f, Theme.Accent, FontStyle.Bold);
             Label(security, "ВАШ ДОСТУП", 38, 14, 110, 20, 7.5f, Theme.Text, FontStyle.Bold);
             Label(security, "Подписка проверяется сервером при запуске.", 13, 42, 135, 60, 8.3f, Theme.Muted, FontStyle.Regular);
             SoftButton logout = Button(sidebar, "Выйти из аккаунта", 15, 512, 160, 37, false); logout.Name = "logoutButton";
             logout.Click += async delegate { await LogoutAsync(); };
-            Label(sidebar, "RMacro  ·  beta 0.1", 20, 570, 150, 18, 7.8f, Theme.Muted, FontStyle.Regular);
+            Label(sidebar, "Eternal Core  ·  release v1", 20, 570, 150, 18, 7.8f, Theme.Muted, FontStyle.Regular);
             workspacePage = new Panel(); workspacePage.Name = "workspacePage"; workspacePage.SetBounds(190, 0, 790, 602); workspacePage.BackColor = Theme.Background; dashboardPage.Controls.Add(workspacePage);
             profilePage = new Panel(); profilePage.Name = "profilePage"; profilePage.SetBounds(190, 0, 790, 602); profilePage.BackColor = Theme.Background; dashboardPage.Controls.Add(profilePage);
             BuildProductPage(); BuildProfilePage(); ShowDashboardPage(false);
@@ -432,31 +453,64 @@ namespace RMacro
             productState = Label(status, "", 102, 75, 370, 20, 8f, Theme.Accent, FontStyle.Bold); productState.Name = "productState";
             launchButton = Button(status, "Открыть   ↗", 508, 28, 205, 44, true); launchButton.Name = "launchButton";
             launchButton.Click += async delegate { await LaunchAsync(); };
-            warningCard = Card(workspacePage, 26, 538, 736, 49); warningCard.Fill = Color.FromArgb(12, 39, 37); warningCard.Stroke = Color.FromArgb(35, 77, 69);
+            warningCard = Card(workspacePage, 26, 538, 736, 49); warningCard.Fill = Color.FromArgb(21, 25, 43); warningCard.Stroke = Color.FromArgb(52, 67, 100);
             warningText = Label(warningCard, "", 13, 4, 710, 41, 8.6f, Theme.Muted, FontStyle.Regular); warningText.Name = "warningText";
         }
 
         private void BuildProfilePage()
         {
-            Label(profilePage, "АККАУНТ", 27, 23, 390, 20, 7.8f, Theme.Accent, FontStyle.Bold);
-            Label(profilePage, "Ваш профиль", 25, 44, 440, 43, 22f, Theme.Text, FontStyle.Bold);
-            SoftCard userCard = Card(profilePage, 26, 112, 736, 120);
-            Label(userCard, "●", 19, 20, 54, 54, 29f, Theme.Accent, FontStyle.Bold);
-            profileUser = Label(userCard, "", 84, 22, 390, 29, 15f, Theme.Text, FontStyle.Bold); profileUser.Name = "profileUser";
-            profileUid = Label(userCard, "", 85, 57, 400, 24, 9f, Theme.Muted, FontStyle.Regular); profileUid.Name = "profileUid";
-            Label description = Label(userCard, "Персональная библиотека RMacro", 85, 84, 610, 22, 8f, Theme.Muted, FontStyle.Regular); description.Name = "profileDescription";
-            Label(profilePage, "ПОДПИСКИ", 27, 250, 400, 20, 8f, Theme.Muted, FontStyle.Bold);
-            profileList = new DarkLogBox(); profileList.Name = "subscriptionList"; profileList.SetBounds(26, 276, 736, 207); profilePage.Controls.Add(profileList);
-            connectionText = Label(profilePage, "", 27, 504, 720, 48, 9f, Theme.Muted, FontStyle.Regular); connectionText.Name = "connectionText";
-            Label(profilePage, "Сброс привязки устройства выполняет администратор.", 27, 559, 720, 22, 8.3f, Theme.Muted, FontStyle.Regular);
+            Label(profilePage, "АККАУНТ  /  ETERNAL CORE", 27, 16, 390, 20, 7.8f, Theme.Accent, FontStyle.Bold);
+            Label(profilePage, "Ваш профиль", 25, 36, 440, 39, 21f, Theme.Text, FontStyle.Bold);
+            SoftCard userCard = Card(profilePage, 26, 82, 736, 67);
+            Label(userCard, "●", 16, 11, 45, 45, 24f, Theme.Accent, FontStyle.Bold);
+            profileUser = Label(userCard, "", 66, 9, 350, 27, 13f, Theme.Text, FontStyle.Bold); profileUser.Name = "profileUser";
+            profileUid = Label(userCard, "", 67, 36, 310, 21, 8.5f, Theme.Muted, FontStyle.Regular); profileUid.Name = "profileUid";
+            Label(userCard, "ЛИЧНЫЙ КАБИНЕТ", 506, 19, 205, 25, 8f, Theme.Muted, FontStyle.Bold);
+
+            SoftCard keyCard = Card(profilePage, 26, 161, 356, 130);
+            Label(keyCard, "АКТИВАЦИЯ КЛЮЧА", 13, 9, 320, 19, 8f, Theme.Accent, FontStyle.Bold);
+            keyField = Field(keyCard, "activationKey", "Ключ подписки", 13, 33, 205, false);
+            keyField.Editor.MaxLength = 64;
+            activateButton = Button(keyCard, "Активировать", 226, 33, 117, 44, true); activateButton.Name = "activateKeyButton";
+            activateButton.Font = new Font("Segoe UI", 8.3f, FontStyle.Bold);
+            activateButton.Click += async delegate { await ActivateKeyAsync(); };
+            keyMessage = Label(keyCard, "Введите ключ от администратора.", 13, 84, 329, 38, 8f, Theme.Muted, FontStyle.Regular); keyMessage.Name = "keyMessage";
+
+            SoftCard passwordCard = Card(profilePage, 26, 303, 356, 282);
+            Label(passwordCard, "СМЕНИТЬ ПАРОЛЬ", 13, 10, 320, 20, 8f, Theme.Accent, FontStyle.Bold);
+            Label(passwordCard, "Старый пароль", 13, 43, 112, 25, 8.4f, Theme.Muted, FontStyle.Regular);
+            oldPasswordField = Field(passwordCard, "oldPassword", "Старый пароль", 128, 38, 215, true); oldPasswordField.Height = 37;
+            Label(passwordCard, "Новый пароль", 13, 91, 112, 25, 8.4f, Theme.Muted, FontStyle.Regular);
+            newPasswordField = Field(passwordCard, "newPassword", "Новый пароль", 128, 86, 215, true); newPasswordField.Height = 37;
+            Label(passwordCard, "Повторите", 13, 139, 112, 25, 8.4f, Theme.Muted, FontStyle.Regular);
+            confirmPasswordField = Field(passwordCard, "confirmPassword", "Подтверждение нового пароля", 128, 134, 215, true); confirmPasswordField.Height = 37;
+            oldPasswordField.Editor.MaxLength = newPasswordField.Editor.MaxLength = confirmPasswordField.Editor.MaxLength = 256;
+            changePasswordButton = Button(passwordCard, "Сохранить новый пароль", 13, 181, 330, 37, false); changePasswordButton.Name = "changePasswordButton";
+            changePasswordButton.Click += async delegate { await ChangePasswordAsync(); };
+            passwordMessage = Label(passwordCard, "От 8 символов; для администратора — от 12.", 13, 224, 330, 48, 8f, Theme.Muted, FontStyle.Regular); passwordMessage.Name = "passwordMessage";
+
+            Label(profilePage, "МОИ ПОДПИСКИ", 402, 161, 330, 20, 8f, Theme.Muted, FontStyle.Bold);
+            profileList = new DarkLogBox(); profileList.Name = "subscriptionList"; profileList.SetBounds(398, 185, 364, 227); profilePage.Controls.Add(profileList);
+            SoftCard supportCard = Card(profilePage, 398, 424, 364, 99);
+            Label(supportCard, "НУЖНА ПОМОЩЬ?", 13, 9, 330, 19, 8f, Theme.Accent, FontStyle.Bold);
+            Label(supportCard, "Свяжитесь с нами в Discord.", 13, 28, 330, 21, 8.5f, Theme.Muted, FontStyle.Regular);
+            SoftButton support = Button(supportCard, "Тех. Поддержка   ↗", 13, 54, 330, 34, false); support.Name = "profileSupport";
+            support.Click += delegate { OpenSupport(connectionText); };
+            connectionText = Label(profilePage, "", 400, 530, 360, 51, 8.2f, Theme.Muted, FontStyle.Regular); connectionText.Name = "connectionText";
+        }
+
+        private static void OpenSupport(Label feedback)
+        {
+            try { SupportLink.Open(); }
+            catch (Exception) { feedback.Text = "Не удалось открыть Discord. Проверьте браузер по умолчанию."; }
         }
 
         private void ShowDashboardPage(bool showProfile)
         {
             workspacePage.Visible = !showProfile; profilePage.Visible = showProfile;
             navProducts.Selected = !showProfile; navProfile.Selected = showProfile;
-            navProducts.Fill = !showProfile ? Color.FromArgb(15, 61, 51) : Theme.Raised;
-            navProfile.Fill = showProfile ? Color.FromArgb(15, 61, 51) : Theme.Raised;
+            navProducts.Fill = !showProfile ? Color.FromArgb(27, 43, 68) : Theme.Raised;
+            navProfile.Fill = showProfile ? Color.FromArgb(27, 43, 68) : Theme.Raised;
             navProducts.Ink = !showProfile ? Theme.Accent : Theme.Text;
             navProfile.Ink = showProfile ? Theme.Accent : Theme.Text;
             navProducts.Invalidate(); navProfile.Invalidate();
@@ -467,6 +521,12 @@ namespace RMacro
         {
             refreshTimer.Stop(); dashboardPage.Visible = false; loginPage.Visible = true; loginPage.BringToFront();
             AcceptButton = loginButton; loginMessage.Text = message; passwordField.Editor.Text = ""; loginButton.Enabled = true;
+            if (keyField != null) keyField.Editor.Text = "";
+            if (oldPasswordField != null) oldPasswordField.Editor.Text = "";
+            if (newPasswordField != null) newPasswordField.Editor.Text = "";
+            if (confirmPasswordField != null) confirmPasswordField.Editor.Text = "";
+            pendingActivationKey = null; pendingActivationId = null;
+            SetBusy(false);
         }
         private void ShowDashboard(string message)
         {
@@ -479,6 +539,12 @@ namespace RMacro
             passwordField.Editor.Enabled = !value; remember.Enabled = !value;
             if (gameList != null) gameList.Enabled = !value;
             if (macroList != null) macroList.Enabled = !value;
+            if (keyField != null) keyField.Editor.Enabled = !value;
+            if (oldPasswordField != null) oldPasswordField.Editor.Enabled = !value;
+            if (newPasswordField != null) newPasswordField.Editor.Enabled = !value;
+            if (confirmPasswordField != null) confirmPasswordField.Editor.Enabled = !value;
+            if (activateButton != null) activateButton.Enabled = !value;
+            if (changePasswordButton != null) changePasswordButton.Enabled = !value;
             if (value) { if (launchButton != null) launchButton.Enabled = false; if (productPower != null) productPower.Enabled = false; }
             else UpdateProfileView();
         }
@@ -537,20 +603,102 @@ namespace RMacro
             {
                 // Type and call sites aid diagnostics without writing the login,
                 // password, token, device identifier, or server response to a log.
-                Console.Error.WriteLine("RMacro login processing: " + ex.GetType().FullName + "\n" + ex.StackTrace);
+                Console.Error.WriteLine("Eternal Core login processing: " + ex.GetType().FullName + "\n" + ex.StackTrace);
                 if (!closing && expected == generation) loginMessage.Text = "Не удалось выполнить вход. Проверьте подключение.";
             }
             finally { if (!closing && expected == generation) { passwordField.Editor.Text = ""; SetBusy(false); } }
         }
 
+        private async Task ActivateKeyAsync()
+        {
+            if (busy || api == null || String.IsNullOrEmpty(token) || closing) return;
+            string key = keyField.Editor.Text.Trim().ToUpperInvariant();
+            if (key.Length == 0) { keyMessage.Text = "Введите ключ подписки."; return; }
+            if (!String.Equals(pendingActivationKey, key, StringComparison.Ordinal) || String.IsNullOrEmpty(pendingActivationId))
+            { pendingActivationKey = key; pendingActivationId = Guid.NewGuid().ToString("N"); }
+            string operation = pendingActivationId;
+            ApiClient current = api; string currentToken = token; int expected = generation;
+            SetBusy(true); keyMessage.Text = "Проверяем ключ…"; bool sessionInvalid = false;
+            try
+            {
+                long expiry = await Task.Run(delegate { return current.ActivateKey(currentToken, device, key, operation); });
+                if (closing || expected != generation) return;
+                pendingActivationKey = null; pendingActivationId = null; keyField.Editor.Text = "";
+                profileRevision++; // an older refresh must not overwrite the newly activated entitlement
+                keyMessage.ForeColor = Theme.Accent;
+                keyMessage.Text = "Ключ активирован · до " + FormatDate(expiry);
+                try
+                {
+                    Profile updated = await Task.Run(delegate { return current.GetProfile(currentToken, device); });
+                    if (!closing && expected == generation) { profile = updated; UpdateProfileView(); }
+                }
+                catch (Exception)
+                {
+                    if (!closing && expected == generation) keyMessage.Text = "Ключ активирован. Обновите подписки, когда связь восстановится.";
+                }
+            }
+            catch (ApiException ex)
+            {
+                if (closing || expected != generation) return;
+                keyMessage.ForeColor = Theme.Warn;
+                keyMessage.Text = ex.Status == 0 ? "Ответ потерян. Повторите с тем же ключом: эта попытка не добавит время дважды." : ex.Message;
+                sessionInvalid = ex.Status == 401;
+            }
+            catch (Exception)
+            {
+                if (!closing && expected == generation) { keyMessage.ForeColor = Theme.Warn; keyMessage.Text = "Не удалось подтвердить активацию. Повторите с тем же ключом."; }
+            }
+            finally { if (!closing && expected == generation) SetBusy(false); }
+            if (sessionInvalid && !closing && expected == generation) await RefreshProfileAsync();
+        }
+
+        private async Task ChangePasswordAsync()
+        {
+            if (busy || api == null || String.IsNullOrEmpty(token) || closing) return;
+            string oldPassword = oldPasswordField.Editor.Text, newPassword = newPasswordField.Editor.Text, confirm = confirmPasswordField.Editor.Text;
+            if (oldPassword.Length == 0 || newPassword.Length < 8)
+            { passwordMessage.ForeColor = Theme.Warn; passwordMessage.Text = "Введите старый пароль и новый пароль не короче 8 символов."; return; }
+            if (!String.Equals(newPassword, confirm, StringComparison.Ordinal))
+            { passwordMessage.ForeColor = Theme.Warn; passwordMessage.Text = "Новый пароль и подтверждение не совпадают."; return; }
+            ApiClient current = api; string currentToken = token; int expected = generation; bool sessionInvalid = false;
+            SetBusy(true); passwordMessage.Text = "Сохраняем пароль…";
+            try
+            {
+                await Task.Run(delegate { current.ChangePassword(currentToken, device, oldPassword, newPassword, confirm); });
+                if (closing || expected != generation) return;
+                passwordMessage.ForeColor = Theme.Accent;
+                passwordMessage.Text = "Пароль изменён. Остальные сеансы завершены.";
+            }
+            catch (ApiException ex)
+            {
+                if (closing || expected != generation) return;
+                passwordMessage.ForeColor = Theme.Warn;
+                passwordMessage.Text = ex.Status == 0 ? "Ответ потерян: пароль мог измениться. Проверьте вход." : ex.Message;
+                sessionInvalid = ex.Status == 401;
+            }
+            catch (Exception)
+            {
+                if (!closing && expected == generation) { passwordMessage.ForeColor = Theme.Warn; passwordMessage.Text = "Не удалось подтвердить смену пароля. Проверьте вход."; }
+            }
+            finally
+            {
+                if (!closing && expected == generation)
+                {
+                    oldPasswordField.Editor.Text = ""; newPasswordField.Editor.Text = ""; confirmPasswordField.Editor.Text = "";
+                    SetBusy(false);
+                }
+            }
+            if (sessionInvalid && !closing && expected == generation) await RefreshProfileAsync();
+        }
+
         private async Task RefreshProfileAsync()
         {
             if (refreshing || api == null || String.IsNullOrEmpty(token) || closing) return;
-            refreshing = true; int expected = generation; ApiClient current = api; string currentToken = token;
+            refreshing = true; int expected = generation, revision = profileRevision; ApiClient current = api; string currentToken = token;
             try
             {
                 Profile result = await Task.Run(delegate { return current.GetProfile(currentToken, device); });
-                if (closing || expected != generation) return;
+                if (closing || expected != generation || revision != profileRevision) return;
                 profile = result; connectionText.Text = "Подключение подтверждено · " + DateTime.Now.ToString("HH:mm:ss"); UpdateProfileView();
             }
             catch (ApiException ex)
@@ -624,8 +772,8 @@ namespace RMacro
             productState.ForeColor = active ? Theme.Accent : Theme.Warn;
             statusTitle.Text = chosen == null ? "Выберите макрос" : opened ? "RMFish открыт" :
                 !active ? chosen.Name + " · доступ истёк" : supported ? chosen.Name + " · готов к запуску" : chosen.Name + " · запуск пока недоступен";
-            statusDescription.Text = chosen == null ? "Выберите игру и доступный макрос выше." : opened ? "Окно продукта работает внутри RMacro." :
-                !active ? "Для продления обратитесь к администратору." : supported ? "Макрос встроен в RMacro, установка не нужна." : "Нужна версия лоадера с поддержкой этого макроса.";
+            statusDescription.Text = chosen == null ? "Выберите игру и доступный макрос выше." : opened ? "Окно продукта работает внутри Eternal Core." :
+                !active ? "Для продления обратитесь к администратору." : supported ? "Макрос встроен в Eternal Core, установка не нужна." : "Нужна версия лоадера с поддержкой этого макроса.";
             launchButton.Enabled = !busy && active && supported; productPower.Enabled = !busy && active && supported;
             launchButton.Text = opened ? "Показать RMFish   ↗" : "Открыть   ↗";
 
@@ -661,7 +809,7 @@ namespace RMacro
             {
                 warningText.Text = active && supported ? "◆   Подписка подтверждена. Перед рыбалкой проверьте F10 в игре." :
                     "◆   Подписки и устройства настраивает администратор.";
-                warningText.ForeColor = Theme.Muted; warningCard.Stroke = Color.FromArgb(35, 77, 69);
+                warningText.ForeColor = Theme.Muted; warningCard.Stroke = Color.FromArgb(52, 67, 100);
             }
             warningCard.Invalidate();
         }

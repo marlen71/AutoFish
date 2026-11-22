@@ -6,4 +6,6 @@
 
 The build embeds the menu logo as `RMFish.BrandLogo.png` and embeds the icon into `RMFish.exe`. The PowerShell source launcher reads these assets from this directory. Missing or damaged artwork falls back to a text logo; it does not disable the stop controls. No network request is used to load artwork.
 
-- `rmacro-city.png` is an AI-generated night city backdrop made for the RMacro login screen. It is embedded in the loader and does not require a network request.
+- `rmacro-city.png` is the historical backdrop for the RMacro beta; Eternal Core no longer embeds it.
+- `eternal-core-original.png` is the logo supplied by the owner. `eternal-core-logo.png` is its unchanged copy for the loader and website; `eternal-core-icon.png` is a crop of the mark on a dark square. `eternal-core.ico` contains 32-bit DIB frames at 16–256 px for Windows. The website carries copies of the logo, mark and favicon in its static directory, so neither UI requests external artwork.
+- `Build-RMacro.ps1` defines `ETERNAL_CORE` to give the loader and its embedded RMFish window the cyan/violet theme; the standalone RMFish build retains its original palette and art.

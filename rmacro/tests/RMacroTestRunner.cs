@@ -70,7 +70,8 @@ internal static class RMacroTestRunner
             }
             else
             {
-                Control side = Find<Control>(form, "loaderSidebar"), work = Find<Control>(form, "workspacePage");
+                Control side = Find<Control>(form, "loaderSidebar");
+                Control work = Find<Control>(form, Find<Control>(form, "profilePage").Visible ? "profilePage" : "workspacePage");
                 using (Bitmap left = new Bitmap(side.Width, side.Height))
                 { side.DrawToBitmap(left, new Rectangle(Point.Empty, left.Size)); graphics.DrawImageUnscaled(left, 1, 47); }
                 using (Bitmap right = new Bitmap(work.Width, work.Height))
@@ -104,8 +105,10 @@ internal static class RMacroTestRunner
     }
     private static void CheckCore(ApiClient api, string root)
     {
-        try { new ApiClient("http://192.168.1.7:8765"); throw new Exception("Insecure remote HTTP accepted"); }
-        catch (ApiException ex) { Check(ex.Code == "HTTPS_REQUIRED", "non-local plaintext must be rejected"); }
+        Check(new ApiClient("http://192.168.0.105:8765").BaseUrl == "http://192.168.0.105:8765", "private LAN HTTP accepted");
+        Check(new ApiClient("http://10.1.2.3").BaseUrl == "http://10.1.2.3", "RFC1918 HTTP accepted");
+        try { new ApiClient("http://8.8.8.8:8765"); throw new Exception("Public HTTP accepted"); }
+        catch (ApiException ex) { Check(ex.Code == "HTTPS_REQUIRED", "public plaintext must be rejected"); }
         try { new ApiClient("https://user:pass@example.com"); throw new Exception("Credentials in URL accepted"); }
         catch (ApiException ex) { Check(ex.Code == "BAD_ADDRESS", "URL credentials must be rejected"); }
         Check(new ApiClient("https://example.com").BaseUrl == "https://example.com", "HTTPS address rejected");
@@ -116,16 +119,20 @@ internal static class RMacroTestRunner
         Check(profile.Find("rmfish") != null && profile.Remaining(profile.Find("rmfish")) > 0, "subscription in login");
         Check(profile.Games.Count == 2 && profile.Find("test-macro").GameCode == "test-game", "game/product catalog in login");
         Check(profile.Find("unowned-macro").ExpiresAt == null, "unowned product has no entitlement");
+        string ownerToken;
+        Profile owner = api.Login(Admin, AdminPassword, Device, out ownerToken);
+        Check(owner.Username == Admin && owner.Uid > 0 && owner.Uid != profile.Uid, "administrator can log in to loader with site credentials");
+        Check(owner.Find("rmfish").ExpiresAt == null && api.GetProfile(ownerToken, Device).Uid == owner.Uid, "administrator has no automatic subscription");
         string configuredPath = Environment.GetEnvironmentVariable("RMACRO_CONFIGURED_EXE");
         if (!String.IsNullOrEmpty(configuredPath))
             Check(ServerSettings.ReadFromExecutable(configuredPath) == api.BaseUrl, "owner-configured EXE endpoint");
         string configProbe = Path.Combine(root, "config-probe.exe");
         File.WriteAllBytes(configProbe, new byte[] { 0x4d, 0x5a });
-        Check(ServerSettings.ReadFromExecutable(configProbe) == "http://127.0.0.1:8765", "unconfigured EXE uses local default");
-        byte[] insecure = Encoding.ASCII.GetBytes("http://192.168.1.7");
+        Check(ServerSettings.ReadFromExecutable(configProbe) == "http://192.168.0.105:8765", "unconfigured EXE uses owner LAN default");
+        byte[] insecure = Encoding.ASCII.GetBytes("http://8.8.8.8");
         WriteFooter(configProbe, insecure, (uint)insecure.Length);
         try { ServerSettings.ReadFromExecutable(configProbe); throw new Exception("Insecure configured endpoint accepted"); }
-        catch (InvalidOperationException) { Check(true, "configured remote HTTP is rejected"); }
+        catch (InvalidOperationException) { Check(true, "configured public HTTP is rejected"); }
         WriteFooter(configProbe, new byte[] { 0xff }, 1);
         try { ServerSettings.ReadFromExecutable(configProbe); throw new Exception("Malformed configuration accepted"); }
         catch (InvalidOperationException) { Check(true, "configured endpoint must be valid UTF-8"); }
@@ -215,13 +222,22 @@ internal static class RMacroTestRunner
     private static void CheckGui(ApiClient api, string root, ApplicationContext context)
     {
         Trace("open login window");
+        List<string> openedSupport = new List<string>();
+        SupportLink.Launcher = delegate(string url) { openedSupport.Add(url); };
+        string adminToken = AdminToken(api);
+        long deadline = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds + 86400;
+        Dictionary<string, object> keyResult = api.Request("/api/admin/keys", ApiClient.Body("product", "test-macro", "seconds", 3600,
+            "activate_before", deadline, "max_users", 1, "max_activations", 1, "max_per_user", 1), adminToken, null);
+        string issuedKey = JsonValues.String(keyResult, "key");
         string local = Path.Combine(root, "profile", "RMacro");
         Directory.CreateDirectory(local);
         using (UiHost first = new UiHost(context, local, api.BaseUrl))
         {
             first.Run(delegate(LoaderForm form)
             {
-                Check(form.FormBorderStyle == FormBorderStyle.None, "branded title bar");
+                Check(form.FormBorderStyle == FormBorderStyle.None && form.Text.StartsWith("Eternal Core", StringComparison.Ordinal), "branded title bar");
+                Find<SoftButton>(form, "loginSupport").PerformClick();
+                Check(openedSupport.Count == 1 && openedSupport[0] == "https://discord.gg/jVKudmmBbA", "login support opens the requested Discord URL");
                 Check(Find<Control>(form, "loginPage").Visible, "login page opens first");
                 Check(!Find<Control>(form, "dashboardPage").Visible, "dashboard must be hidden before login");
                 Check(Find<Control>(form, "serverEditor") == null, "server address is not a login field");
@@ -265,9 +281,37 @@ internal static class RMacroTestRunner
                 Check(Find<DarkLogBox>(form, "subscriptionList").Editor.Text.Contains("RMFish"), "profile lists product");
                 Check(!Find<DarkLogBox>(form, "subscriptionList").Editor.Text.Contains("Невыданный"), "profile does not list unowned macros");
                 Check(!VisibleTextContains(form, api.BaseUrl), "server address is not displayed in profile");
+                Find<SoftButton>(form, "profileSupport").PerformClick();
+                Check(openedSupport.Count == 2 && openedSupport[1] == SupportLink.Url, "profile support opens the requested Discord URL");
+                Check(Find<TextBox>(form, "oldPasswordEditor").UseSystemPasswordChar && Find<TextBox>(form, "newPasswordEditor").UseSystemPasswordChar &&
+                    Find<TextBox>(form, "confirmPasswordEditor").UseSystemPasswordChar, "password fields are masked");
+                Capture(form, true, "03-profile");
+                Find<TextBox>(form, "activationKeyEditor").Text = issuedKey;
+                Find<SoftButton>(form, "activateKeyButton").PerformClick();
+            });
+            WaitUntil(delegate { return restored.Value(delegate(LoaderForm f) { return !Field<bool>(f, "busy") && Find<Label>(f, "keyMessage").Text.Contains("Ключ активирован"); }); }, 12000, "key activation");
+            restored.Run(delegate(LoaderForm form)
+            {
+                Check(Find<TextBox>(form, "activationKeyEditor").Text.Length == 0, "activated key removed from field");
+                Check(Field<Profile>(form, "profile").Remaining(Field<Profile>(form, "profile").Find("test-macro")) > 4 * 86400, "key activation updates profile entitlement");
+                Find<TextBox>(form, "oldPasswordEditor").Text = UserPassword;
+                Find<TextBox>(form, "newPasswordEditor").Text = "changed-fixture-user-password";
+                Find<TextBox>(form, "confirmPasswordEditor").Text = "mismatch";
+                Find<SoftButton>(form, "changePasswordButton").PerformClick();
+                Check(Find<Label>(form, "passwordMessage").Text.Contains("не совпадают"), "password confirmation checked before sending");
+                Find<TextBox>(form, "confirmPasswordEditor").Text = "changed-fixture-user-password";
+                Find<SoftButton>(form, "changePasswordButton").PerformClick();
+            });
+            WaitUntil(delegate { return restored.Value(delegate(LoaderForm f) { return !Field<bool>(f, "busy") && Find<Label>(f, "passwordMessage").Text.Contains("Пароль изменён"); }); }, 12000, "profile password change");
+            restored.Run(delegate(LoaderForm form)
+            {
+                Check(Find<TextBox>(form, "oldPasswordEditor").Text.Length == 0 && Find<TextBox>(form, "newPasswordEditor").Text.Length == 0 &&
+                    Find<TextBox>(form, "confirmPasswordEditor").Text.Length == 0, "password fields cleared");
                 Find<SoftButton>(form, "navProducts").PerformClick();
                 Trace("open embedded product"); Find<SoftButton>(form, "launchButton").PerformClick();
             });
+            string changedToken;
+            Check(api.Login(User, "changed-fixture-user-password", Device, out changedToken).Uid > 0 && changedToken.Length > 0, "new profile password works at next login");
             WaitUntil(delegate { return restored.Value(delegate(LoaderForm f) { MainForm fish = Field<MainForm>(f, "fishForm"); return fish != null && fish.Visible; }); }, 12000, "embedded RMFish opens");
             Trace("product window opened");
             MainForm product = restored.Value(delegate(LoaderForm f) { return Field<MainForm>(f, "fishForm"); });
@@ -332,6 +376,15 @@ internal static class RMacroTestRunner
             {
                 Check(Find<Control>(form, "loginPage").Visible, "server change requires new login");
                 Check(Field<Profile>(form, "profile") == null, "old server token was not reused");
+            });
+        }
+        Trace("LAN warning and hidden address");
+        using (UiHost lan = new UiHost(context, Path.Combine(root, "lan-profile"), "http://192.168.0.105:8765"))
+        {
+            lan.Run(delegate(LoaderForm form)
+            {
+                Check(Find<Label>(form, "sessionNote").Text.Contains("не шифрует"), "LAN HTTP warning shown");
+                Check(!VisibleTextContains(form, "192.168.0.105"), "LAN address hidden from user");
             });
         }
         Trace("ignore a malformed saved server address");
