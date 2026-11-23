@@ -61,9 +61,11 @@ public static class RestrictedSetupProcess
             SidAndAttributes denied = new SidAndAttributes { Sid = sidMemory, Attributes = 0 };
             if (!CreateRestrictedToken(original, 1u, 1u, ref denied, 0, IntPtr.Zero, 0, IntPtr.Zero, out limited))
                 throw new Win32Exception(Marshal.GetLastWin32Error());
-            StartupInfo startup = new StartupInfo { Size = Marshal.SizeOf(typeof(StartupInfo)) };
+            // Keep the parent's console association: CREATE_NO_WINDOW can
+            // prevent USER32/console initialization for restricted tokens.
+            StartupInfo startup = new StartupInfo { Size = Marshal.SizeOf(typeof(StartupInfo)), Flags = 1, ShowWindow = 0 };
             if (!CreateProcessAsUser(limited, application, new StringBuilder(command), IntPtr.Zero, IntPtr.Zero,
-                                     false, 0x08000000u, IntPtr.Zero, null, ref startup, out process))
+                                     true, 0u, IntPtr.Zero, null, ref startup, out process))
                 throw new Win32Exception(Marshal.GetLastWin32Error());
             uint wait = WaitForSingleObject(process.Process, 180000u);
             if (wait == 258u) { TerminateProcess(process.Process, 1u); throw new TimeoutException("Restricted setup timed out."); }
