@@ -18,9 +18,38 @@ try {
     # Exercise the actual owner setup, the BAT Python wrapper, and the built
     # PE with a cached, pinned archive. Existing database/static files must
     # remain untouched; no real public server or ACME request is started.
-    $stage = Join-Path $directory 'installed-server'
+    # Exercise spaces, apostrophes and Unicode in the server path. Seed an
+    # existing v1 gateway and a protected DACL with an unwanted explicit entry.
+    $stage = Join-Path $directory ("Owner's server " + [char]0x0422 + [char]0x0435 + [char]0x0441 + [char]0x0442)
     $state = Join-Path $stage 'data\internet-gateway'
     New-Item -ItemType Directory -Path $state -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $state 'settings.json'), '{"version":1,"ipv4":"8.8.8.8"}', [Text.UTF8Encoding]::new($false))
+    $oldData = Join-Path $state 'caddy-data\caddy\acme\old-state.txt'
+    New-Item -ItemType Directory -Path (Split-Path -Parent $oldData) -Force | Out-Null
+    [IO.File]::WriteAllText($oldData, 'existing Caddy sentinel')
+    $oldItem = Get-Item -LiteralPath $oldData
+    $privateRoot = Get-Item -LiteralPath (Join-Path $state 'caddy-data')
+    $everyone = [Security.Principal.SecurityIdentifier]::new('S-1-1-0')
+    $accessSection = [Security.AccessControl.AccessControlSections]::Access
+    foreach ($item in @($privateRoot, $oldItem)) {
+        $oldAcl = $item.GetAccessControl($accessSection)
+        $oldAcl.SetAccessRuleProtection($true, $true)
+        $oldAcl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($everyone, [Security.AccessControl.FileSystemRights]::Read, [Security.AccessControl.AccessControlType]::Allow))
+        $item.SetAccessControl($oldAcl)
+    }
+    # Give the old file a real auditing SACL, then assert that DACL-only
+    # changes preserve it, as well as its owner and group, byte-for-byte in SDDL.
+    # The setup child itself will not have SeSecurityPrivilege.
+    $auditSection = [Security.AccessControl.AccessControlSections]::Audit
+    $ownerGroupSection = [Security.AccessControl.AccessControlSections]::Owner -bor [Security.AccessControl.AccessControlSections]::Group
+    $auditAcl = $oldItem.GetAccessControl($auditSection)
+    $auditAcl.SetAuditRuleProtection($true, $false)
+    $auditFlags = [Security.AccessControl.AuditFlags]::Success -bor [Security.AccessControl.AuditFlags]::Failure
+    $auditAcl.AddAuditRule([Security.AccessControl.FileSystemAuditRule]::new($everyone, [Security.AccessControl.FileSystemRights]::ReadData, $auditFlags))
+    $oldItem.SetAccessControl($auditAcl)
+    $auditBefore = $oldItem.GetAccessControl($auditSection).GetSecurityDescriptorSddlForm($auditSection)
+    $ownerGroupBefore = $oldItem.GetAccessControl($ownerGroupSection).GetSecurityDescriptorSddlForm($ownerGroupSection)
+    if ($auditBefore -notmatch 'S:.*\(') { throw 'SACL test fixture has no auditing entry.' }
     foreach ($name in @('server.py','internet_gateway.py','RUN-PYTHON.bat')) {
         Copy-Item -LiteralPath (Join-Path $root "rmacro\server\$name") -Destination (Join-Path $stage $name)
     }
@@ -31,18 +60,34 @@ try {
     $sourceHash = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash
     $oldUtf8 = $env:PYTHONUTF8; $env:PYTHONUTF8 = '1'
     try {
-        $ErrorActionPreference = 'Continue'
-        $setupOutput = & python (Join-Path $PSScriptRoot 'Smoke-OwnerSetup.py') --stage $stage --loader $source 2>&1
-        $setupExit = $LASTEXITCODE
-        $ErrorActionPreference = 'Stop'
-        foreach ($line in $setupOutput) { Write-Host $line }
-        if ($setupExit -ne 0) { throw "Internet setup failed: $setupExit. Output: $($setupOutput | Out-String)" }
+        $caPath = Join-Path $state 'caddy-data\caddy\pki\authorities\local'
+        $initialHashes = @{}
+        # Both the first migration and repeated setup must work with the user's
+        # missing SeSecurityPrivilege. Also remove backup/restore/owner powers.
+        for ($attempt = 1; $attempt -le 2; $attempt++) {
+            $ErrorActionPreference = 'Continue'
+            $setupOutput = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Run-WithoutSecurityPrivilege.ps1') -TestScript (Join-Path $PSScriptRoot 'Smoke-OwnerSetup.py') -Stage $stage -Loader $source 2>&1
+            $setupExit = $LASTEXITCODE
+            $ErrorActionPreference = 'Stop'
+            foreach ($line in $setupOutput) { Write-Host $line }
+            if ($setupExit -ne 0) { throw "Unprivileged internet setup $attempt failed: $setupExit. Output: $($setupOutput | Out-String)" }
+            foreach ($name in @('root.crt', 'root.key', 'intermediate.crt', 'intermediate.key')) {
+                $hash = (Get-FileHash -LiteralPath (Join-Path $caPath $name) -Algorithm SHA256).Hash
+                if ($attempt -eq 1) { $initialHashes[$name] = $hash }
+                elseif ($hash -ne $initialHashes[$name]) { throw "Repeated unprivileged setup changed the existing CA file: $name" }
+            }
+        }
     }
     finally { $env:PYTHONUTF8 = $oldUtf8; $ErrorActionPreference = 'Stop' }
     if ([IO.File]::ReadAllText($db) -ne 'existing database sentinel') { throw 'Internet setup changed the existing database.' }
     if ((Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash -ne $sourceHash) { throw 'Internet setup changed the original loader.' }
     $configured = @(Get-ChildItem (Join-Path $stage 'configured-client') -Filter 'EternalCore.exe' -File -Recurse)
-    if ($configured.Count -ne 1 -or -not (Test-Path (Join-Path $state 'settings.json'))) { throw 'Internet setup did not create the configured loader and settings.' }
+    if ($configured.Count -ne 2 -or -not (Test-Path (Join-Path $state 'settings.json'))) { throw 'Internet setup did not create two configured loaders and settings.' }
+    if ([IO.File]::ReadAllText($oldData) -ne 'existing Caddy sentinel') { throw 'Internet setup changed existing Caddy data.' }
+    $oldItem = Get-Item -LiteralPath $oldData
+    if ($oldItem.GetAccessControl($auditSection).GetSecurityDescriptorSddlForm($auditSection) -ne $auditBefore) { throw 'Internet setup changed the existing auditing SACL.' }
+    if ($oldItem.GetAccessControl($ownerGroupSection).GetSecurityDescriptorSddlForm($ownerGroupSection) -ne $ownerGroupBefore) { throw 'Internet setup changed the existing owner or group.' }
+    Write-Host 'PASS: repeated setup preserved SACL, owner, group, all CA files and existing data.'
     $openssl = (Get-Command openssl.exe -ErrorAction SilentlyContinue).Source
     if (-not $openssl) { $openssl = Join-Path $env:ProgramFiles 'Git\usr\bin\openssl.exe' }
     if (-not (Test-Path -LiteralPath $openssl -PathType Leaf)) { throw 'OpenSSL is required for the local TLS test.' }
@@ -57,16 +102,25 @@ try {
     foreach ($store in @('Cert:\CurrentUser\Root', 'Cert:\LocalMachine\Root')) {
         if (@(Get-ChildItem $store | Where-Object { $_.Thumbprint -eq $publicRoot.Thumbprint }).Count -ne 0) { throw "Private root was installed into $store." }
     }
-    $allowed = @([Security.Principal.WindowsIdentity]::GetCurrent().User.Value, 'S-1-5-18', 'S-1-5-32-544')
-    foreach ($path in @((Join-Path $state 'caddy-data'), $keyPath)) {
-        $acl = Get-Acl -LiteralPath $path
-        if (-not $acl.AreAccessRulesProtected) { throw "Private data ACL is inherited: $path" }
-        foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
-            if ($rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and $allowed -notcontains $rule.IdentityReference.Value) {
-                throw "Unexpected access to private data: $($rule.IdentityReference.Value)"
+    $allowed = @([Security.Principal.WindowsIdentity]::GetCurrent().User.Value, 'S-1-5-18', 'S-1-5-32-544') | Select-Object -Unique
+    $full = [Security.AccessControl.FileSystemRights]::FullControl
+    $inherit = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit
+    $items = @((Get-Item -LiteralPath (Join-Path $state 'caddy-data'))) + @(Get-ChildItem -LiteralPath (Join-Path $state 'caddy-data') -Force -Recurse)
+    foreach ($item in $items) {
+        $acl = $item.GetAccessControl($accessSection)
+        if (-not $acl.AreAccessRulesProtected) { throw "Private data ACL is inherited: $($item.FullName)" }
+        $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
+        foreach ($rule in $rules) {
+            if ($rule.IsInherited -or $rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or $allowed -notcontains $rule.IdentityReference.Value) {
+                throw "Unexpected rule on private data: $($item.FullName) $($rule.IdentityReference.Value)"
             }
         }
+        foreach ($sid in $allowed) {
+            $match = @($rules | Where-Object { $_.IdentityReference.Value -eq $sid -and ($_.FileSystemRights -band $full) -eq $full -and $_.PropagationFlags -eq [Security.AccessControl.PropagationFlags]::None -and (-not $item.PSIsContainer -or ($_.InheritanceFlags -band $inherit) -eq $inherit) })
+            if ($match.Count -eq 0) { throw "Missing full-control rule for $sid on $($item.FullName)" }
+        }
     }
+    Write-Host 'PASS: every private file and folder has protected, restricted full-control DACLs.'
     Add-Type -AssemblyName System.Web.Extensions
     Add-Type -AssemblyName System.Security
     Add-Type -AssemblyName System.Windows.Forms

@@ -193,6 +193,27 @@ jobs:
           Write-Output "::notice title=Verified Eternal Core packages::Version $version; EXE $exeHash; client ZIP $clientHash; server ZIP $serverHash; admin patch $adminHash; internet patch $internetHash. No database."
           Write-Host $checksums
 
+      - name: Package the standalone server ACL hotfix
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = Join-Path $env:RUNNER_TEMP 'eternal-acl-hotfix-stage'
+          $verify = Join-Path $env:RUNNER_TEMP 'eternal-acl-hotfix-verify'
+          $assets = Join-Path $env:RUNNER_TEMP 'rmacro-release-assets'
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+          Copy-Item 'rmacro\server\internet_gateway.py' (Join-Path $stage 'internet_gateway.py')
+          $instructions = (Get-Content 'docs\SERVER-ACL-HOTFIX.txt' -Raw -Encoding UTF8).Replace("`r`n", "`n").Replace("`n", "`r`n")
+          [IO.File]::WriteAllText((Join-Path $stage 'INSTRUCTIONS.txt'), $instructions, [Text.UTF8Encoding]::new($true))
+          $name = 'EternalCore-Internet-ACL-Hotfix-v1.zip'
+          $archive = Join-Path $assets $name
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $archive -CompressionLevel Optimal
+          Expand-Archive -LiteralPath $archive -DestinationPath $verify
+          if (@(Get-ChildItem $verify -File -Recurse).Count -ne 2 -or -not (Test-Path (Join-Path $verify 'INSTRUCTIONS.txt'))) { throw 'Unexpected hotfix contents.' }
+          if ((Get-FileHash 'rmacro\server\internet_gateway.py' -Algorithm SHA256).Hash -ne (Get-FileHash (Join-Path $verify 'internet_gateway.py') -Algorithm SHA256).Hash) { throw 'Hotfix script differs from the tested source.' }
+          $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText((Join-Path $assets 'SHA256SUMS-internet-acl-hotfix.txt'), "$hash  $name`r`n", [Text.Encoding]::ASCII)
+          Write-Output "::notice title=Verified server ACL hotfix::ZIP SHA-256 $hash; two files; matches the Windows-tested script. No client or private data."
+
       - name: Keep tested client, server, and admin patch packages
         uses: actions/upload-artifact@v4
         with:
@@ -224,3 +245,31 @@ jobs:
           & gh release upload $tag (Join-Path $assets "EternalCore-v$version-Windows.zip") (Join-Path $assets "EternalCore-Server-v$version-Windows.zip") (Join-Path $assets "EternalCore-Admin-Update-v$version.zip") (Join-Path $assets "EternalCore-Internet-Update-v$version.zip") (Join-Path $assets 'EternalCore.exe') (Join-Path $assets 'SHA256SUMS-eternal-core.txt') --repo $env:GITHUB_REPOSITORY --clobber
           if ($LASTEXITCODE -ne 0) { throw 'Could not upload Eternal Core assets.' }
           Write-Output "::notice title=Release upload::Uploaded $tag from $env:GITHUB_REF_NAME."
+
+      - name: Upload the server ACL hotfix only to its matching draft
+        if: github.event_name == 'push'
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = 'eternal-core-v1.3.0-server-acl-fix'
+          $json = & gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not list releases.' }
+          $release = $json | ConvertFrom-Json | Where-Object { $_.tag_name -eq $tag } | Select-Object -First 1
+          if (-not $release -or -not $release.draft -or $release.prerelease -or $release.target_commitish -ne $env:GITHUB_REF_NAME) {
+            Write-Output "::notice title=Server hotfix upload::No matching branch draft; skipping $tag."
+            exit 0
+          }
+          $remote = & git ls-remote origin "refs/heads/$env:GITHUB_REF_NAME"
+          if ($LASTEXITCODE -ne 0 -or -not $remote -or (($remote -split '\s+')[0] -ne $env:GITHUB_SHA)) { throw 'Branch moved; refusing stale hotfix.' }
+          $assets = Join-Path $env:RUNNER_TEMP 'rmacro-release-assets'
+          $name = 'EternalCore-Internet-ACL-Hotfix-v1.zip'
+          & gh release upload $tag (Join-Path $assets $name) (Join-Path $assets 'SHA256SUMS-internet-acl-hotfix.txt') --repo $env:GITHUB_REPOSITORY --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Could not upload the server hotfix.' }
+          $download = Join-Path $env:RUNNER_TEMP 'eternal-acl-hotfix-download'
+          New-Item -ItemType Directory -Path $download -Force | Out-Null
+          & gh release download $tag --repo $env:GITHUB_REPOSITORY --pattern $name --dir $download
+          if ($LASTEXITCODE -ne 0) { throw 'Could not re-download the uploaded draft hotfix.' }
+          if ((Get-FileHash (Join-Path $assets $name) -Algorithm SHA256).Hash -ne (Get-FileHash (Join-Path $download $name) -Algorithm SHA256).Hash) { throw 'Uploaded hotfix bytes did not match the tested package.' }
+          Write-Output "::notice title=Server hotfix upload::Uploaded and re-downloaded $tag from $env:GITHUB_REF_NAME."

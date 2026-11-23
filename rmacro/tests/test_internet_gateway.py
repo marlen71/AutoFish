@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import struct
 import tempfile
@@ -92,6 +93,38 @@ class InternetGatewayTests(unittest.TestCase):
         test = gateway.caddyfile("127.0.0.1", 9001, 9002, ("test-cert", "test-key"))
         self.assertIn('tls "test-cert" "test-key"', test)
         self.assertNotIn("profile shortlived", test)
+
+    def test_windows_acl_edits_only_dacl_and_keeps_errors_readable(self):
+        with mock.patch.object(gateway.os, "name", "nt"), \
+                mock.patch.object(gateway.subprocess, "run") as command:
+            gateway.restrict_authority()
+        args = command.call_args.args[0]
+        self.assertEqual(args[0], "powershell.exe")
+        script = base64.b64decode(args[-1]).decode("utf-16le")
+        self.assertIn("AccessControlSections]::Access", script)
+        self.assertIn("$item.GetAccessControl($access)", script)
+        self.assertIn("$item.SetAccessControl($acl)", script)
+        self.assertNotIn("Set-Acl -LiteralPath", script)
+        self.assertIn("$actual.AreAccessRulesProtected", script)
+        self.assertIn("Unexpected access rule", script)
+        error = (b'#< CLIXML\n<Objs xmlns="http://schemas.microsoft.com/powershell/2004/04">'
+                 b'<Obj S="progress"/><S S="Error">Missing SeSecurityPrivilege._x000D__x000A_</S></Objs>')
+        self.assertEqual(gateway.powershell_error_detail(error), "Missing SeSecurityPrivilege.")
+        self.assertEqual(gateway.powershell_error_detail(b"#< CLIXML\nnot valid"), "")
+        self.assertLessEqual(len(gateway.powershell_error_detail(b"x" * 1000)), 600)
+
+    @unittest.skipIf(os.name == "nt", "Creating a Windows symlink may require developer mode")
+    def test_windows_acl_receives_unresolved_private_directory(self):
+        self.state.mkdir(parents=True)
+        target = self.root / "another-directory"
+        target.mkdir()
+        link = self.state / "caddy-data"
+        link.symlink_to(target, target_is_directory=True)
+        with mock.patch.object(gateway.os, "name", "nt"), \
+                mock.patch.object(gateway.subprocess, "run") as command:
+            gateway.restrict_authority()
+        self.assertEqual(command.call_args.kwargs["env"]["ETERNAL_CA_DIR"], str(link.absolute()))
+        self.assertNotEqual(command.call_args.kwargs["env"]["ETERNAL_CA_DIR"], str(link.resolve()))
 
     def test_only_verified_zip_entry_is_extracted_and_no_existing_file_is_lost(self):
         archive, executable = self.root / "source.zip", self.root / "bin" / "caddy.exe"
@@ -266,6 +299,28 @@ class InternetGatewayTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 gateway.provision_authority("unused", "8.8.8.8")
             run.assert_not_called()
+
+    def test_acl_failure_after_creation_records_root_for_safe_retry(self):
+        der = b"public root fixture"
+        def create_root(*args, **kwargs):
+            directory = gateway.authority_directory()
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / "root.crt").write_text("fixture PEM", encoding="ascii")
+            return mock.Mock(returncode=0)
+        with mock.patch.object(gateway, "restrict_authority", side_effect=[None, ValueError("ACL failed")]), \
+                mock.patch.object(gateway.subprocess, "run", side_effect=create_root), \
+                mock.patch.object(gateway.ssl, "PEM_cert_to_DER_cert", return_value=der):
+            with self.assertRaisesRegex(ValueError, "ACL failed"):
+                gateway.provision_authority("caddy", "8.8.8.8")
+        record = json.loads(gateway.authority_record_path().read_text(encoding="utf-8"))
+        self.assertEqual(record["sha256"], hashlib.sha256(der).hexdigest())
+        with mock.patch.object(gateway, "restrict_authority") as restrict, \
+                mock.patch.object(gateway, "load_authority", return_value=der) as load, \
+                mock.patch.object(gateway.subprocess, "run") as run:
+            self.assertEqual(gateway.provision_authority("caddy", "8.8.8.8"), der)
+        run.assert_not_called()
+        restrict.assert_called_once()
+        load.assert_called_once_with(None)
 
     def test_loader_rejects_old_and_strips_old_pinned_footer(self):
         old = self.root / "old.exe"

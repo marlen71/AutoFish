@@ -24,6 +24,7 @@ import urllib.parse
 import urllib.request
 import uuid
 import zipfile
+import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parent
 STATE = ROOT / "data" / "internet-gateway"
@@ -193,6 +194,21 @@ def authority_directory():
     return STATE / "caddy-data" / "caddy" / "pki" / "authorities" / "local"
 
 
+def powershell_error_detail(data):
+    """Show a bounded error, not PowerShell's verbose CLIXML progress stream."""
+    text = (data or b"").decode("utf-8", errors="replace") if isinstance(data, bytes) else str(data or "")
+    if text.lstrip().startswith("#< CLIXML"):
+        try:
+            root = ET.fromstring(text[text.index("<Objs"):])
+            parts = [item.text or "" for item in root.iter() if item.tag.rsplit("}", 1)[-1] == "S" and item.get("S") == "Error"]
+            text = " ".join(parts)
+            text = re.sub(r"_x([0-9a-fA-F]{4})_", lambda m: chr(int(m.group(1), 16)), text)
+        except (ValueError, ET.ParseError):
+            text = ""
+    text = re.sub(r"[\x00-\x1f\x7f]+", " ", text).strip()
+    return text[:600]
+
+
 def restrict_authority():
     """Protect all Caddy keys before creation; Windows chmod does not set ACLs."""
     directory = STATE / "caddy-data"
@@ -211,41 +227,74 @@ def restrict_authority():
     # Caddy's CA and leaf keys. Existing files get explicit ACLs too.
     # Never interpolate an owner-controlled path into a PowerShell command.
     script = r'''$ErrorActionPreference = 'Stop'
-$folder = $env:ETERNAL_CA_DIR
-$user = [Security.Principal.WindowsIdentity]::GetCurrent().User
-$sids = @($user, [Security.Principal.SecurityIdentifier]::new('S-1-5-18'), [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))
-$right = [Security.AccessControl.FileSystemRights]::FullControl
-$allow = [Security.AccessControl.AccessControlType]::Allow
-$prop = [Security.AccessControl.PropagationFlags]::None
-$inherit = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit
-$items = @((Get-Item -LiteralPath $folder -Force)) + @(Get-ChildItem -LiteralPath $folder -Force -Recurse)
-foreach ($item in $items) {
-    # OneDrive placeholders can be reparse points too; reject filesystem links,
-    # not cloud placeholder attributes used by an owner's Desktop directory.
-    if (@('SymbolicLink', 'Junction', 'HardLink') -contains $item.LinkType) { throw 'Links are not allowed in the Caddy data directory.' }
-    if ($item.PSIsContainer) {
-        $acl = [Security.AccessControl.DirectorySecurity]::new()
+$ProgressPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+try {
+    $folder = $env:ETERNAL_CA_DIR
+    $user = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    $sids = @($user, [Security.Principal.SecurityIdentifier]::new('S-1-5-18'), [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))
+    $allowed = @($sids | ForEach-Object { $_.Value } | Select-Object -Unique)
+    $right = [Security.AccessControl.FileSystemRights]::FullControl
+    $allow = [Security.AccessControl.AccessControlType]::Allow
+    $prop = [Security.AccessControl.PropagationFlags]::None
+    $inherit = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit
+    $access = [Security.AccessControl.AccessControlSections]::Access
+    $items = @((Get-Item -LiteralPath $folder -Force)) + @(Get-ChildItem -LiteralPath $folder -Force -Recurse)
+    foreach ($item in $items) {
+        # Cloud placeholders may be reparse points, but links are not allowed.
+        if (@('SymbolicLink', 'Junction', 'HardLink') -contains $item.LinkType) { throw 'Links are not allowed in the Caddy data directory.' }
+        # Read and write only the DACL; Set-Acl attempts to modify auditing
+        # information too and may require SeSecurityPrivilege on ordinary PCs.
+        $acl = $item.GetAccessControl($access)
         $acl.SetAccessRuleProtection($true, $false)
-        foreach ($sid in $sids) { $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, $right, $inherit, $prop, $allow)) }
-    } else {
-        $acl = [Security.AccessControl.FileSecurity]::new()
-        $acl.SetAccessRuleProtection($true, $false)
-        foreach ($sid in $sids) { $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, $right, $allow)) }
+        foreach ($rule in @($acl.GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier]))) {
+            $acl.RemoveAccessRuleSpecific($rule)
+        }
+        foreach ($sid in $sids) {
+            if ($item.PSIsContainer) {
+                $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, $right, $inherit, $prop, $allow))
+            } else {
+                $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, $right, $allow))
+            }
+        }
+        $item.SetAccessControl($acl)
+        # Never proceed with weak or unprotected rules, including on a second
+        # setup when a DACL has already been protected by an earlier version.
+        $actual = $item.GetAccessControl($access)
+        if (-not $actual.AreAccessRulesProtected) { throw 'The private data DACL is still inherited.' }
+        $rules = @($actual.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
+        foreach ($rule in $rules) {
+            if ($rule.IsInherited -or $rule.AccessControlType -ne $allow -or $allowed -notcontains $rule.IdentityReference.Value) {
+                throw 'Unexpected access rule on private data.'
+            }
+        }
+        foreach ($sid in $allowed) {
+            $matches = @($rules | Where-Object {
+                $_.IdentityReference.Value -eq $sid -and ($_.FileSystemRights -band $right) -eq $right -and
+                $_.PropagationFlags -eq $prop -and
+                (-not $item.PSIsContainer -or ($_.InheritanceFlags -band $inherit) -eq $inherit)
+            })
+            if ($matches.Count -eq 0) { throw 'The private data DACL is missing a required full-control rule.' }
+        }
     }
-    Set-Acl -LiteralPath $item.FullName -AclObject $acl
+} catch {
+    # Write a single readable error, not the noisy PowerShell CLIXML stream.
+    [Console]::Error.WriteLine(($_.Exception.Message -replace '[\r\n]+', ' '))
+    exit 1
 }
 '''
     environment = os.environ.copy()
-    environment["ETERNAL_CA_DIR"] = str(directory.resolve())
+    # Do not resolve the final component: the script must see and reject a
+    # caddy-data directory that is itself a symlink or junction.
+    environment["ETERNAL_CA_DIR"] = str(directory.absolute())
     encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
     try:
         subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
                        env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, timeout=30)
     except (OSError, subprocess.SubprocessError) as exc:
-        detail = getattr(exc, "stderr", b"") or b""
-        if isinstance(detail, bytes):
-            detail = detail.decode("utf-8", errors="replace")
-        raise ValueError("Не удалось ограничить доступ к закрытым ключам. Проверьте права на папку сервера. " + detail[:1000]) from exc
+        detail = powershell_error_detail(getattr(exc, "stderr", b""))
+        suffix = (" Подробности: " + detail) if detail else ""
+        raise ValueError("Не удалось ограничить доступ к закрытым ключам. Проверьте права на папку сервера." + suffix) from exc
 
 
 def authority_record_path():
@@ -338,7 +387,6 @@ def provision_authority(executable, ip):
                                 timeout=60)
         if result.returncode:
             raise ValueError("Не удалось создать внутренний сертификат через проверенный Caddy.")
-        restrict_authority()
         root = directory / "root.crt"
         if not root.is_file() or root.stat().st_size > 16384:
             raise ValueError("Caddy не создал внутренний сертификат.")
@@ -346,7 +394,11 @@ def provision_authority(executable, ip):
         if not 1 <= len(der) <= 4096:
             raise ValueError("Внутренний сертификат слишком велик.")
         digest = hashlib.sha256(der).hexdigest()
+        # The parent data directory was protected before Caddy ran. Record the
+        # root before the second ACL pass so a failed pass can be retried with
+        # the SAME CA instead of leaving unidentifiable partial state.
         atomic_text(record, json.dumps({"version": 1, "sha256": digest}, indent=2) + "\n")
+        restrict_authority()
         return load_authority(digest)
     finally:
         try:
