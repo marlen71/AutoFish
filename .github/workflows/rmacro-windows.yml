@@ -70,8 +70,8 @@ jobs:
         shell: powershell
         run: .\rmacro\tests\Smoke-UpdateNetwork.ps1
 
-      - name: Test the HTTPS gateway and IP certificate validation on Windows
-        timeout-minutes: 4
+      - name: Test the private HTTPS gateway and pinned CA on Windows
+        timeout-minutes: 10
         shell: powershell
         env:
           GH_TOKEN: ${{ github.token }}

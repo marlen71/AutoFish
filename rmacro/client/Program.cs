@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Reflection;
 using System.Threading;
@@ -8,9 +8,9 @@ using RMFish;
 [assembly: AssemblyTitle("Eternal Core")]
 [assembly: AssemblyDescription("Eternal Core — лоадер игр, макросов и подписок")]
 [assembly: AssemblyProduct("Eternal Core")]
-[assembly: AssemblyVersion("1.2.0.0")]
-[assembly: AssemblyFileVersion("1.2.0.0")]
-[assembly: AssemblyInformationalVersion("1.2.0")]
+[assembly: AssemblyVersion("1.3.0.0")]
+[assembly: AssemblyFileVersion("1.3.0.0")]
+[assembly: AssemblyInformationalVersion("1.3.0")]
 
 namespace RMacro
 {
@@ -32,8 +32,8 @@ namespace RMacro
                 string directory = Path.Combine(local, "RMacro"); Directory.CreateDirectory(directory);
                 string device = DeviceId.Get();
                 Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
-                string serverAddress = ServerSettings.ReadFromExecutable(Application.ExecutablePath);
-                using (LoaderForm form = new LoaderForm(directory, device, serverAddress, !LoaderUpdater.SkipCheck(args)))
+                ServerConnectionSettings connection = ServerSettings.ReadConnectionFromExecutable(Application.ExecutablePath);
+                using (LoaderForm form = new LoaderForm(directory, device, connection, !LoaderUpdater.SkipCheck(args)))
                 {
                     form.Shown += delegate { LoaderUpdater.MarkHealthy(args, Application.ExecutablePath); };
                     Application.Run(form);

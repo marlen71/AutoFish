@@ -46,25 +46,48 @@ try {
     $openssl = (Get-Command openssl.exe -ErrorAction SilentlyContinue).Source
     if (-not $openssl) { $openssl = Join-Path $env:ProgramFiles 'Git\usr\bin\openssl.exe' }
     if (-not (Test-Path -LiteralPath $openssl -PathType Leaf)) { throw 'OpenSSL is required for the local TLS test.' }
+    # The owner setup creates private keys under a restricted ACL and must not
+    # install its root into either Windows root certificate store.
+    $caDirectory = Join-Path $state 'caddy-data\caddy\pki\authorities\local'
+    $rootPath = Join-Path $caDirectory 'root.crt'
+    $keyPath = Join-Path $caDirectory 'root.key'
+    if (-not (Test-Path $rootPath) -or -not (Test-Path $keyPath)) { throw 'Owner setup did not create its private CA.' }
+    $pem = [IO.File]::ReadAllText($rootPath).Replace('-----BEGIN CERTIFICATE-----', '').Replace('-----END CERTIFICATE-----', '')
+    $publicRoot = [Security.Cryptography.X509Certificates.X509Certificate2]::new([Convert]::FromBase64String($pem))
+    foreach ($store in @('Cert:\CurrentUser\Root', 'Cert:\LocalMachine\Root')) {
+        if (@(Get-ChildItem $store | Where-Object { $_.Thumbprint -eq $publicRoot.Thumbprint }).Count -ne 0) { throw "Private root was installed into $store." }
+    }
+    $allowed = @([Security.Principal.WindowsIdentity]::GetCurrent().User.Value, 'S-1-5-18', 'S-1-5-32-544')
+    foreach ($path in @((Join-Path $state 'caddy-data'), $keyPath)) {
+        $acl = Get-Acl -LiteralPath $path
+        if (-not $acl.AreAccessRulesProtected) { throw "Private data ACL is inherited: $path" }
+        foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+            if ($rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and $allowed -notcontains $rule.IdentityReference.Value) {
+                throw "Unexpected access to private data: $($rule.IdentityReference.Value)"
+            }
+        }
+    }
     Add-Type -AssemblyName System.Web.Extensions
     Add-Type -AssemblyName System.Security
+    Add-Type -AssemblyName System.Windows.Forms
     $csc = Join-Path ([System.Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()) 'csc.exe'
     $runner = Join-Path $directory 'InternetClientRunner.exe'
     $compile = @('/nologo', '/noconfig', '/target:exe', '/platform:anycpu', '/utf8output', '/warnaserror+',
         '/main:InternetClientRunner', "/out:$runner", "/reference:$([System.Diagnostics.Process].Assembly.Location)",
         "/reference:$([System.Linq.Enumerable].Assembly.Location)", "/reference:$([System.Web.Script.Serialization.JavaScriptSerializer].Assembly.Location)",
         "/reference:$([System.Security.Cryptography.ProtectedData].Assembly.Location)",
-        (Join-Path $root 'rmacro\client\ClientCore.cs'), (Join-Path $root 'rmacro\tests\InternetClientRunner.cs'))
+        "/reference:$([System.Windows.Forms.Form].Assembly.Location)",
+        (Join-Path $root 'rmacro\client\ClientCore.cs'), (Join-Path $root 'rmacro\client\UpdatePolicy.cs'),
+        (Join-Path $root 'rmacro\client\Updater.cs'), (Join-Path $root 'rmacro\tests\InternetClientRunner.cs'))
     $ErrorActionPreference = 'Continue'
     $compilerOutput = & $csc @compile 2>&1
     $compilerExit = $LASTEXITCODE
     $ErrorActionPreference = 'Stop'
     foreach ($line in $compilerOutput) { Write-Host $line }
     if ($compilerExit -ne 0) { throw "Windows HTTPS client test compilation failed: $($compilerOutput | Out-String)" }
-    # Only on a disposable GitHub-hosted VM: temporarily add the self-signed
-    # fixture to the machine root store, test, and remove the exact certificate.
-    # Exercise repeated independent fixtures; a single successful connection
-    # would not expose intermittent proxy/backend or port-allocation failures.
+    # Exercise independent private-CA fixtures without touching Windows trust.
+    # Each tests a valid chain, wrong CA, wrong IP, expired leaf, wrong EKU,
+    # updater pin preservation, admin isolation, and repeated connections.
     for ($attempt = 1; $attempt -le 5; $attempt++) {
         Write-Host "HTTPS gateway fixture $attempt of 5"
         $ErrorActionPreference = 'Continue'
@@ -74,7 +97,7 @@ try {
         foreach ($line in $output) { Write-Host $line }
         if ($testExit -ne 0) { throw "HTTPS gateway fixture $attempt failed: $testExit. Output: $($output | Out-String)" }
     }
-    Write-Output '::notice title=Internet gateway::PASS: 5 independent fixtures, trusted/untrusted IP TLS in the Windows client, local login, admin isolation and spoof-resistant rate limiting; real ACME and external router not tested.'
+    Write-Output '::notice title=Internet gateway::PASS: 5 private CA fixtures; Windows login, wrong root/IP/expiry/EKU rejection, update preservation, no Windows root installation, local admin isolation and rate limiting. External router not tested.'
 }
 catch {
     $detail = ($_ | Format-List * -Force | Out-String).Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -134,8 +134,15 @@ namespace RMacro
             string target = Path.GetFullPath(executable);
             if (!String.Equals(Path.GetFileName(target), "EternalCore.exe", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("Для обновления имя приложения должно быть EternalCore.exe.");
-            string server = ServerSettings.ReadFromExecutable(target);
+            ServerConnectionSettings connection = ServerSettings.ReadConnectionFromExecutable(target);
             byte[] verified = Download(release);
+            return StageVerified(release, target, connection, verified);
+        }
+
+        internal static StagedUpdate StageVerified(UpdateRelease release, string target, ServerConnectionSettings connection, byte[] verified)
+        {
+            if (connection.TrustedRoot != null && !ServerSettings.SupportsPinnedConfiguration(verified))
+                throw new InvalidDataException("Обновление не поддерживает защищённые настройки подключения.");
             string nonce = Guid.NewGuid().ToString("N");
             string directory = Path.Combine(Path.GetDirectoryName(target), ".eternal-core-update-" + nonce);
             StagedUpdate staged = new StagedUpdate { Directory = directory, Target = target, Nonce = nonce };
@@ -148,8 +155,8 @@ namespace RMacro
                 FileVersionInfo version = FileVersionInfo.GetVersionInfo(payload);
                 if (!String.Equals(version.ProductVersion, release.Version.ToString(3), StringComparison.Ordinal))
                     throw new InvalidDataException("Версия EXE не совпадает с выбранным релизом.");
-                ServerSettings.AppendToExecutable(payload, server);
-                if (!String.Equals(ServerSettings.ReadFromExecutable(payload), server, StringComparison.Ordinal))
+                ServerSettings.AppendConnectionToExecutable(payload, connection);
+                if (!ServerSettings.ReadConnectionFromExecutable(payload).SameAs(connection))
                     throw new InvalidDataException("Не удалось сохранить настройки подключения.");
                 staged.Hash = HashFile(payload);
                 File.Copy(payload, staged.Helper, false);
@@ -241,7 +248,7 @@ namespace RMacro
                 catch (ArgumentException) { /* The exact parent has already exited. */ }
                 parentGone = true;
                 if (HashFile(payload) != args[4] ||
-                    !String.Equals(ServerSettings.ReadFromExecutable(payload), ServerSettings.ReadFromExecutable(target), StringComparison.Ordinal))
+                    !ServerSettings.ReadConnectionFromExecutable(payload).SameAs(ServerSettings.ReadConnectionFromExecutable(target)))
                     throw new InvalidDataException("Файл или настройки обновления изменились.");
                 File.Replace(payload, target, backup);
                 replaced = true;

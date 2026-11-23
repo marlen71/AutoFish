@@ -1,8 +1,11 @@
 """HTTP and SQLite integration tests; no external packages or real credentials."""
+import contextlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
+import socket
 import sqlite3
 import struct
 import subprocess
@@ -19,6 +22,49 @@ SERVER_PATH = Path(__file__).resolve().parents[1] / "server" / "server.py"
 spec = importlib.util.spec_from_file_location("rmacro_server", SERVER_PATH)
 srv = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(srv)
+
+
+class HandlerLoggingTests(unittest.TestCase):
+    def test_idle_socket_timeout_before_request_does_not_raise(self):
+        errors = []
+        captured = io.StringIO()
+
+        class QuickTimeoutHandler(srv.Handler):
+            def setup(self):
+                super().setup()
+                self.connection.settimeout(0.1)
+
+        client, connection = socket.socketpair()
+        try:
+            def run_handler():
+                try:
+                    QuickTimeoutHandler(connection, ("127.0.0.1", 12345), object())
+                except Exception as exc:
+                    errors.append(exc)
+            worker = threading.Thread(target=run_handler, daemon=True)
+            with contextlib.redirect_stderr(captured):
+                worker.start()
+                worker.join(3)
+                self.assertFalse(worker.is_alive(), "Idle handler did not exit after the socket timeout")
+            self.assertEqual(errors, [])
+            self.assertIn("connection closed before a complete request", captured.getvalue())
+        finally:
+            client.close()
+            connection.close()
+
+    def test_logging_redacts_query_and_handles_malformed_target(self):
+        handler = object.__new__(srv.Handler)
+        handler.client_address = ("127.0.0.1", 12345)
+        handler.command = "GET"
+        captured = io.StringIO()
+        with contextlib.redirect_stderr(captured):
+            handler.path = "/api/health?token=example-secret"
+            handler.log_message("unused")
+            handler.path = "http://[malformed"
+            handler.log_message("unused")
+        self.assertIn("GET /api/health", captured.getvalue())
+        self.assertIn("[invalid request path]", captured.getvalue())
+        self.assertNotIn("example-secret", captured.getvalue())
 
 
 class ServerTests(unittest.TestCase):

@@ -5,6 +5,7 @@ The chosen LAN HTTP mode is unencrypted. Never expose it to the internet;
 for public access configure trusted HTTPS as described in README-SERVER.md.
 """
 import argparse
+import base64
 import collections
 import datetime as dt
 import getpass
@@ -775,8 +776,20 @@ class Handler(BaseHTTPRequestHandler):
         self.connection.settimeout(15)
 
     def log_message(self, fmt, *args):
+        # A socket can time out before BaseHTTPRequestHandler has parsed any
+        # request (and thus before command/path attributes exist). Avoid both a
+        # secondary exception and logging the raw, potentially sensitive line.
+        command = getattr(self, "command", None)
+        path = getattr(self, "path", None)
+        if not isinstance(command, str) or not isinstance(path, str):
+            sys.stderr.write("%s [connection closed before a complete request]\n" % self.address_string())
+            return
+        try:
+            path = urlsplit(path).path
+        except ValueError:
+            path = "[invalid request path]"
         # Never log query strings, authorization headers, passwords, tokens or HWID.
-        sys.stderr.write("%s %s %s\n" % (self.address_string(), self.command, urlsplit(self.path).path))
+        sys.stderr.write("%s %s %s\n" % (self.address_string(), command, path))
 
     def send_bytes(self, status, content, mime):
         self.send_response(status)
@@ -1014,7 +1027,10 @@ def lan_http_address(host):
 # The address is embedded by the owner for convenience, not as a secret: it
 # is necessarily observable in the user's client and network connection.
 LOADER_CONFIG_MAGIC = b"RMACRO_URL_V1"
+LOADER_PINNED_CONFIG_MAGIC = b"RMACRO_TLS_V2"
 LOADER_CONFIG_MAX = 1024
+LOADER_PINNED_CONFIG_MAX = 8192
+LOADER_CA_MAX = 4096
 
 
 def validate_loader_url(value):
@@ -1035,7 +1051,7 @@ def validate_loader_url(value):
     return value.rstrip("/")
 
 
-def configure_loader(source, destination, address):
+def configure_loader(source, destination, address, trusted_ca=None):
     address = validate_loader_url(address)
     source, destination = Path(source).expanduser().resolve(), Path(destination).expanduser().resolve()
     if source == destination:
@@ -1044,22 +1060,44 @@ def configure_loader(source, destination, address):
     marker_utf16 = LOADER_CONFIG_MAGIC.decode("ascii").encode("utf-16le")
     if not content.startswith(b"MZ") or marker_utf16 not in content:
         raise ValueError("Выберите EternalCore.exe с поддержкой настройки адреса.")
-    footer_size = 4 + len(LOADER_CONFIG_MAGIC)
-    if content.endswith(LOADER_CONFIG_MAGIC):
+    if trusted_ca is not None:
+        if (not isinstance(trusted_ca, bytes) or not 1 <= len(trusted_ca) <= LOADER_CA_MAX or
+                urlsplit(address).scheme.lower() != "https"):
+            raise ValueError("Некорректная закрытая конфигурация HTTPS.")
+        pinned_marker_utf16 = LOADER_PINNED_CONFIG_MAGIC.decode("ascii").encode("utf-16le")
+        if pinned_marker_utf16 not in content:
+            raise ValueError("Выберите новый EternalCore.exe с поддержкой защищённого интернет-подключения.")
+        payload = address.encode("ascii") + b"\n" + base64.b64encode(trusted_ca)
+        marker = LOADER_PINNED_CONFIG_MAGIC
+        maximum = LOADER_PINNED_CONFIG_MAX
+    else:
+        payload, marker, maximum = address.encode("ascii"), LOADER_CONFIG_MAGIC, LOADER_CONFIG_MAX
+    if not 1 <= len(payload) <= maximum:
+        raise ValueError("Настройки подключения слишком велики.")
+    # Remove old V1/V2 footers, never silently retaining a stale trust anchor.
+    for _ in range(16):
+        previous = next(((m, limit) for m, limit in ((LOADER_CONFIG_MAGIC, LOADER_CONFIG_MAX),
+                                                     (LOADER_PINNED_CONFIG_MAGIC, LOADER_PINNED_CONFIG_MAX))
+                         if content.endswith(m)), None)
+        if previous is None:
+            break
+        old_marker, old_limit = previous
+        footer_size = 4 + len(old_marker)
         if len(content) < footer_size:
             raise ValueError("Повреждённая настройка лоадера.")
-        old_size = struct.unpack("<I", content[-footer_size:-len(LOADER_CONFIG_MAGIC)])[0]
-        if old_size < 1 or old_size > LOADER_CONFIG_MAX or len(content) < footer_size + old_size:
+        old_size = struct.unpack("<I", content[-footer_size:-len(old_marker)])[0]
+        if old_size < 1 or old_size > old_limit or len(content) < footer_size + old_size:
             raise ValueError("Повреждённая настройка лоадера.")
         content = content[:-footer_size - old_size]
-    payload = address.encode("ascii")
+    else:
+        raise ValueError("Слишком много старых настроек лоадера.")
     destination.parent.mkdir(parents=True, exist_ok=True)
     # Never overwrite an existing customer build or the original EXE.
     with destination.open("xb") as output:
         output.write(content)
         output.write(payload)
         output.write(struct.pack("<I", len(payload)))
-        output.write(LOADER_CONFIG_MAGIC)
+        output.write(marker)
     return destination
 
 

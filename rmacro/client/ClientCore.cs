@@ -1,9 +1,11 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
+using System.Net.Security;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -94,9 +96,12 @@ namespace RMacro
     {
         private const int MaxResponseBytes = 1024 * 1024;
         private readonly Uri baseUri;
+        private readonly byte[] trustedRoot;
         public string BaseUrl { get { return baseUri.GetLeftPart(UriPartial.Authority); } }
 
-        public ApiClient(string address)
+        public ApiClient(string address) : this(address, null) { }
+
+        public ApiClient(string address, byte[] root)
         {
             Uri parsed;
             if (!Uri.TryCreate((address ?? "").Trim(), UriKind.Absolute, out parsed) ||
@@ -107,9 +112,75 @@ namespace RMacro
             if (parsed.Scheme == Uri.UriSchemeHttp && !IsLanAddress(parsed))
                 throw new ApiException(0, "HTTPS_REQUIRED", "HTTP разрешён только для локальной сети; для публичного сервера необходим HTTPS.");
             baseUri = parsed;
-            // Do not override certificate validation or allow automatic redirects
-            // to a different host. Windows verifies the HTTPS certificate.
+            if (root != null)
+            {
+                if (parsed.Scheme != Uri.UriSchemeHttps) throw new InvalidOperationException("Закреплённый сертификат требует HTTPS.");
+                ValidateRoot(root);
+                trustedRoot = (byte[])root.Clone();
+            }
+            // Public HTTPS without a private root retains normal Windows TLS.
+            // Never change the process-wide certificate validation callback.
             ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072; // TLS 1.2 on .NET Framework 4.5
+        }
+
+        internal static bool EqualBytes(byte[] a, byte[] b)
+        {
+            if (a == null || b == null || a.Length != b.Length) return false;
+            int different = 0;
+            for (int i = 0; i < a.Length; i++) different |= a[i] ^ b[i];
+            return different == 0;
+        }
+
+        internal static void ValidateRoot(byte[] root)
+        {
+            try
+            {
+                if (root == null || root.Length < 32 || root.Length > 4096) throw new InvalidDataException();
+                using (X509Certificate2 ca = new X509Certificate2(root))
+                {
+                    if (ca.HasPrivateKey || !EqualBytes(ca.RawData, root) || !EqualBytes(ca.SubjectName.RawData, ca.IssuerName.RawData))
+                        throw new InvalidDataException();
+                    bool isCa = false, canSign = false;
+                    foreach (X509Extension extension in ca.Extensions)
+                    {
+                        if (extension.Oid.Value == "2.5.29.19")
+                            isCa = new X509BasicConstraintsExtension(extension, extension.Critical).CertificateAuthority;
+                        if (extension.Oid.Value == "2.5.29.15")
+                            canSign = (new X509KeyUsageExtension(extension, extension.Critical).KeyUsages & X509KeyUsageFlags.KeyCertSign) != 0;
+                    }
+                    if (!isCa || !canSign) throw new InvalidDataException();
+                }
+            }
+            catch (Exception) { throw new InvalidOperationException("Настройки защищённого подключения повреждены. Обратитесь к администратору."); }
+        }
+
+        private bool ValidatePinnedCertificate(object sender, X509Certificate certificate, X509Chain supplied, SslPolicyErrors errors)
+        {
+            // The system's hostname/IP check must still pass. Allow *only* the
+            // unknown-CA error, then independently rebuild and inspect the
+            // whole chain against the exact embedded public root certificate.
+            if (trustedRoot == null || certificate == null ||
+                (errors & ~SslPolicyErrors.RemoteCertificateChainErrors) != SslPolicyErrors.None) return false;
+            try
+            {
+                using (X509Certificate2 root = new X509Certificate2(trustedRoot))
+                using (X509Certificate2 leaf = new X509Certificate2(certificate))
+                using (X509Chain chain = new X509Chain())
+                {
+                    chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck; // local CA has no public CRL
+                    chain.ChainPolicy.VerificationFlags = X509VerificationFlags.AllowUnknownCertificateAuthority;
+                    chain.ChainPolicy.ApplicationPolicy.Add(new Oid("1.3.6.1.5.5.7.3.1")); // TLS server authentication
+                    chain.ChainPolicy.ExtraStore.Add(root);
+                    if (supplied != null)
+                        foreach (X509ChainElement item in supplied.ChainElements)
+                            chain.ChainPolicy.ExtraStore.Add(item.Certificate);
+                    if (!chain.Build(leaf) || chain.ChainElements.Count < 2) return false;
+                    foreach (X509ChainStatus status in chain.ChainStatus)
+                        if ((status.Status & ~X509ChainStatusFlags.UntrustedRoot) != X509ChainStatusFlags.NoError) return false;
+                    return EqualBytes(chain.ChainElements[chain.ChainElements.Count - 1].Certificate.RawData, trustedRoot);
+                }
+            }
+            catch (Exception) { return false; }
         }
 
         internal static bool IsLanAddress(Uri uri)
@@ -166,6 +237,15 @@ namespace RMacro
             request.ReadWriteTimeout = 8000;
             request.AllowAutoRedirect = false;
             request.AutomaticDecompression = DecompressionMethods.None;
+            if (trustedRoot != null)
+            {
+                // A connection validated under another trust policy must never
+                // be reused here. Also force a fresh TLS handshake per request.
+                using (SHA256 sha = SHA256.Create())
+                    request.ConnectionGroupName = "EternalCore-private-" + Convert.ToBase64String(sha.ComputeHash(trustedRoot));
+                request.KeepAlive = false;
+                request.ServerCertificateValidationCallback = ValidatePinnedCertificate;
+            }
             if (IsLanAddress(baseUri)) request.Proxy = null;
             if (!String.IsNullOrEmpty(token)) request.Headers[HttpRequestHeader.Authorization] = "Bearer " + token;
             if (!String.IsNullOrEmpty(device)) request.Headers["X-RMacro-Device"] = device;
@@ -295,46 +375,92 @@ namespace RMacro
         public void Logout(string token, string device) { Request("/api/logout", Body(), token, device); }
     }
 
-    // The owner may append a validated endpoint to a copy of the executable.
-    // This keeps the address out of the UI; it is not a secret or a security boundary.
+    // An endpoint and its optional public trust anchor form one configuration.
+    // Neither is secret; private CA keys must never be included in the loader.
+    internal sealed class ServerConnectionSettings
+    {
+        public readonly string Address, TrustId;
+        private readonly byte[] root;
+        public byte[] TrustedRoot { get { return root == null ? null : (byte[])root.Clone(); } }
+
+        public ServerConnectionSettings(string address, byte[] trustedRoot)
+        {
+            Address = new ApiClient(address, trustedRoot).BaseUrl;
+            root = trustedRoot == null ? null : (byte[])trustedRoot.Clone();
+            using (SHA256 sha = SHA256.Create())
+                TrustId = root == null ? "" : BitConverter.ToString(sha.ComputeHash(root)).Replace("-", "").ToLowerInvariant();
+        }
+
+        public bool SameAs(ServerConnectionSettings other)
+        {
+            return other != null && String.Equals(Address, other.Address, StringComparison.OrdinalIgnoreCase) &&
+                String.Equals(TrustId, other.TrustId, StringComparison.Ordinal) &&
+                ((root == null && other.root == null) || ApiClient.EqualBytes(root, other.root));
+        }
+    }
+
     internal static class ServerSettings
     {
         private const string DefaultAddress = "http://192.168.0.105:8765";
         private const string Marker = "RMACRO_URL_V1";
-        private const int MaxAddressBytes = 1024;
+        private const string PinnedMarker = "RMACRO_TLS_V2";
+        private const int MaxAddressBytes = 1024, MaxPinnedBytes = 8192;
 
-        // Append the *current* validated endpoint to the verified update. The
-        // footer is configuration, not a credential; the server URL never goes
-        // to GitHub and need not be shown in the loader UI.
+        // Keep the V1 helper for LAN/public-CA builds and old tooling.
         public static void AppendToExecutable(string path, string address)
+        { AppendConnectionToExecutable(path, new ServerConnectionSettings(address, null)); }
+
+        public static void AppendConnectionToExecutable(string path, ServerConnectionSettings settings)
         {
-            string normalized = new ApiClient(address).BaseUrl;
-            byte[] payload = Encoding.UTF8.GetBytes(normalized);
-            if (payload.Length == 0 || payload.Length > MaxAddressBytes) throw new InvalidOperationException("Настройки подключения слишком велики.");
+            if (settings == null) throw new ArgumentNullException("settings");
+            byte[] root = settings.TrustedRoot;
+            string text = settings.Address;
+            if (root != null) text += "\n" + Convert.ToBase64String(root);
+            byte[] payload = Encoding.UTF8.GetBytes(text);
+            if (payload.Length == 0 || payload.Length > (root == null ? MaxAddressBytes : MaxPinnedBytes))
+                throw new InvalidOperationException("Настройки подключения слишком велики.");
             using (FileStream stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.None))
             using (BinaryWriter writer = new BinaryWriter(stream))
             {
                 writer.Write(payload);
                 writer.Write((uint)payload.Length);
-                writer.Write(Encoding.ASCII.GetBytes(Marker));
+                writer.Write(Encoding.ASCII.GetBytes(root == null ? Marker : PinnedMarker));
             }
         }
 
-        public static string ReadFromExecutable(string path)
+        // A future downloaded loader must explicitly support the V2 footer;
+        // otherwise updating would silently discard the private trust policy.
+        public static bool SupportsPinnedConfiguration(byte[] image)
         {
-            byte[] marker = Encoding.ASCII.GetBytes(Marker);
+            byte[] marker = Encoding.Unicode.GetBytes(PinnedMarker);
+            if (image == null || image.Length < marker.Length) return false;
+            for (int i = 0; i <= image.Length - marker.Length; i++)
+            {
+                int j = 0;
+                while (j < marker.Length && image[i + j] == marker[j]) j++;
+                if (j == marker.Length) return true;
+            }
+            return false;
+        }
+
+        public static string ReadFromExecutable(string path) { return ReadConnectionFromExecutable(path).Address; }
+
+        public static ServerConnectionSettings ReadConnectionFromExecutable(string path)
+        {
+            byte[] marker = Encoding.ASCII.GetBytes(Marker), pinned = Encoding.ASCII.GetBytes(PinnedMarker);
             using (FileStream stream = File.OpenRead(path))
             {
-                if (stream.Length < marker.Length + 4) return DefaultAddress;
+                if (stream.Length < marker.Length + 4) return new ServerConnectionSettings(DefaultAddress, null);
                 stream.Seek(-marker.Length, SeekOrigin.End);
                 byte[] tail = new byte[marker.Length];
                 if (stream.Read(tail, 0, tail.Length) != tail.Length) throw new InvalidOperationException("Не удалось прочитать настройки лоадера.");
-                for (int i = 0; i < marker.Length; i++) if (tail[i] != marker[i]) return DefaultAddress;
+                bool isPinned = ApiClient.EqualBytes(tail, pinned);
+                if (!isPinned && !ApiClient.EqualBytes(tail, marker)) return new ServerConnectionSettings(DefaultAddress, null);
                 stream.Seek(-marker.Length - 4, SeekOrigin.End);
                 byte[] size = new byte[4];
                 if (stream.Read(size, 0, 4) != 4) throw new InvalidOperationException("Настройки лоадера повреждены.");
                 uint length = (uint)size[0] | ((uint)size[1] << 8) | ((uint)size[2] << 16) | ((uint)size[3] << 24);
-                if (length == 0 || length > MaxAddressBytes || stream.Length < marker.Length + 4L + length)
+                if (length == 0 || length > (isPinned ? MaxPinnedBytes : MaxAddressBytes) || stream.Length < marker.Length + 4L + length)
                     throw new InvalidOperationException("Настройки лоадера повреждены. Обратитесь к администратору.");
                 stream.Seek(-marker.Length - 4L - length, SeekOrigin.End);
                 byte[] payload = new byte[(int)length];
@@ -342,7 +468,13 @@ namespace RMacro
                 try
                 {
                     string value = new UTF8Encoding(false, true).GetString(payload);
-                    return new ApiClient(value).BaseUrl;
+                    if (!isPinned) return new ServerConnectionSettings(value, null);
+                    int separator = value.IndexOf('\n');
+                    if (separator < 1 || separator != value.LastIndexOf('\n')) throw new InvalidDataException();
+                    string encoded = value.Substring(separator + 1);
+                    byte[] root = Convert.FromBase64String(encoded);
+                    if (Convert.ToBase64String(root) != encoded) throw new InvalidDataException();
+                    return new ServerConnectionSettings(value.Substring(0, separator), root);
                 }
                 catch (Exception) { throw new InvalidOperationException("Настройки подключения повреждены. Обратитесь к администратору."); }
             }
@@ -383,7 +515,7 @@ namespace RMacro
 
     internal sealed class SavedSession
     {
-        public string Server, Token;
+        public string Server, Token, TrustId;
     }
 
     internal sealed class SessionStore
@@ -400,21 +532,27 @@ namespace RMacro
                 if (encrypted.Length > 65536) return null;
                 string text = Encoding.UTF8.GetString(ProtectedData.Unprotect(encrypted, Entropy, DataProtectionScope.CurrentUser));
                 Dictionary<string, object> values = JsonValues.Object(new JavaScriptSerializer().DeserializeObject(text));
-                SavedSession saved = new SavedSession { Server = JsonValues.String(values, "server"), Token = JsonValues.String(values, "token") };
-                // An altered URL cannot send a token to public HTTP; RestoreAsync
-                // additionally requires an exact match with this build's endpoint.
+                object trust;
+                string trustId = values.TryGetValue("trust", out trust) ? trust as string : "";
+                SavedSession saved = new SavedSession { Server = JsonValues.String(values, "server"),
+                    Token = JsonValues.String(values, "token"), TrustId = trustId };
+                // Also bind the saved token to the pinned root. A new authority at
+                // the same address requires a fresh login, not token disclosure.
                 new ApiClient(saved.Server);
-                if (!Regex.IsMatch(saved.Token, "^[A-Za-z0-9_-]{40,64}$")) return null;
+                if (saved.TrustId == null || (saved.TrustId.Length != 0 && !Regex.IsMatch(saved.TrustId, "^[0-9a-f]{64}$")) ||
+                    !Regex.IsMatch(saved.Token, "^[A-Za-z0-9_-]{40,64}$")) return null;
                 return saved;
             }
             catch (Exception) { return null; }
         }
-        public void Save(string server, string token)
+        public void Save(string server, string token) { Save(server, token, ""); }
+        public void Save(string server, string token, string trustId)
         {
             new ApiClient(server);
-            if (!Regex.IsMatch(token ?? "", "^[A-Za-z0-9_-]{40,64}$")) throw new ArgumentException("Invalid session token.");
+            if (!Regex.IsMatch(token ?? "", "^[A-Za-z0-9_-]{40,64}$") || trustId == null ||
+                (trustId.Length != 0 && !Regex.IsMatch(trustId, "^[0-9a-f]{64}$"))) throw new ArgumentException("Invalid session.");
             Directory.CreateDirectory(Path.GetDirectoryName(file));
-            string text = new JavaScriptSerializer().Serialize(ApiClient.Body("server", server, "token", token));
+            string text = new JavaScriptSerializer().Serialize(ApiClient.Body("server", server, "token", token, "trust", trustId));
             byte[] bytes = ProtectedData.Protect(Encoding.UTF8.GetBytes(text), Entropy, DataProtectionScope.CurrentUser);
             string temporary = file + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try

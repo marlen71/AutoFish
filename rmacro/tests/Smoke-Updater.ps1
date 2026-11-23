@@ -1,16 +1,17 @@
-﻿$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $source = Join-Path $root 'dist\EternalCore.exe'
 $directory = Join-Path ([IO.Path]::GetTempPath()) ('eternal-updater-' + [Guid]::NewGuid().ToString('N'))
 $oldLocal = $env:LOCALAPPDATA
 $children = @()
 $helper = $null
-function Append-Footer([string]$path) {
+function Append-Footer([string]$path, [bool]$wrongRoot = $false) {
     $stream = [IO.File]::Open($path, [IO.FileMode]::Append, [IO.FileAccess]::Write, [IO.FileShare]::None)
     $writer = [IO.BinaryWriter]::new($stream)
     try {
-        $payload = [Text.Encoding]::UTF8.GetBytes('http://10.20.30.40:8765')
-        $writer.Write($payload); $writer.Write([uint32]$payload.Length); $writer.Write([Text.Encoding]::ASCII.GetBytes('RMACRO_URL_V1'))
+        $ca = if ($wrongRoot) { $script:otherRoot } else { $script:trustRoot }
+        $payload = [Text.Encoding]::UTF8.GetBytes(('https://127.0.0.1:8765' + "`n" + [Convert]::ToBase64String($ca)))
+        $writer.Write($payload); $writer.Write([uint32]$payload.Length); $writer.Write([Text.Encoding]::ASCII.GetBytes('RMACRO_TLS_V2'))
     }
     finally { $writer.Dispose() }
 }
@@ -40,15 +41,15 @@ function Stop-Loader([string]$path) {
         } catch { }
     }
 }
-function Start-Helper([string]$target, $parent, [bool]$broken) {
+function Start-Helper([string]$target, $parent, [bool]$broken, [bool]$wrongRoot = $false) {
     $nonce = [Guid]::NewGuid().ToString('N')
     $stage = Join-Path $directory ('.eternal-core-update-' + $nonce)
     New-Item -ItemType Directory -Path $stage | Out-Null
     $payload = Join-Path $stage 'payload.exe'; $helperPath = Join-Path $stage 'helper.exe'
     if ($broken) { [IO.File]::WriteAllBytes($payload, [Text.Encoding]::ASCII.GetBytes('MZ-not-a-valid-Windows-executable')) }
     else { Copy-Item -LiteralPath $source -Destination $payload }
-    Append-Footer $payload
-    if (-not $broken) { Append-Footer $payload } # distinguish the verified new file from the old one
+    Append-Footer $payload $wrongRoot
+    if (-not $broken) { Append-Footer $payload $wrongRoot } # distinguish the verified new file from the old one
     Copy-Item -LiteralPath $source -Destination $helperPath
     $hash = (Get-FileHash -LiteralPath $payload -Algorithm SHA256).Hash.ToLowerInvariant()
     $parent.Refresh(); $ticks = $parent.StartTime.ToUniversalTime().Ticks
@@ -59,6 +60,22 @@ function Start-Helper([string]$target, $parent, [bool]$broken) {
 }
 try {
     New-Item -ItemType Directory -Path $directory | Out-Null
+    # Make two disposable CA certificates without adding either to Windows.
+    $openssl = (Get-Command openssl.exe -ErrorAction SilentlyContinue).Source
+    if (-not $openssl) { $openssl = Join-Path $env:ProgramFiles 'Git\usr\bin\openssl.exe' }
+    if (-not (Test-Path -LiteralPath $openssl -PathType Leaf)) { throw 'OpenSSL is required for the updater TLS fixture.' }
+    foreach ($name in @('first', 'second')) {
+        $key = Join-Path $directory "$name.key"; $pem = Join-Path $directory "$name.crt"; $der = Join-Path $directory "$name.der"
+        $ErrorActionPreference = 'Continue'
+        & $openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 1 -keyout $key -out $pem -subj "/CN=Eternal updater $name" -addext 'basicConstraints=critical,CA:TRUE' -addext 'keyUsage=critical,keyCertSign,cRLSign' 2>&1 | Out-Null
+        $generation = $LASTEXITCODE
+        & $openssl x509 -in $pem -outform DER -out $der 2>&1 | Out-Null
+        $conversion = $LASTEXITCODE
+        $ErrorActionPreference = 'Stop'
+        if ($generation -ne 0 -or $conversion -ne 0) { throw 'Could not create the updater CA fixture.' }
+    }
+    $script:trustRoot = [IO.File]::ReadAllBytes((Join-Path $directory 'first.der'))
+    $script:otherRoot = [IO.File]::ReadAllBytes((Join-Path $directory 'second.der'))
     $env:LOCALAPPDATA = Join-Path $directory 'profile'
     $target = Join-Path $directory 'EternalCore.exe'
     Copy-Item -LiteralPath $source -Destination $target
@@ -118,7 +135,30 @@ try {
     if (-not $helper.WaitForExit(10000)) { throw 'Rollback warning could not be dismissed.' }
     $helper.Refresh(); if ($helper.ExitCode -ne 1) { throw "Rollback helper returned $($helper.ExitCode), expected 1." }
     if ([IO.File]::ReadAllText($sentinel) -ne 'must not be updated') { throw 'Rollback touched the unrelated server file.' }
-    Write-Output '::notice title=Updater integration::PASS: configured footer preserved, atomic loader replacement, healthy-window handshake, backup, broken-update rollback and unrelated server file unchanged. No GitHub network download exercised.'
+    Stop-Loader $target
+
+    # Even with the same URL and a valid PE, changing only the trust root must
+    # be rejected before File.Replace. The old program must be reopened.
+    $parent = Start-Loader $target; $children += $parent
+    $operation = Start-Helper $target $parent $false $true; $helper = $operation.Process
+    $null = $parent.CloseMainWindow()
+    if (-not $parent.WaitForExit(10000)) { throw 'Original loader did not exit before trust-change test.' }
+    $restored = $false
+    for ($i = 0; $i -lt 100; $i++) {
+        Start-Sleep -Milliseconds 250
+        if ((Test-Path -LiteralPath $target) -and (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant() -eq $beforeFailure) {
+            if (Find-Loader $target) { $restored = $true; break }
+        }
+    }
+    if (-not $restored -or (Test-Path -LiteralPath (Join-Path $operation.Stage 'previous.exe'))) { throw 'Changed trust root was not rejected before replacement.' }
+    for ($i = 0; $i -lt 40; $i++) {
+        $helper.Refresh(); if ($helper.HasExited) { break }
+        if ($helper.MainWindowHandle -ne 0) { $null = $helper.CloseMainWindow(); break }
+        Start-Sleep -Milliseconds 250
+    }
+    if (-not $helper.WaitForExit(10000)) { throw 'Trust-change warning could not be dismissed.' }
+    $helper.Refresh(); if ($helper.ExitCode -ne 1) { throw 'Changed trust root did not fail the update.' }
+    Write-Output '::notice title=Updater integration::PASS: pinned root preserved, changed root rejected, atomic replacement, backup and broken-update rollback. No GitHub network download exercised.'
 }
 catch {
     $detail = ($_ | Format-List * -Force | Out-String).Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')

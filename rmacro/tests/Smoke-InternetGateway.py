@@ -1,14 +1,13 @@
-"""End-to-end loopback TLS gateway test with ephemeral fixture credentials.
+"""End-to-end, loopback-only test of the real internal-CA gateway.
 
-Requires Caddy and OpenSSL supplied by the test runner. The certificate is
-self-signed for this local fixture only; production always uses trusted ACME.
-With --dotnet-runner on a disposable GitHub Windows runner, temporarily trust
-the test cert in the machine root store, run the unmodified .NET API client,
-and remove that exact certificate in finally. Never run this on an owner PC.
+Caddy generates a unique temporary CA. No certificate is installed in the
+Windows or operating-system trust store. This does not test a real router.
 """
 import argparse
 import contextlib
+import hashlib
 import http.client
+import http.server
 import importlib.util
 import json
 import os
@@ -22,7 +21,6 @@ import threading
 import time
 import urllib.error
 import urllib.request
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -58,43 +56,54 @@ def request(opener, base, path, body=None, headers=None, method=None):
         return exc.code, exc.read()
 
 
-def check_windows_client(runner, base, cert, openssl, directory, configured):
-    if (os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_OS") != "Windows"
-            or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted"):
-        raise RuntimeError("The machine-wide test certificate may be used only on disposable GitHub Windows runners.")
-    print("Checking .NET TLS validation with an untrusted fixture certificate...", flush=True)
-    run([runner, base, "untrusted", str(configured)])
-    der = directory / "fixture.cer"
-    run([openssl, "x509", "-in", str(cert), "-outform", "DER", "-out", str(der)], capture_output=True)
-    ps1 = directory / "temporary-trust.ps1"
-    ps1.write_text(r'''param([string]$CertFile, [string]$Runner, [string]$Base, [string]$Configured)
-$ErrorActionPreference = 'Stop'
-# Only the disposable GitHub-hosted VM may trust this uniquely generated cert.
-# CurrentUser Root requires a UI prompt on hosted Windows runners.
-$candidate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($CertFile)
-$thumb = $candidate.Thumbprint
-$path = 'Cert:\LocalMachine\Root\' + $thumb
-if (Test-Path -LiteralPath $path) { throw 'Unexpected pre-existing fixture certificate; refusing to remove it.' }
-$attempted = $false
-$testExit = 1
-try {
-    $attempted = $true
-    $item = Import-Certificate -FilePath $CertFile -CertStoreLocation 'Cert:\LocalMachine\Root' -ErrorAction Stop
-    if (-not $item -or $item.Thumbprint -ne $thumb -or -not (Test-Path -LiteralPath $path)) {
-        throw 'Could not add the exact temporary CI test certificate.'
-    }
-    & $Runner $Base 'trusted' $Configured
-    $testExit = $LASTEXITCODE
-}
-finally {
-    if ($attempted -and (Test-Path -LiteralPath $path)) { Remove-Item -LiteralPath $path -Force -ErrorAction Stop }
-    if (Test-Path -LiteralPath $path) { throw 'Temporary CI test certificate cleanup failed.' }
-}
-exit $testExit
-''', encoding="utf-8")
-    print("Checking .NET login with a temporarily trusted fixture certificate...", flush=True)
-    run(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(ps1),
-         str(der), runner, base, str(configured)])
+def expect_authority_failure(gateway, caddy):
+    try:
+        gateway.provision_authority(caddy, "127.0.0.1")
+    except ValueError:
+        return
+    raise AssertionError("Damaged or replaced authority was silently accepted")
+
+
+@contextlib.contextmanager
+def fake_tls_server(openssl, directory, ca_dir, mode):
+    """A real TLS listener whose leaf is expired or lacks the server-auth EKU."""
+    folder = directory / ("invalid-" + mode)
+    folder.mkdir()
+    key, csr, cert = folder / "key.pem", folder / "request.pem", folder / "leaf.pem"
+    ext = folder / "extensions.txt"
+    eku = "serverAuth" if mode == "expired" else "clientAuth"
+    ext.write_text("basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\n"
+                   "subjectAltName=IP:127.0.0.1\nextendedKeyUsage=" + eku + "\n", encoding="ascii")
+    run([openssl, "req", "-new", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=127.0.0.1",
+         "-keyout", str(key), "-out", str(csr)], capture_output=True)
+    run([openssl, "x509", "-req", "-in", str(csr), "-CA", str(ca_dir / "intermediate.crt"),
+         "-CAkey", str(ca_dir / "intermediate.key"), "-set_serial", "1234", "-days",
+         "-1" if mode == "expired" else "1", "-sha256", "-extfile", str(ext), "-out", str(cert)], capture_output=True)
+    chain = folder / "chain.pem"
+    chain.write_bytes(cert.read_bytes() + (ca_dir / "intermediate.crt").read_bytes())
+    accepted = threading.Event()
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            accepted.set()
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"ok":true}')
+        def log_message(self, *args):
+            pass
+
+    httpd = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(str(chain), str(key))
+    httpd.socket = context.wrap_socket(httpd.socket, server_side=True)
+    thread = threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
+    thread.start()
+    try:
+        yield "https://127.0.0.1:%d" % httpd.server_address[1], accepted
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
 
 
 def main():
@@ -104,59 +113,98 @@ def main():
     parser.add_argument("--dotnet-runner")
     parser.add_argument("--loader")
     args = parser.parse_args()
+    if args.dotnet_runner and not args.loader:
+        raise ValueError("--loader is required with --dotnet-runner")
     gateway = load("gateway_smoke", ROOT / "server" / "internet_gateway.py")
     srv = load("gateway_smoke_server", ROOT / "server" / "server.py")
     with tempfile.TemporaryDirectory(prefix="eternal-https-test-") as temp:
         directory = Path(temp)
-        cert, key = directory / "cert.pem", directory / "key.pem"
-        run([args.openssl, "req", "-x509", "-newkey", "rsa:2048", "-sha256", "-nodes", "-days", "1",
-             "-keyout", str(key), "-out", str(cert), "-subj", "/CN=127.0.0.1",
-             "-addext", "subjectAltName=IP:127.0.0.1", "-addext", "basicConstraints=critical,CA:TRUE",
-             "-addext", "keyUsage=critical,digitalSignature,keyEncipherment,keyCertSign",
-             "-addext", "extendedKeyUsage=serverAuth"], capture_output=True)
+        gateway.ROOT = directory
+        gateway.STATE = directory / "state"
+        gateway.SETTINGS = gateway.STATE / "settings.json"
+        gateway.CONFIG = gateway.STATE / "Caddyfile"
+        caddy = str(Path(args.caddy).resolve())
+
+        print("Provisioning the private CA and verifying stable reuse...", flush=True)
+        root = gateway.provision_authority(caddy, "127.0.0.1")
+        ca_dir = gateway.authority_directory()
+        root_pem, root_key = ca_dir / "root.crt", ca_dir / "root.key"
+        root_digest = hashlib.sha256(root).hexdigest()
+        gateway.atomic_text(gateway.SETTINGS, json.dumps({"version": 2, "ipv4": "8.8.8.8", "ca_sha256": root_digest}))
+        assert gateway.provision_authority(caddy, "127.0.0.1") == root
+        key_bytes = root_key.read_bytes()
+        root_key.unlink()
+        expect_authority_failure(gateway, caddy)
+        assert not root_key.exists(), "Missing root key was silently recreated"
+        root_key.write_bytes(key_bytes)
+        root_key.write_bytes(b"invalid private key")
+        expect_authority_failure(gateway, caddy)
+        root_key.write_bytes(key_bytes)
+        record = gateway.authority_record_path()
+        record_bytes = record.read_bytes()
+        record.unlink()
+        expect_authority_failure(gateway, caddy)
+        record.write_bytes(record_bytes)
+        gateway.atomic_text(gateway.SETTINGS, json.dumps({"version": 2, "ipv4": "8.8.8.8", "ca_sha256": "0" * 64}))
+        expect_authority_failure(gateway, caddy)
+        gateway.atomic_text(gateway.SETTINGS, json.dumps({"version": 2, "ipv4": "8.8.8.8", "ca_sha256": root_digest}))
+        assert gateway.provision_authority(caddy, "127.0.0.1") == root
+        if os.name != "nt":
+            assert (root_key.stat().st_mode & 0o077) == 0
+            assert ((gateway.STATE / "caddy-data").stat().st_mode & 0o077) == 0
+
+        # A separate real CA must never be treated as the configured root.
+        original_state, original_settings, original_config = gateway.STATE, gateway.SETTINGS, gateway.CONFIG
+        gateway.STATE = directory / "other-state"
+        gateway.SETTINGS, gateway.CONFIG = gateway.STATE / "settings.json", gateway.STATE / "Caddyfile"
+        other_root = gateway.provision_authority(caddy, "127.0.0.1")
+        assert other_root != root
+        gateway.STATE, gateway.SETTINGS, gateway.CONFIG = original_state, original_settings, original_config
+        old_root = root_pem.read_bytes()
+        root_pem.write_text(ssl.DER_cert_to_PEM_cert(other_root), encoding="ascii")
+        expect_authority_failure(gateway, caddy)
+        root_pem.write_bytes(old_root)
+        assert gateway.load_authority(root_digest) == root
+
         production = directory / "Production-Caddyfile"
         production.write_text(gateway.caddyfile("8.8.8.8"), encoding="utf-8")
-        run([args.caddy, "validate", "--config", str(production), "--adapter", "caddyfile"], capture_output=True)
-        adapted = run([args.caddy, "adapt", "--config", str(production), "--adapter", "caddyfile"],
+        adapted = run([caddy, "adapt", "--config", str(production), "--adapter", "caddyfile"],
                       capture_output=True).stdout
         parsed = json.loads(adapted)
         policies = parsed["apps"]["tls"]["automation"]["policies"]
         issuers = [issuer for policy in policies for issuer in policy.get("issuers", [])]
-        assert any(i.get("module") == "acme" and i.get("profile") == "shortlived" for i in issuers), issuers
-        assert not any(i.get("module") == "internal" for i in issuers), issuers
+        assert any(i.get("module") == "internal" for i in issuers), issuers
+        assert not any(i.get("module") == "acme" for i in issuers), issuers
+        servers = parsed["apps"]["http"]["servers"]
+        assert all(":80" not in server.get("listen", []) for server in servers.values()), servers
 
         db = srv.Database(directory / "fixture.db")
         db.init_admin("fixture_admin", "fixture-admin-password")
         user = db.create_user("fixture_admin", "fixture_user", "fixture-user-password")
         db.change_user("fixture_admin", user["uid"], "grant", {"product": "rmfish", "seconds": 3600})
         forwarded_admin_login = threading.Event()
+
         class FixtureHandler(srv.Handler):
             def handle_request(self):
                 if self.path.split("?", 1)[0] == "/api/admin/login":
                     forwarded_admin_login.set()
                 return super().handle_request()
+
         srv.Handler = FixtureHandler
         httpd = srv.Server(("127.0.0.1", 0), db, ["127.0.0.1", "localhost"],
                            lan_http_only=True, trusted_local_gateway=True)
         thread = threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.2}, daemon=True)
         thread.start()
-        port, challenge = free_port(), free_port()
-        while challenge == port:
-            challenge = free_port()
+        port = free_port()
         config = directory / "Caddyfile"
-        config.write_text(gateway.caddyfile("127.0.0.1", port, httpd.server_address[1], challenge,
-                                           test_certificate=(cert, key)), encoding="utf-8")
-        run([args.caddy, "validate", "--config", str(config), "--adapter", "caddyfile"], capture_output=True)
-        environment = os.environ.copy()
-        environment["XDG_DATA_HOME"] = str(directory / "caddy-data")
-        environment["XDG_CONFIG_HOME"] = str(directory / "caddy-config")
+        config.write_text(gateway.caddyfile("127.0.0.1", port, httpd.server_address[1]), encoding="utf-8")
         process = None
         logs = directory / "caddy.log"
         try:
             with logs.open("wb") as output:
-                process = subprocess.Popen([args.caddy, "run", "--config", str(config), "--adapter", "caddyfile"],
-                                           stdout=output, stderr=subprocess.STDOUT, env=environment)
-                context = ssl.create_default_context(cafile=str(cert))
+                process = subprocess.Popen([caddy, "run", "--config", str(config), "--adapter", "caddyfile"],
+                                           stdout=output, stderr=subprocess.STDOUT, env=gateway.caddy_environment())
+                context = ssl.create_default_context(cafile=str(root_pem))
                 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=context))
                 base = "https://127.0.0.1:%d" % port
                 for _ in range(100):
@@ -172,7 +220,6 @@ def main():
                 else:
                     raise RuntimeError("Caddy did not become ready: " + logs.read_text(errors="replace"))
 
-                # A self-signed fixture must fail default certificate validation.
                 untrusted = urllib.request.build_opener(urllib.request.ProxyHandler({}),
                                                         urllib.request.HTTPSHandler(context=ssl.create_default_context()))
                 try:
@@ -180,27 +227,37 @@ def main():
                 except urllib.error.URLError as exc:
                     assert isinstance(exc.reason, ssl.SSLError), repr(exc)
                 else:
-                    raise AssertionError("Untrusted certificate was accepted")
-                if args.dotnet_runner:
-                    if not args.loader:
-                        raise ValueError("--loader is required with --dotnet-runner")
-                    configured = directory / "configured" / "EternalCore.exe"
-                    srv.configure_loader(args.loader, configured, base)
-                    check_windows_client(args.dotnet_runner, base, cert, args.openssl, directory, configured)
+                    raise AssertionError("Unconfigured default trust accepted the private certificate")
 
-                # Never forward plaintext API requests, admin pages, or admin API.
+                if args.dotnet_runner:
+                    configured = directory / "configured" / "EternalCore.exe"
+                    wrong = directory / "wrong" / "EternalCore.exe"
+                    srv.configure_loader(args.loader, configured, base, root)
+                    srv.configure_loader(args.loader, wrong, base, other_root)
+                    print("Checking actual Windows API client, private trust and update staging...", flush=True)
+                    run([args.dotnet_runner, base, "trusted", str(configured), str(wrong), args.loader])
+                    wrong_name = "https://127.0.0.2:%d" % port
+                    named = directory / "wrong-name" / "EternalCore.exe"
+                    srv.configure_loader(args.loader, named, wrong_name, root)
+                    run([args.dotnet_runner, wrong_name, "must-fail", str(named), str(wrong), args.loader])
+                    for mode in ("expired", "wrong-eku"):
+                        with fake_tls_server(args.openssl, directory, ca_dir, mode) as (invalid_base, accepted):
+                            invalid = directory / ("configured-" + mode) / "EternalCore.exe"
+                            srv.configure_loader(args.loader, invalid, invalid_base, root)
+                            run([args.dotnet_runner, invalid_base, "must-fail", str(invalid), str(wrong), args.loader])
+                            assert not accepted.is_set(), "Invalid TLS connection forwarded an HTTP request"
+
                 print("Checking plaintext and administrator isolation...", flush=True)
                 plain = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-                status, _ = request(plain, "http://127.0.0.1:%d" % challenge, "/api/health")
-                assert status == 404, ("plaintext health", status)
+                try:
+                    status, _ = request(plain, "http://127.0.0.1:%d" % port, "/api/health")
+                    assert status != 200, ("plaintext health", status)
+                except (urllib.error.URLError, OSError, http.client.RemoteDisconnected):
+                    pass
                 for path in ("/", "/admin", "/admin/", "/admin/app.js", "/api/admin/users", "/api/unknown",
                              "/%61dmin/", "/api/%61dmin/users", "/api/me/../admin/users", "/api/me%2f..%2fadmin/users"):
                     status, _ = request(opener, base, path)
                     assert status == 404, (path, status)
-                # A blocked POST with no body must receive 404. For a blocked
-                # POST *with* a body, Windows sometimes reports a reset while
-                # the gateway rejects the unread bytes; a closed connection is
-                # also a denial, but never allow it to reach the backend.
                 status, _ = request(opener, base, "/api/admin/login", method="POST")
                 assert status == 404, ("public admin login without body", status)
                 try:
@@ -228,7 +285,6 @@ def main():
                 assert request(opener, base, "/api/authorize", {"product": "rmfish"}, headers)[0] == 200
                 assert request(opener, base, "/api/logout", {}, headers)[0] == 200
 
-                # Spoofed forwarded headers cannot turn each guess into a new IP.
                 print("Checking spoof-resistant login limits...", flush=True)
                 for index in range(8):
                     forged = {"X-EternalCore-Client-IP": "8.8.8.%d" % (index + 1),
@@ -241,11 +297,9 @@ def main():
                 assert status == 429, status
                 assert ("user", "127.0.0.1") in httpd.limiter.failures, httpd.limiter.failures
                 assert not any(key[1].startswith("8.8.8.") for key in httpd.limiter.failures), httpd.limiter.failures
-                print("PASS: validated IP ACME config, local HTTPS login, trusted/untrusted TLS, admin isolation, "
-                      "plaintext denial, and spoof-resistant per-client rate limit. No real ACME or router tested.", flush=True)
+                print("PASS: private CA provisioning/reuse, loopback HTTPS, isolated admin and rate limiting. "
+                      "No real router or external port was tested.", flush=True)
         except Exception as exc:
-            # Report the failing assertion before the verbose Caddy log so it
-            # is visible even when a CI annotation has a size limit.
             print("HTTPS fixture failure: %s: %s" % (type(exc).__name__, exc), file=sys.stderr, flush=True)
             if logs.exists():
                 print("Caddy fixture log:\n" + logs.read_text(errors="replace"), file=sys.stderr, flush=True)

@@ -274,6 +274,7 @@ namespace RMacro
     internal sealed class LoaderForm : Form
     {
         private readonly string localDirectory, device, serverAddress;
+        private readonly ServerConnectionSettings connection;
         private readonly SessionStore store;
         private readonly System.Windows.Forms.Timer clockTimer = new System.Windows.Forms.Timer();
         private readonly System.Windows.Forms.Timer refreshTimer = new System.Windows.Forms.Timer();
@@ -303,13 +304,14 @@ namespace RMacro
         private int generation, profileRevision;
 
         public LoaderForm(string localDirectory, string device, string serverAddress)
-            : this(localDirectory, device, serverAddress, false) { }
+            : this(localDirectory, device, new ServerConnectionSettings(serverAddress, null), false) { }
 
-        internal LoaderForm(string localDirectory, string device, string serverAddress, bool automaticUpdates)
+        internal LoaderForm(string localDirectory, string device, ServerConnectionSettings connection, bool automaticUpdates)
         {
             this.automaticUpdates = automaticUpdates;
             this.localDirectory = localDirectory; this.device = device;
-            this.serverAddress = new ApiClient(serverAddress).BaseUrl;
+            this.connection = connection;
+            this.serverAddress = connection.Address;
             store = new SessionStore(localDirectory);
             Text = "Eternal Core — ваши продукты";
             Name = "loaderForm"; FormBorderStyle = FormBorderStyle.None; StartPosition = FormStartPosition.CenterScreen;
@@ -637,13 +639,14 @@ namespace RMacro
             SavedSession saved = store.Load(); if (saved == null || closing) return;
             // A saved token is only ever sent to the endpoint embedded in this
             // build, not to the address saved by a previous/different build.
-            if (!String.Equals(new ApiClient(saved.Server).BaseUrl, serverAddress, StringComparison.OrdinalIgnoreCase))
+            if (!String.Equals(new ApiClient(saved.Server).BaseUrl, serverAddress, StringComparison.OrdinalIgnoreCase) ||
+                !String.Equals(saved.TrustId, connection.TrustId, StringComparison.Ordinal))
             { store.Delete(); ShowLogin("Настройки доступа изменились. Войдите заново."); return; }
             loginMessage.Text = "Восстанавливаем сохранённый вход…"; SetBusy(true);
             int expected = generation;
             try
             {
-                ApiClient candidate = new ApiClient(serverAddress);
+                ApiClient candidate = new ApiClient(serverAddress, connection.TrustedRoot);
                 Profile result = await Task.Run(delegate { return candidate.GetProfile(saved.Token, device); });
                 if (closing || expected != generation) return;
                 api = candidate; token = saved.Token; profile = result; ShowDashboard("Вход восстановлен. Подключение подтверждено сервером.");
@@ -666,7 +669,7 @@ namespace RMacro
             SetBusy(true); loginMessage.Text = "Проверяем данные…"; int expected = generation;
             try
             {
-                ApiClient candidate = new ApiClient(serverAddress);
+                ApiClient candidate = new ApiClient(serverAddress, connection.TrustedRoot);
                 string receivedToken = null;
                 Profile result = await Task.Run(delegate { return candidate.Login(username, password, device, out receivedToken); });
                 if (closing || expected != generation) return;
@@ -674,7 +677,7 @@ namespace RMacro
                 string note = "Подключение подтверждено сервером.";
                 if (remember.Checked)
                 {
-                    try { store.Save(candidate.BaseUrl, receivedToken); }
+                    try { store.Save(candidate.BaseUrl, receivedToken, connection.TrustId); }
                     catch (Exception) { store.Delete(); note = "Вход выполнен, но Windows не сохранила сессию на этом устройстве."; persistentNotice = note; }
                 }
                 else store.Delete();
