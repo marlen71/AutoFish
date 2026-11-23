@@ -87,10 +87,16 @@ try {
         if ([TestTokenPrivileges]::Contains($privilege)) { throw "Privilege was not removed: $privilege" }
     }
     $ErrorActionPreference = 'Continue'
+    $global:LASTEXITCODE = $null
     $output = & python $TestScript --stage $Stage --loader $Loader 2>&1
     $code = $LASTEXITCODE
     $ErrorActionPreference = 'Stop'
-    $text = "PASS: Administrators SID disabled; security, backup, restore and take-ownership privileges absent.`r`n" + ($output | Out-String)
+    $detail = $output | Out-String
+    if ($detail.Length -gt 1800) { $detail = $detail.Substring($detail.Length - 1800) }
+    if ($null -eq $code -or $code -ne 0 -or $detail -notmatch 'PASS: BAT owner setup accepted') {
+        throw "Restricted Python setup did not pass (exit=$code): $detail"
+    }
+    $text = "PASS: Administrators SID disabled; security, backup, restore and take-ownership privileges absent.`r`n" + $detail
     if ($env:ETERNAL_RESTRICTED_TEST_LOG) {
         [IO.File]::WriteAllText($env:ETERNAL_RESTRICTED_TEST_LOG, $text, [Text.UTF8Encoding]::new($true))
     } else { Write-Host $text }

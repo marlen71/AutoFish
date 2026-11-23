@@ -77,6 +77,7 @@ try {
             $ErrorActionPreference = 'Stop'
             foreach ($line in $setupOutput) { Write-Host $line }
             if ($setupExit -ne 0) { throw "Unprivileged internet setup $attempt failed: $setupExit. Output: $($setupOutput | Out-String)" }
+            if (-not (Test-Path -LiteralPath (Join-Path $caPath 'root.crt'))) { throw "Unprivileged setup reported success but did not create the CA. Output: $($setupOutput | Out-String)" }
             foreach ($name in @('root.crt', 'root.key', 'intermediate.crt', 'intermediate.key')) {
                 $hash = (Get-FileHash -LiteralPath (Join-Path $caPath $name) -Algorithm SHA256).Hash
                 if ($attempt -eq 1) { $initialHashes[$name] = $hash }
