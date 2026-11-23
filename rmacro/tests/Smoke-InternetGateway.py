@@ -181,15 +181,21 @@ def main():
                     check_windows_client(args.dotnet_runner, base, cert, args.openssl, directory, configured)
 
                 # Never forward plaintext API requests, admin pages, or admin API.
+                print("Checking plaintext and administrator isolation...", flush=True)
                 plain = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-                assert request(plain, "http://127.0.0.1:%d" % challenge, "/api/health")[0] == 404
+                status, _ = request(plain, "http://127.0.0.1:%d" % challenge, "/api/health")
+                assert status == 404, ("plaintext health", status)
                 for path in ("/", "/admin", "/admin/", "/admin/app.js", "/api/admin/users", "/api/unknown",
                              "/%61dmin/", "/api/%61dmin/users", "/api/me/../admin/users", "/api/me%2f..%2fadmin/users"):
-                    assert request(opener, base, path)[0] == 404, path
-                assert request(opener, base, "/api/admin/login", {"username": "x", "password": "y"})[0] == 404
+                    status, _ = request(opener, base, path)
+                    assert status == 404, (path, status)
+                status, _ = request(opener, base, "/api/admin/login", {"username": "x", "password": "y"})
+                assert status == 404, ("public admin login", status)
                 local = "http://127.0.0.1:%d" % httpd.server_address[1]
-                assert request(plain, local, "/admin/")[0] == 200
+                status, _ = request(plain, local, "/admin/")
+                assert status == 200, ("local admin", status)
 
+                print("Checking Python client authentication...", flush=True)
                 device = "a" * 64
                 status, data = request(opener, base, "/api/login", {"username": "fixture_user",
                     "password": "fixture-user-password", "device": device})
@@ -202,6 +208,7 @@ def main():
                 assert request(opener, base, "/api/logout", {}, headers)[0] == 200
 
                 # Spoofed forwarded headers cannot turn each guess into a new IP.
+                print("Checking spoof-resistant login limits...", flush=True)
                 for index in range(8):
                     forged = {"X-EternalCore-Client-IP": "8.8.8.%d" % (index + 1),
                               "X-Forwarded-For": "1.1.1.%d" % (index + 1)}
@@ -215,7 +222,10 @@ def main():
                 assert not any(key[1].startswith("8.8.8.") for key in httpd.limiter.failures), httpd.limiter.failures
                 print("PASS: validated IP ACME config, local HTTPS login, trusted/untrusted TLS, admin isolation, "
                       "plaintext denial, and spoof-resistant per-client rate limit. No real ACME or router tested.", flush=True)
-        except Exception:
+        except Exception as exc:
+            # Report the failing assertion before the verbose Caddy log so it
+            # is visible even when a CI annotation has a size limit.
+            print("HTTPS fixture failure: %s: %s" % (type(exc).__name__, exc), file=sys.stderr, flush=True)
             if logs.exists():
                 print("Caddy fixture log:\n" + logs.read_text(errors="replace"), file=sys.stderr, flush=True)
             raise
