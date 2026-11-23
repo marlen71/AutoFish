@@ -36,7 +36,7 @@ try {
         $setupExit = $LASTEXITCODE
         $ErrorActionPreference = 'Stop'
         foreach ($line in $setupOutput) { Write-Host $line }
-        if ($setupExit -ne 0) { throw "Internet setup failed: $setupExit" }
+        if ($setupExit -ne 0) { throw "Internet setup failed: $setupExit. Output: $($setupOutput | Out-String)" }
     }
     finally { $env:PYTHONUTF8 = $oldUtf8; $ErrorActionPreference = 'Stop' }
     if ([IO.File]::ReadAllText($db) -ne 'existing database sentinel') { throw 'Internet setup changed the existing database.' }
@@ -63,7 +63,7 @@ try {
     $testExit = $LASTEXITCODE
     $ErrorActionPreference = 'Stop'
     foreach ($line in $output) { Write-Host $line }
-    if ($testExit -ne 0) { throw "HTTPS gateway integration failed: $testExit" }
+    if ($testExit -ne 0) { throw "HTTPS gateway integration failed: $testExit. Output: $($output | Out-String)" }
     Write-Output '::notice title=Internet gateway::PASS: trusted/untrusted IP TLS in the Windows client, local fixture login, admin isolation and spoof-resistant rate limiting; real ACME and external router not tested.'
 }
 catch {
