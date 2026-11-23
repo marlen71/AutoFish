@@ -12,6 +12,7 @@ Add-Type -TypeDefinition @'
 using System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
 
@@ -44,6 +45,7 @@ public static class RestrictedSetupProcess
     [DllImport("advapi32.dll", SetLastError = true)] private static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern bool LookupPrivilegeValue(string system, string name, out Luid luid);
     [DllImport("advapi32.dll", SetLastError = true)] private static extern bool AdjustTokenPrivileges(IntPtr token, bool disableAll, ref TokenPrivileges state, uint size, IntPtr previous, IntPtr returned);
+    [DllImport("advapi32.dll", SetLastError = true)] private static extern bool SetTokenInformation(IntPtr token, int kind, IntPtr value, uint size);
     [DllImport("advapi32.dll", SetLastError = true)]
     private static extern bool CreateRestrictedToken(IntPtr existing, uint flags, uint disableCount, ref SidAndAttributes disabled,
         uint deleteCount, IntPtr deleted, uint restrictCount, IntPtr restricted, out IntPtr token);
@@ -55,6 +57,7 @@ public static class RestrictedSetupProcess
     public static int Run(string application, string command)
     {
         IntPtr original = IntPtr.Zero, limited = IntPtr.Zero, sidMemory = IntPtr.Zero;
+        IntPtr userMemory = IntPtr.Zero, aclMemory = IntPtr.Zero, infoMemory = IntPtr.Zero;
         ProcessInformation process = new ProcessInformation();
         try
         {
@@ -69,6 +72,26 @@ public static class RestrictedSetupProcess
             SidAndAttributes denied = new SidAndAttributes { Sid = sidMemory, Attributes = 0 };
             if (!CreateRestrictedToken(original, 1u, 1u, ref denied, 0, IntPtr.Zero, 0, IntPtr.Zero, out limited))
                 throw new Win32Exception(Marshal.GetLastWin32Error());
+            // An elevated runner may have Administrators as its default owner
+            // and only grant Administrators access to newly created objects.
+            // Give the restricted token a normal user's owner/default DACL so
+            // it can wait for its own child processes; this affects only the
+            // throwaway token, not any persistent Windows security descriptor.
+            SecurityIdentifier user = WindowsIdentity.GetCurrent().User;
+            byte[] userBytes = new byte[user.BinaryLength];
+            user.GetBinaryForm(userBytes, 0);
+            userMemory = Marshal.AllocHGlobal(userBytes.Length);
+            Marshal.Copy(userBytes, 0, userMemory, userBytes.Length);
+            infoMemory = Marshal.AllocHGlobal(IntPtr.Size);
+            Marshal.WriteIntPtr(infoMemory, userMemory);
+            if (!SetTokenInformation(limited, 4, infoMemory, (uint)IntPtr.Size)) throw new Win32Exception(Marshal.GetLastWin32Error()); // TokenOwner
+            RawSecurityDescriptor descriptor = new RawSecurityDescriptor("D:(A;;GA;;;SY)(A;;GA;;;" + user.Value + ")");
+            byte[] acl = new byte[descriptor.DiscretionaryAcl.BinaryLength];
+            descriptor.DiscretionaryAcl.GetBinaryForm(acl, 0);
+            aclMemory = Marshal.AllocHGlobal(acl.Length);
+            Marshal.Copy(acl, 0, aclMemory, acl.Length);
+            Marshal.WriteIntPtr(infoMemory, aclMemory);
+            if (!SetTokenInformation(limited, 6, infoMemory, (uint)IntPtr.Size)) throw new Win32Exception(Marshal.GetLastWin32Error()); // TokenDefaultDacl
             // Delete the reported privileges, not just disable them. Do this
             // while the parent still holds the token's adjustment handle; a
             // genuinely restricted child cannot necessarily reopen its token.
@@ -101,6 +124,9 @@ public static class RestrictedSetupProcess
             if (limited != IntPtr.Zero) CloseHandle(limited);
             if (original != IntPtr.Zero) CloseHandle(original);
             if (sidMemory != IntPtr.Zero) Marshal.FreeHGlobal(sidMemory);
+            if (userMemory != IntPtr.Zero) Marshal.FreeHGlobal(userMemory);
+            if (aclMemory != IntPtr.Zero) Marshal.FreeHGlobal(aclMemory);
+            if (infoMemory != IntPtr.Zero) Marshal.FreeHGlobal(infoMemory);
         }
     }
 }

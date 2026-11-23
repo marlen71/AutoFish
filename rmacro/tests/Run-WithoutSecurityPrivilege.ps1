@@ -87,18 +87,18 @@ try {
         if ([TestTokenPrivileges]::Contains($privilege)) { throw "Privilege was not removed: $privilege" }
     }
     $python = Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1
-    $ErrorActionPreference = 'Continue'
-    $global:LASTEXITCODE = $null
-    $output = & $python.Source $TestScript --stage $Stage --loader $Loader 2>&1
-    $succeeded = $?
-    $code = $LASTEXITCODE
-    $ErrorActionPreference = 'Stop'
-    $detail = $output | Out-String
+    $stdout = Join-Path $Stage ('.restricted-python-' + [guid]::NewGuid().ToString('N') + '.out')
+    $stderr = $stdout + '.err'
+    try {
+        $arguments = '"{0}" --stage "{1}" --loader "{2}"' -f $TestScript, $Stage, $Loader
+        $process = Start-Process -FilePath $python.Source -ArgumentList $arguments -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+        $code = $process.ExitCode
+        $detail = [IO.File]::ReadAllText($stdout) + [IO.File]::ReadAllText($stderr)
+    }
+    finally { Remove-Item -LiteralPath $stdout, $stderr -Force -ErrorAction SilentlyContinue }
     if ($detail.Length -gt 1800) { $detail = $detail.Substring($detail.Length - 1800) }
     if ($null -eq $code -or $code -ne 0 -or $detail -notmatch 'PASS: BAT owner setup accepted') {
-        $lastError = if ($Error.Count -gt 0) { ($Error[0] | Format-List * -Force | Out-String) } else { '' }
-        if ($lastError.Length -gt 1400) { $lastError = $lastError.Substring(0, 1400) }
-        throw "Restricted Python setup did not pass (command=$($python.Source), success=$succeeded, exit=$code): $detail $lastError"
+        throw "Restricted Python setup did not pass (command=$($python.Source), exit=$code): $detail"
     }
     $text = "PASS: Administrators SID disabled; security, backup, restore and take-ownership privileges absent.`r`n" + $detail
     if ($env:ETERNAL_RESTRICTED_TEST_LOG) {
