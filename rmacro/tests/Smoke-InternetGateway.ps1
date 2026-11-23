@@ -32,7 +32,7 @@ try {
     $oldUtf8 = $env:PYTHONUTF8; $env:PYTHONUTF8 = '1'
     try {
         $ErrorActionPreference = 'Continue'
-        $setupOutput = @('8.8.8.8', $source) | & (Join-Path $stage 'RUN-PYTHON.bat') internet-setup 2>&1
+        $setupOutput = & python (Join-Path $PSScriptRoot 'Smoke-OwnerSetup.py') --stage $stage --loader $source 2>&1
         $setupExit = $LASTEXITCODE
         $ErrorActionPreference = 'Stop'
         foreach ($line in $setupOutput) { Write-Host $line }
