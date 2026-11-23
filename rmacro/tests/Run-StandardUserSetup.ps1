@@ -19,6 +19,12 @@ public static class RestrictedSetupProcess
 {
     [StructLayout(LayoutKind.Sequential)]
     private struct SidAndAttributes { public IntPtr Sid; public uint Attributes; }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Luid { public uint LowPart; public int HighPart; }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LuidAndAttributes { public Luid Luid; public uint Attributes; }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct TokenPrivileges { public uint Count; public LuidAndAttributes Privilege; }
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct StartupInfo
     {
@@ -36,6 +42,8 @@ public static class RestrictedSetupProcess
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool GetExitCodeProcess(IntPtr handle, out uint code);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool TerminateProcess(IntPtr handle, uint code);
     [DllImport("advapi32.dll", SetLastError = true)] private static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern bool LookupPrivilegeValue(string system, string name, out Luid luid);
+    [DllImport("advapi32.dll", SetLastError = true)] private static extern bool AdjustTokenPrivileges(IntPtr token, bool disableAll, ref TokenPrivileges state, uint size, IntPtr previous, IntPtr returned);
     [DllImport("advapi32.dll", SetLastError = true)]
     private static extern bool CreateRestrictedToken(IntPtr existing, uint flags, uint disableCount, ref SidAndAttributes disabled,
         uint deleteCount, IntPtr deleted, uint restrictCount, IntPtr restricted, out IntPtr token);
@@ -61,6 +69,18 @@ public static class RestrictedSetupProcess
             SidAndAttributes denied = new SidAndAttributes { Sid = sidMemory, Attributes = 0 };
             if (!CreateRestrictedToken(original, 1u, 1u, ref denied, 0, IntPtr.Zero, 0, IntPtr.Zero, out limited))
                 throw new Win32Exception(Marshal.GetLastWin32Error());
+            // Delete the reported privileges, not just disable them. Do this
+            // while the parent still holds the token's adjustment handle; a
+            // genuinely restricted child cannot necessarily reopen its token.
+            foreach (string name in new string[] { "SeSecurityPrivilege", "SeRestorePrivilege", "SeBackupPrivilege", "SeTakeOwnershipPrivilege" })
+            {
+                Luid luid;
+                if (!LookupPrivilegeValue(null, name, out luid)) throw new Win32Exception(Marshal.GetLastWin32Error());
+                TokenPrivileges state = new TokenPrivileges { Count = 1, Privilege = new LuidAndAttributes { Luid = luid, Attributes = 4u } };
+                if (!AdjustTokenPrivileges(limited, false, ref state, 0, IntPtr.Zero, IntPtr.Zero)) throw new Win32Exception(Marshal.GetLastWin32Error());
+                int status = Marshal.GetLastWin32Error();
+                if (status != 0 && status != 1300) throw new Win32Exception(status);
+            }
             // Keep the parent's console association: CREATE_NO_WINDOW can
             // prevent USER32/console initialization for restricted tokens.
             StartupInfo startup = new StartupInfo { Size = Marshal.SizeOf(typeof(StartupInfo)), Flags = 1, ShowWindow = 0 };

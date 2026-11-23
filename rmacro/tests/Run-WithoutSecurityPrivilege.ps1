@@ -53,7 +53,9 @@ try {
         if ($principal.IsInRole($administrators)) { throw 'Administrators SID is still enabled in the child token.' }
     }
     $removed = @('SeSecurityPrivilege', 'SeRestorePrivilege', 'SeBackupPrivilege', 'SeTakeOwnershipPrivilege')
-    [TestTokenPrivileges]::Remove($removed)
+    # The restricted launcher already deleted these privileges on our token.
+    # A restricted child might lack the right to reopen its token for adjustment.
+    if (-not $RequireNonAdmin) { [TestTokenPrivileges]::Remove($removed) }
     $privileges = & (Join-Path $env:SystemRoot 'System32\whoami.exe') /priv /fo csv /nh
     if ($LASTEXITCODE -ne 0) { throw 'Could not inspect child-process token privileges.' }
     foreach ($privilege in $removed) {
