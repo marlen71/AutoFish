@@ -25,6 +25,33 @@ public static class TestTokenPrivileges
     [DllImport("advapi32.dll", SetLastError = true)] private static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern bool LookupPrivilegeValue(string system, string name, out Luid luid);
     [DllImport("advapi32.dll", SetLastError = true)] private static extern bool AdjustTokenPrivileges(IntPtr token, bool disableAll, ref TokenPrivileges state, uint size, IntPtr previous, IntPtr returned);
+    [DllImport("advapi32.dll", SetLastError = true)] private static extern bool GetTokenInformation(IntPtr token, int kind, IntPtr buffer, uint size, out uint needed);
+
+    public static bool Contains(string name)
+    {
+        Luid target;
+        if (!LookupPrivilegeValue(null, name, out target)) throw new Win32Exception(Marshal.GetLastWin32Error());
+        IntPtr token, buffer = IntPtr.Zero;
+        if (!OpenProcessToken(GetCurrentProcess(), 0x8u, out token)) throw new Win32Exception(Marshal.GetLastWin32Error());
+        try
+        {
+            uint needed;
+            GetTokenInformation(token, 3, IntPtr.Zero, 0, out needed); // TokenPrivileges
+            if (needed == 0) throw new Win32Exception(Marshal.GetLastWin32Error());
+            buffer = Marshal.AllocHGlobal((int)needed);
+            if (!GetTokenInformation(token, 3, buffer, needed, out needed)) throw new Win32Exception(Marshal.GetLastWin32Error());
+            int count = Marshal.ReadInt32(buffer);
+            int size = Marshal.SizeOf(typeof(LuidAndAttributes));
+            for (int i = 0; i < count; i++)
+            {
+                IntPtr item = IntPtr.Add(buffer, 4 + i * size);
+                LuidAndAttributes current = (LuidAndAttributes)Marshal.PtrToStructure(item, typeof(LuidAndAttributes));
+                if (current.Luid.LowPart == target.LowPart && current.Luid.HighPart == target.HighPart) return true;
+            }
+            return false;
+        }
+        finally { if (buffer != IntPtr.Zero) Marshal.FreeHGlobal(buffer); CloseHandle(token); }
+    }
 
     public static void Remove(string[] names)
     {
@@ -56,10 +83,8 @@ try {
     # The restricted launcher already deleted these privileges on our token.
     # A restricted child might lack the right to reopen its token for adjustment.
     if (-not $RequireNonAdmin) { [TestTokenPrivileges]::Remove($removed) }
-    $privileges = & (Join-Path $env:SystemRoot 'System32\whoami.exe') /priv /fo csv /nh
-    if ($LASTEXITCODE -ne 0) { throw 'Could not inspect child-process token privileges.' }
     foreach ($privilege in $removed) {
-        if (($privileges -join "`n") -match [regex]::Escape($privilege)) { throw "Privilege was not removed: $privilege" }
+        if ([TestTokenPrivileges]::Contains($privilege)) { throw "Privilege was not removed: $privilege" }
     }
     $ErrorActionPreference = 'Continue'
     $output = & python $TestScript --stage $Stage --loader $Loader 2>&1
