@@ -125,6 +125,21 @@ namespace RMacro
                 (octets[0] == 192 && octets[1] == 168);
         }
 
+        internal static string NetworkMessage(WebExceptionStatus status, Uri address)
+        {
+            if (status == WebExceptionStatus.TrustFailure || status == WebExceptionStatus.SecureChannelFailure)
+                return "Не удалось подтвердить защищённое соединение с сервером (TLS). Обратитесь к администратору.";
+            if (status == WebExceptionStatus.NameResolutionFailure || status == WebExceptionStatus.ProxyNameResolutionFailure)
+                return "Не удалось найти сервер (DNS). Проверьте сеть или обратитесь к администратору.";
+            if (address != null && address.Scheme == Uri.UriSchemeHttp && IsLanAddress(address) && !address.IsLoopback)
+                return "Сервер не отвечает. Эта копия настроена на локальную сеть; для доступа из другой сети попросите администратора прислать новую копию.";
+            if (status == WebExceptionStatus.Timeout)
+                return "Сервер не ответил вовремя. Проверьте сеть и попросите администратора проверить доступность сервера.";
+            if (status == WebExceptionStatus.ConnectFailure)
+                return "Соединение с сервером не установлено. Попросите администратора проверить запуск и доступность сервера.";
+            return "Не удалось связаться с сервером. Проверьте сеть или обратитесь к администратору.";
+        }
+
         private static string ReadBounded(Stream stream)
         {
             using (MemoryStream buffer = new MemoryStream())
@@ -193,7 +208,7 @@ namespace RMacro
                         throw new ApiException((int)response.StatusCode, code, message);
                     }
                 }
-                throw new ApiException(0, "NETWORK", "Не удалось связаться с сервером. Проверьте интернет или обратитесь к администратору.");
+                throw new ApiException(0, "NETWORK", NetworkMessage(ex.Status, baseUri));
             }
             catch (InvalidOperationException) { throw new ApiException(0, "BAD_RESPONSE", "Некорректный ответ сервера."); }
             catch (ArgumentException) { throw new ApiException(0, "BAD_RESPONSE", "Некорректный ответ сервера."); }

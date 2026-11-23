@@ -112,6 +112,11 @@ internal static class RMacroTestRunner
         try { new ApiClient("https://user:pass@example.com"); throw new Exception("Credentials in URL accepted"); }
         catch (ApiException ex) { Check(ex.Code == "BAD_ADDRESS", "URL credentials must be rejected"); }
         Check(new ApiClient("https://example.com").BaseUrl == "https://example.com", "HTTPS address rejected");
+        string lanMessage = ApiClient.NetworkMessage(System.Net.WebExceptionStatus.Timeout, new Uri("http://192.168.0.105:8765"));
+        Check(lanMessage.Contains("локальную сеть") && !lanMessage.Contains("192.168"), "LAN failure must explain remote access without showing the address");
+        string tlsMessage = ApiClient.NetworkMessage(System.Net.WebExceptionStatus.TrustFailure, new Uri("https://8.8.8.8:8765"));
+        Check(tlsMessage.Contains("TLS") && !tlsMessage.Contains("8.8.8.8"), "TLS failure must not expose the configured address");
+        Check(ApiClient.NetworkMessage(System.Net.WebExceptionStatus.NameResolutionFailure, new Uri("https://example.com")).Contains("DNS"), "DNS failure classification");
         Trace("API login");
         string token;
         Profile profile = api.Login(User, UserPassword, Device, out token);

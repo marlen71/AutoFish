@@ -221,7 +221,12 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.request("/api/me", token=token, device="invalid")[0], 401)
         self.assertEqual(self.login(password="bad\ud800password")[0], 401)
         self.assertEqual(self.admin_action(uid, "password", {"password":"bad\ud800password"})[0], 400)
-        self.assertEqual(self.request("/api/health", extra_headers={"Host": "attacker.example"})[0], 400)
+        status, _, headers = self.request("/api/health", extra_headers={"Host": "attacker.example"})
+        self.assertEqual(status, 400)
+        self.assertEqual(headers.get("Connection", "").lower(), "close")
+        status, _, headers = self.login(password="invalid-password")
+        self.assertEqual(status, 401)
+        self.assertEqual(headers.get("Connection", "").lower(), "close")
         self.assertNotIn("Access-Control-Allow-Origin", self.request("/api/health")[2])
         with self.db.connect() as db:
             row = db.execute("SELECT password_hash,salt,rounds FROM users WHERE uid=?", (uid,)).fetchone()
@@ -233,6 +238,29 @@ class ServerTests(unittest.TestCase):
         self.assertTrue(srv.loopback_bind("127.0.0.1"))
         self.assertFalse(srv.loopback_bind("0.0.0.0"))
         self.assertFalse(srv.loopback_bind("192.168.1.5"))
+
+    def test_gateway_rate_limit_uses_only_explicitly_trusted_loopback_header(self):
+        # Normal LAN/server mode ignores all client-supplied proxy headers.
+        self.assertFalse(self.httpd.trusted_local_gateway)
+        self.request("/api/login", {"username": "missing", "password": "bad", "device": self.device_a},
+                     extra_headers={"X-EternalCore-Client-IP": "8.8.8.8"})
+        self.assertIn(("user", "127.0.0.1"), self.httpd.limiter.failures)
+        self.assertNotIn(("user", "8.8.8.8"), self.httpd.limiter.failures)
+        # In gateway mode, only its overwritten, single valid IP is accepted.
+        self.httpd.trusted_local_gateway = True
+        self.request("/api/login", {"username": "missing", "password": "bad", "device": self.device_a},
+                     extra_headers={"X-EternalCore-Client-IP": "8.8.8.8"})
+        self.request("/api/login", {"username": "missing", "password": "bad", "device": self.device_a},
+                     extra_headers={"X-EternalCore-Client-IP": "1.1.1.1"})
+        self.request("/api/login", {"username": "missing", "password": "bad", "device": self.device_a},
+                     extra_headers={"X-EternalCore-Client-IP": "8.8.8.8, 1.1.1.1"})
+        self.assertIn(("user", "8.8.8.8"), self.httpd.limiter.failures)
+        self.assertIn(("user", "1.1.1.1"), self.httpd.limiter.failures)
+        self.assertEqual(len(self.httpd.limiter.failures[("user", "127.0.0.1")]), 2)
+        with self.assertRaises(ValueError):
+            srv.Server(("0.0.0.0", 0), self.db, trusted_local_gateway=True)
+        with self.assertRaises(ValueError):
+            srv.Server(("192.168.0.105", 0), self.db, trusted_local_gateway=True)
 
     def test_expired_tokens_and_subscriptions(self):
         uid = self.create()

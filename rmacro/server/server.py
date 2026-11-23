@@ -754,10 +754,13 @@ class Server(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, address, database, allowed_hosts=None, lan_http_only=False):
+    def __init__(self, address, database, allowed_hosts=None, lan_http_only=False, trusted_local_gateway=False):
+        if trusted_local_gateway and not loopback_bind(address[0]):
+            raise ValueError("Доверенный шлюз разрешён только при привязке сервера к localhost.")
         self.database = database
         self.limiter = RateLimiter()
         self.lan_http_only = lan_http_only
+        self.trusted_local_gateway = trusted_local_gateway
         self.allowed_hosts = {s.lower().rstrip(".") for s in (allowed_hosts or ("localhost", "127.0.0.1", "::1"))}
         super().__init__(address, Handler)
 
@@ -784,6 +787,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Content-Security-Policy", "default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+        # Rejections close the connection to discard unread request bytes.
+        # Advertise that decision so an HTTP/1.1 proxy cannot reuse a socket
+        # we are about to close and turn the next POST into a sporadic 502.
+        if self.close_connection:
+            self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(content)
 
@@ -819,6 +827,20 @@ class Handler(BaseHTTPRequestHandler):
     def authenticate(self, admin=False):
         token = self.token()
         return self.server.database.authenticate(token, self.headers.get("X-RMacro-Device"), admin)
+
+    def client_ip_for_limit(self):
+        # Only the optional localhost-only gateway is trusted to replace this
+        # header with the actual TCP peer; normal requests ignore it entirely.
+        # Anyone who can send directly to localhost is part of the server's
+        # local trust boundary. Do not enable this for an arbitrary proxy.
+        if self.server.trusted_local_gateway and loopback_bind(self.client_address[0]):
+            values = self.headers.get_all("X-EternalCore-Client-IP", [])
+            if len(values) == 1:
+                try:
+                    return str(ipaddress.ip_address(values[0].strip()))
+                except ValueError:
+                    pass
+        return self.client_address[0]
 
     def check_host(self):
         raw_host = self.headers.get("Host", "")
@@ -870,7 +892,7 @@ class Handler(BaseHTTPRequestHandler):
             body = self.json_body()
             if path in ("/api/login", "/api/admin/login"):
                 admin = path.startswith("/api/admin/")
-                key = ("admin" if admin else "user", self.client_address[0])
+                key = ("admin" if admin else "user", self.client_ip_for_limit())
                 self.server.limiter.check(key)
                 try:
                     result = db.login(body.get("username"), body.get("password"), body.get("device"), admin)
@@ -1055,6 +1077,8 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("init-admin", help="Create the first administrator interactively")
     commands.add_parser("reset-admin", help="Reset an administrator password locally")
+    commands.add_parser("internet-setup", help="Configure the optional HTTPS internet gateway and client")
+    commands.add_parser("internet-serve", help="Run the localhost server behind the HTTPS internet gateway")
     configure = commands.add_parser("configure-client", help="Create a client EXE with the server URL embedded")
     configure.add_argument("--source", help="Original EternalCore.exe; prompted if omitted")
     configure.add_argument("--output", help="New EternalCore.exe path; prompted if omitted")
@@ -1079,6 +1103,11 @@ def main(argv=None):
             print("Замените EternalCore.exe в копии клиентского архива этим файлом, оставив аварийные BAT рядом.")
             print("Адрес не отображается в лоадере, но может быть обнаружен в клиенте или сети.")
             return 0
+        if args.command in ("internet-setup", "internet-serve"):
+            import internet_gateway
+            if args.command == "internet-setup":
+                return internet_gateway.setup(configure_loader)
+            return internet_gateway.serve(Database, Server, args.db)
         database = Database(args.db)
         if args.command in ("init-admin", "reset-admin"):
             username = input("Логин администратора (латиница): ").strip()
