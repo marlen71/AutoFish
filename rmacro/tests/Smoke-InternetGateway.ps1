@@ -54,8 +54,12 @@ try {
         '/main:InternetClientRunner', "/out:$runner", "/reference:$([System.Web.Script.Serialization.JavaScriptSerializer].Assembly.Location)",
         "/reference:$([System.Security.Cryptography.ProtectedData].Assembly.Location)",
         (Join-Path $root 'rmacro\client\ClientCore.cs'), (Join-Path $root 'rmacro\tests\InternetClientRunner.cs'))
-    & $csc @compile
-    if ($LASTEXITCODE -ne 0) { throw 'Windows HTTPS client test compilation failed.' }
+    $ErrorActionPreference = 'Continue'
+    $compilerOutput = & $csc @compile 2>&1
+    $compilerExit = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+    foreach ($line in $compilerOutput) { Write-Host $line }
+    if ($compilerExit -ne 0) { throw "Windows HTTPS client test compilation failed: $($compilerOutput | Out-String)" }
     # The fixture adds a self-signed root only to this CI user's store, tests
     # the unmodified client, and removes that exact root in a finally block.
     $ErrorActionPreference = 'Continue'
