@@ -61,8 +61,8 @@ try {
     $ErrorActionPreference = 'Stop'
     foreach ($line in $compilerOutput) { Write-Host $line }
     if ($compilerExit -ne 0) { throw "Windows HTTPS client test compilation failed: $($compilerOutput | Out-String)" }
-    # The fixture adds a self-signed root only to this CI user's store, tests
-    # the unmodified client, and removes that exact root in a finally block.
+    # Only on a disposable GitHub-hosted VM: temporarily add the self-signed
+    # fixture to the machine root store, test, and remove the exact certificate.
     $ErrorActionPreference = 'Continue'
     $output = & python (Join-Path $PSScriptRoot 'Smoke-InternetGateway.py') --caddy $caddy --openssl $openssl --dotnet-runner $runner --loader (Join-Path $root 'dist\EternalCore.exe') 2>&1
     $testExit = $LASTEXITCODE

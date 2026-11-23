@@ -2,8 +2,9 @@
 
 Requires Caddy and OpenSSL supplied by the test runner. The certificate is
 self-signed for this local fixture only; production always uses trusted ACME.
-With --dotnet-runner on Windows, temporarily trust the test cert in the CI
-user's root store, run the real .NET API client, then remove it in finally.
+With --dotnet-runner on a disposable GitHub Windows runner, temporarily trust
+the test cert in the machine root store, run the unmodified .NET API client,
+and remove that exact certificate in finally. Never run this on an owner PC.
 """
 import argparse
 import contextlib
@@ -57,6 +58,9 @@ def request(opener, base, path, body=None, headers=None):
 
 
 def check_windows_client(runner, base, cert, openssl, directory, configured):
+    if (os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_OS") != "Windows"
+            or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted"):
+        raise RuntimeError("The machine-wide test certificate may be used only on disposable GitHub Windows runners.")
     print("Checking .NET TLS validation with an untrusted fixture certificate...", flush=True)
     run([runner, base, "untrusted", str(configured)])
     der = directory / "fixture.cer"
@@ -64,16 +68,26 @@ def check_windows_client(runner, base, cert, openssl, directory, configured):
     ps1 = directory / "temporary-trust.ps1"
     ps1.write_text(r'''param([string]$CertFile, [string]$Runner, [string]$Base, [string]$Configured)
 $ErrorActionPreference = 'Stop'
-$item = $null
+# Only the disposable GitHub-hosted VM may trust this uniquely generated cert.
+# CurrentUser Root requires a UI prompt on hosted Windows runners.
+$candidate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($CertFile)
+$thumb = $candidate.Thumbprint
+$path = 'Cert:\LocalMachine\Root\' + $thumb
+if (Test-Path -LiteralPath $path) { throw 'Unexpected pre-existing fixture certificate; refusing to remove it.' }
+$attempted = $false
 $testExit = 1
 try {
-    $item = Import-Certificate -FilePath $CertFile -CertStoreLocation 'Cert:\CurrentUser\Root'
-    if (-not $item) { throw 'Could not add temporary CI test certificate.' }
+    $attempted = $true
+    $item = Import-Certificate -FilePath $CertFile -CertStoreLocation 'Cert:\LocalMachine\Root' -ErrorAction Stop
+    if (-not $item -or $item.Thumbprint -ne $thumb -or -not (Test-Path -LiteralPath $path)) {
+        throw 'Could not add the exact temporary CI test certificate.'
+    }
     & $Runner $Base 'trusted' $Configured
     $testExit = $LASTEXITCODE
 }
 finally {
-    if ($item) { Remove-Item -LiteralPath ('Cert:\CurrentUser\Root\' + $item.Thumbprint) -Force }
+    if ($attempted -and (Test-Path -LiteralPath $path)) { Remove-Item -LiteralPath $path -Force -ErrorAction Stop }
+    if (Test-Path -LiteralPath $path) { throw 'Temporary CI test certificate cleanup failed.' }
 }
 exit $testExit
 ''', encoding="utf-8")
