@@ -27,7 +27,7 @@ jobs:
         run: |
           try {
             $ErrorActionPreference = 'Continue'
-            $log = & gh api "repos/$env:GITHUB_REPOSITORY/actions/jobs/137981169148/logs" 2>&1
+            $log = & gh api --allow-escape-sequences "repos/$env:GITHUB_REPOSITORY/actions/jobs/137981169148/logs" 2>&1
             $result = $LASTEXITCODE
             $ErrorActionPreference = 'Stop'
             if ($result -ne 0) {
@@ -36,7 +36,8 @@ jobs:
             }
             $lines = @($log | Where-Object { $_ -match 'Traceback \(most recent|AssertionError|URLError|TimeoutError|ConnectionResetError|RemoteDisconnected|Smoke-InternetGateway\.py.*, line' } | Select-Object -Last 12)
             if ($lines.Count -eq 0) { throw "No Python failure found in prior CI job log ($($log.Count) lines)." }
-            $detail = ($lines -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            $plain = [regex]::Replace(($lines -join "`n"), '\x1B\[[0-?]*[ -/]*[@-~]', '')
+            $detail = $plain.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
             if ($detail.Length -gt 5000) { $detail = $detail.Substring(0, 5000) }
             Write-Output "::notice title=Prior HTTPS fixture error::$detail"
           }
