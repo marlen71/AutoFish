@@ -86,15 +86,19 @@ try {
     foreach ($privilege in $removed) {
         if ([TestTokenPrivileges]::Contains($privilege)) { throw "Privilege was not removed: $privilege" }
     }
+    $python = Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1
     $ErrorActionPreference = 'Continue'
     $global:LASTEXITCODE = $null
-    $output = & python $TestScript --stage $Stage --loader $Loader 2>&1
+    $output = & $python.Source $TestScript --stage $Stage --loader $Loader 2>&1
+    $succeeded = $?
     $code = $LASTEXITCODE
     $ErrorActionPreference = 'Stop'
     $detail = $output | Out-String
     if ($detail.Length -gt 1800) { $detail = $detail.Substring($detail.Length - 1800) }
     if ($null -eq $code -or $code -ne 0 -or $detail -notmatch 'PASS: BAT owner setup accepted') {
-        throw "Restricted Python setup did not pass (exit=$code): $detail"
+        $lastError = if ($Error.Count -gt 0) { ($Error[0] | Format-List * -Force | Out-String) } else { '' }
+        if ($lastError.Length -gt 1400) { $lastError = $lastError.Substring(0, 1400) }
+        throw "Restricted Python setup did not pass (command=$($python.Source), success=$succeeded, exit=$code): $detail $lastError"
     }
     $text = "PASS: Administrators SID disabled; security, backup, restore and take-ownership privileges absent.`r`n" + $detail
     if ($env:ETERNAL_RESTRICTED_TEST_LOG) {
