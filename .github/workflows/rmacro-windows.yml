@@ -27,7 +27,7 @@ jobs:
         run: |
           try {
             $ErrorActionPreference = 'Continue'
-            $log = & gh api --allow-escape-sequences "repos/$env:GITHUB_REPOSITORY/actions/jobs/137981169148/logs" 2>&1
+            $log = & gh api --allow-escape-sequences "repos/$env:GITHUB_REPOSITORY/actions/jobs/137988399217/logs" 2>&1
             $result = $LASTEXITCODE
             $ErrorActionPreference = 'Stop'
             if ($result -ne 0) {

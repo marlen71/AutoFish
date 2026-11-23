@@ -8,6 +8,7 @@ and remove that exact certificate in finally. Never run this on an owner PC.
 """
 import argparse
 import contextlib
+import http.client
 import importlib.util
 import json
 import os
@@ -43,13 +44,13 @@ def run(command, **kwargs):
     return subprocess.run(command, check=True, **kwargs)
 
 
-def request(opener, base, path, body=None, headers=None):
+def request(opener, base, path, body=None, headers=None, method=None):
     data = None
     headers = dict(headers or {})
     if body is not None:
         data = json.dumps(body).encode("utf-8")
         headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(base + path, data=data, headers=headers)
+    req = urllib.request.Request(base + path, data=data, headers=headers, method=method)
     try:
         with opener.open(req, timeout=5) as response:
             return response.status, response.read()
@@ -128,6 +129,13 @@ def main():
         db.init_admin("fixture_admin", "fixture-admin-password")
         user = db.create_user("fixture_admin", "fixture_user", "fixture-user-password")
         db.change_user("fixture_admin", user["uid"], "grant", {"product": "rmfish", "seconds": 3600})
+        forwarded_admin_login = threading.Event()
+        class FixtureHandler(srv.Handler):
+            def handle_request(self):
+                if self.path.split("?", 1)[0] == "/api/admin/login":
+                    forwarded_admin_login.set()
+                return super().handle_request()
+        srv.Handler = FixtureHandler
         httpd = srv.Server(("127.0.0.1", 0), db, ["127.0.0.1", "localhost"],
                            lan_http_only=True, trusted_local_gateway=True)
         thread = threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.2}, daemon=True)
@@ -189,8 +197,21 @@ def main():
                              "/%61dmin/", "/api/%61dmin/users", "/api/me/../admin/users", "/api/me%2f..%2fadmin/users"):
                     status, _ = request(opener, base, path)
                     assert status == 404, (path, status)
-                status, _ = request(opener, base, "/api/admin/login", {"username": "x", "password": "y"})
-                assert status == 404, ("public admin login", status)
+                # A blocked POST with no body must receive 404. For a blocked
+                # POST *with* a body, Windows sometimes reports a reset while
+                # the gateway rejects the unread bytes; a closed connection is
+                # also a denial, but never allow it to reach the backend.
+                status, _ = request(opener, base, "/api/admin/login", method="POST")
+                assert status == 404, ("public admin login without body", status)
+                try:
+                    status, _ = request(opener, base, "/api/admin/login", {"username": "x", "password": "y"})
+                except (http.client.RemoteDisconnected, ConnectionResetError):
+                    print("Blocked admin POST was closed while discarding its body.", flush=True)
+                else:
+                    assert status == 404, ("public admin login with body", status)
+                status, data = request(opener, base, "/api/health")
+                assert status == 200 and json.loads(data)["ok"], ("gateway remains healthy", status)
+                assert not forwarded_admin_login.wait(0.5), "The gateway forwarded public admin login."
                 local = "http://127.0.0.1:%d" % httpd.server_address[1]
                 status, _ = request(plain, local, "/admin/")
                 assert status == 200, ("local admin", status)
