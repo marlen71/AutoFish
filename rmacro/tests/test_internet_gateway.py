@@ -214,7 +214,7 @@ class InternetGatewayTests(unittest.TestCase):
         command = popen.call_args.args[0]
         self.assertEqual(command[:2], [str(self.state / "bin" / "caddy.exe"), "run"])
         self.assertIn(str(gateway.CONFIG), command)
-        self.assertEqual(popen.call_args.kwargs["env"]["XDG_DATA_HOME"], str(self.state / "caddy-data"))
+        self.assertEqual(Path(popen.call_args.kwargs["env"]["XDG_DATA_HOME"]).resolve(), (self.state / "caddy-data").resolve())
         self.assertIn("https://8.8.8.8:8765", gateway.CONFIG.read_text(encoding="utf-8"))
 
     def test_cancel_or_bad_client_does_not_change_previous_settings(self):
