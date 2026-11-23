@@ -5,6 +5,7 @@ Windows or operating-system trust store. This does not test a real router.
 """
 import argparse
 import contextlib
+import datetime
 import hashlib
 import http.client
 import http.server
@@ -76,9 +77,32 @@ def fake_tls_server(openssl, directory, ca_dir, mode):
                    "subjectAltName=IP:127.0.0.1\nextendedKeyUsage=" + eku + "\n", encoding="ascii")
     run([openssl, "req", "-new", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=127.0.0.1",
          "-keyout", str(key), "-out", str(csr)], capture_output=True)
-    run([openssl, "x509", "-req", "-in", str(csr), "-CA", str(ca_dir / "intermediate.crt"),
-         "-CAkey", str(ca_dir / "intermediate.key"), "-set_serial", "1234", "-days",
-         "-1" if mode == "expired" else "1", "-sha256", "-extfile", str(ext), "-out", str(cert)], capture_output=True)
+    if mode == "expired":
+        # OpenSSL builds differ on whether `x509 -days -1` is allowed. The
+        # `ca` command supports explicit validity dates on both platforms.
+        (folder / "index.txt").write_text("", encoding="ascii")
+        (folder / "serial").write_text("01\n", encoding="ascii")
+        config = folder / "ca.cnf"
+        config.write_text("[ca]\ndefault_ca=local\n[local]\n" +
+                          "database=\"" + (folder / "index.txt").as_posix() + "\"\n" +
+                          "serial=\"" + (folder / "serial").as_posix() + "\"\n" +
+                          "new_certs_dir=\"" + folder.as_posix() + "\"\n" +
+                          "default_md=sha256\ndefault_days=1\npolicy=policy\n" +
+                          "[policy]\ncommonName=supplied\n[leaf]\n" + ext.read_text(encoding="ascii"), encoding="ascii")
+        now = datetime.datetime.now(datetime.timezone.utc)
+        start = (now - datetime.timedelta(hours=2)).strftime("%Y%m%d%H%M%SZ")
+        end = (now - datetime.timedelta(hours=1)).strftime("%Y%m%d%H%M%SZ")
+        command = [openssl, "ca", "-config", str(config), "-batch", "-notext", "-extensions", "leaf",
+                   "-cert", str(ca_dir / "intermediate.crt"), "-keyfile", str(ca_dir / "intermediate.key"),
+                   "-in", str(csr), "-startdate", start, "-enddate", end, "-out", str(cert)]
+    else:
+        command = [openssl, "x509", "-req", "-in", str(csr), "-CA", str(ca_dir / "intermediate.crt"),
+                   "-CAkey", str(ca_dir / "intermediate.key"), "-set_serial", "1234", "-days", "1",
+                   "-sha256", "-extfile", str(ext), "-out", str(cert)]
+    try:
+        run(command, capture_output=True)
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError("Could not generate the invalid TLS fixture: " + exc.stderr.decode(errors="replace")) from exc
     chain = folder / "chain.pem"
     chain.write_bytes(cert.read_bytes() + (ca_dir / "intermediate.crt").read_bytes())
     accepted = threading.Event()
