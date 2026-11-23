@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $source = Join-Path $root 'dist\EternalCore.exe'
 $directory = Join-Path ([IO.Path]::GetTempPath()) ('eternal-updater-' + [Guid]::NewGuid().ToString('N'))
@@ -67,7 +67,7 @@ try {
     foreach ($name in @('first', 'second')) {
         $key = Join-Path $directory "$name.key"; $pem = Join-Path $directory "$name.crt"; $der = Join-Path $directory "$name.der"
         $ErrorActionPreference = 'Continue'
-        & $openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 1 -keyout $key -out $pem -subj "/CN=Eternal updater $name" -addext 'basicConstraints=critical,CA:TRUE' -addext 'keyUsage=critical,keyCertSign,cRLSign' 2>&1 | Out-Null
+        & $openssl req '-x509' -newkey 'rsa:2048' '-sha256' -nodes -days 1 -keyout $key -out $pem -subj "/CN=Eternal updater $name" -addext 'basicConstraints=critical,CA:TRUE' -addext 'keyUsage=critical,keyCertSign,cRLSign' 2>&1 | Out-Null
         $generation = $LASTEXITCODE
         & $openssl x509 -in $pem -outform DER -out $der 2>&1 | Out-Null
         $conversion = $LASTEXITCODE
