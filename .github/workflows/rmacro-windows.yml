@@ -65,7 +65,14 @@ jobs:
       - name: Test atomic loader update and rollback
         timeout-minutes: 3
         shell: powershell
-        run: .\rmacro\tests\Smoke-Updater.ps1
+        run: |
+          try { .\rmacro\tests\Smoke-Updater.ps1 }
+          catch {
+            $detail = ($_ | Format-List * -Force | Out-String).Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            if ($detail.Length -gt 3000) { $detail = $detail.Substring(0, 3000) }
+            Write-Output "::error title=Updater test wrapper::$detail"
+            throw
+          }
 
       - name: Test real GitHub metadata and loader download without installation
         timeout-minutes: 3
