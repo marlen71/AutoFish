@@ -21,6 +21,12 @@ try {
     # Exercise spaces, apostrophes and Unicode in the server path. Seed an
     # existing v1 gateway and a protected DACL with an unwanted explicit entry.
     $stage = Join-Path $directory ("Owner's server " + [char]0x0422 + [char]0x0435 + [char]0x0441 + [char]0x0442)
+    $stageItem = New-Item -ItemType Directory -Path $stage -Force
+    $stageAcl = $stageItem.GetAccessControl([Security.AccessControl.AccessControlSections]::Access)
+    $userSid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    $stageInheritance = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit
+    $stageAcl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($userSid, [Security.AccessControl.FileSystemRights]::FullControl, $stageInheritance, [Security.AccessControl.PropagationFlags]::None, [Security.AccessControl.AccessControlType]::Allow))
+    $stageItem.SetAccessControl($stageAcl)
     $state = Join-Path $stage 'data\internet-gateway'
     New-Item -ItemType Directory -Path $state -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $state 'settings.json'), '{"version":1,"ipv4":"8.8.8.8"}', [Text.UTF8Encoding]::new($false))
@@ -62,11 +68,11 @@ try {
     try {
         $caPath = Join-Path $state 'caddy-data\caddy\pki\authorities\local'
         $initialHashes = @{}
-        # Both the first migration and repeated setup must work with the user's
-        # missing SeSecurityPrivilege. Also remove backup/restore/owner powers.
+        # Test first migration and repeated setup with Administrators disabled
+        # and without security, backup, restore or ownership privileges.
         for ($attempt = 1; $attempt -le 2; $attempt++) {
             $ErrorActionPreference = 'Continue'
-            $setupOutput = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Run-WithoutSecurityPrivilege.ps1') -TestScript (Join-Path $PSScriptRoot 'Smoke-OwnerSetup.py') -Stage $stage -Loader $source 2>&1
+            $setupOutput = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Run-StandardUserSetup.ps1') -TestScript (Join-Path $PSScriptRoot 'Smoke-OwnerSetup.py') -Stage $stage -Loader $source 2>&1
             $setupExit = $LASTEXITCODE
             $ErrorActionPreference = 'Stop'
             foreach ($line in $setupOutput) { Write-Host $line }
@@ -120,7 +126,7 @@ try {
             if ($match.Count -eq 0) { throw "Missing full-control rule for $sid on $($item.FullName)" }
         }
     }
-    Write-Host 'PASS: every private file and folder has protected, restricted full-control DACLs.'
+    Write-Output '::notice title=Windows ACL regression::PASS: first and repeated setup with Administrators SID disabled and without security/backup/restore/take-ownership privileges; all keys retained; existing SACL, owner, group and database preserved; every private DACL checked. Path includes spaces, apostrophe and Unicode.'
     Add-Type -AssemblyName System.Web.Extensions
     Add-Type -AssemblyName System.Security
     Add-Type -AssemblyName System.Windows.Forms

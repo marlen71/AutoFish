@@ -256,9 +256,11 @@ jobs:
           $tag = 'eternal-core-v1.3.0-server-acl-fix'
           $json = & gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100"
           if ($LASTEXITCODE -ne 0) { throw 'Could not list releases.' }
-          $release = $json | ConvertFrom-Json | Where-Object { $_.tag_name -eq $tag } | Select-Object -First 1
-          if (-not $release -or -not $release.draft -or $release.prerelease -or $release.target_commitish -ne $env:GITHUB_REF_NAME) {
-            Write-Output "::notice title=Server hotfix upload::No matching branch draft; skipping $tag."
+          $releases = $json | ConvertFrom-Json
+          $release = $releases | Where-Object { $_.tag_name -eq $tag } | Select-Object -First 1
+          if (-not $release) { Write-Output "::notice title=Server hotfix upload::No draft for $tag; skipping."; exit 0 }
+          if (-not $release.draft -or $release.prerelease -or $release.target_commitish -ne $env:GITHUB_REF_NAME) {
+            Write-Output "::notice title=Server hotfix upload::Not a matching branch draft; skipping $tag (draft=$($release.draft), target=$($release.target_commitish), ref=$env:GITHUB_REF_NAME)."
             exit 0
           }
           $remote = & git ls-remote origin "refs/heads/$env:GITHUB_REF_NAME"

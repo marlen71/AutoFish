@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$TestScript,
     [Parameter(Mandatory = $true)][string]$Stage,
-    [Parameter(Mandatory = $true)][string]$Loader
+    [Parameter(Mandatory = $true)][string]$Loader,
+    [switch]$RequireNonAdmin
 )
 $ErrorActionPreference = 'Stop'
 # Run this script in a CHILD process. Removing privileges is irreversible for
@@ -45,16 +46,33 @@ public static class TestTokenPrivileges
     }
 }
 '@
-$removed = @('SeSecurityPrivilege', 'SeRestorePrivilege', 'SeBackupPrivilege', 'SeTakeOwnershipPrivilege')
-[TestTokenPrivileges]::Remove($removed)
-$privileges = & (Join-Path $env:SystemRoot 'System32\whoami.exe') /priv /fo csv /nh
-if ($LASTEXITCODE -ne 0) { throw 'Could not inspect child-process token privileges.' }
-foreach ($privilege in $removed) {
-    if (($privileges -join "`n") -match [regex]::Escape($privilege)) { throw "Privilege was not removed: $privilege" }
+try {
+    if ($RequireNonAdmin) {
+        $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+        $administrators = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
+        if ($principal.IsInRole($administrators)) { throw 'Administrators SID is still enabled in the child token.' }
+    }
+    $removed = @('SeSecurityPrivilege', 'SeRestorePrivilege', 'SeBackupPrivilege', 'SeTakeOwnershipPrivilege')
+    [TestTokenPrivileges]::Remove($removed)
+    $privileges = & (Join-Path $env:SystemRoot 'System32\whoami.exe') /priv /fo csv /nh
+    if ($LASTEXITCODE -ne 0) { throw 'Could not inspect child-process token privileges.' }
+    foreach ($privilege in $removed) {
+        if (($privileges -join "`n") -match [regex]::Escape($privilege)) { throw "Privilege was not removed: $privilege" }
+    }
+    $ErrorActionPreference = 'Continue'
+    $output = & python $TestScript --stage $Stage --loader $Loader 2>&1
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+    $text = "PASS: Administrators SID disabled; security, backup, restore and take-ownership privileges absent.`r`n" + ($output | Out-String)
+    if ($env:ETERNAL_RESTRICTED_TEST_LOG) {
+        [IO.File]::WriteAllText($env:ETERNAL_RESTRICTED_TEST_LOG, $text, [Text.UTF8Encoding]::new($true))
+    } else { Write-Host $text }
+    exit $code
 }
-Write-Host 'PASS: child and descendants lack security, backup, restore and take-ownership privileges.'
-$ErrorActionPreference = 'Continue'
-& python $TestScript --stage $Stage --loader $Loader
-$code = $LASTEXITCODE
-$ErrorActionPreference = 'Stop'
-exit $code
+catch {
+    $text = $_ | Format-List * -Force | Out-String
+    if ($env:ETERNAL_RESTRICTED_TEST_LOG) {
+        [IO.File]::WriteAllText($env:ETERNAL_RESTRICTED_TEST_LOG, $text, [Text.UTF8Encoding]::new($true))
+    } else { Write-Host $text }
+    exit 1
+}
