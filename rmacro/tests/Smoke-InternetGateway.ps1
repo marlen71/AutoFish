@@ -63,13 +63,18 @@ try {
     if ($compilerExit -ne 0) { throw "Windows HTTPS client test compilation failed: $($compilerOutput | Out-String)" }
     # Only on a disposable GitHub-hosted VM: temporarily add the self-signed
     # fixture to the machine root store, test, and remove the exact certificate.
-    $ErrorActionPreference = 'Continue'
-    $output = & python (Join-Path $PSScriptRoot 'Smoke-InternetGateway.py') --caddy $caddy --openssl $openssl --dotnet-runner $runner --loader (Join-Path $root 'dist\EternalCore.exe') 2>&1
-    $testExit = $LASTEXITCODE
-    $ErrorActionPreference = 'Stop'
-    foreach ($line in $output) { Write-Host $line }
-    if ($testExit -ne 0) { throw "HTTPS gateway integration failed: $testExit. Output: $($output | Out-String)" }
-    Write-Output '::notice title=Internet gateway::PASS: trusted/untrusted IP TLS in the Windows client, local fixture login, admin isolation and spoof-resistant rate limiting; real ACME and external router not tested.'
+    # Exercise repeated independent fixtures; a single successful connection
+    # would not expose intermittent proxy/backend or port-allocation failures.
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        Write-Host "HTTPS gateway fixture $attempt of 5"
+        $ErrorActionPreference = 'Continue'
+        $output = & python (Join-Path $PSScriptRoot 'Smoke-InternetGateway.py') --caddy $caddy --openssl $openssl --dotnet-runner $runner --loader (Join-Path $root 'dist\EternalCore.exe') 2>&1
+        $testExit = $LASTEXITCODE
+        $ErrorActionPreference = 'Stop'
+        foreach ($line in $output) { Write-Host $line }
+        if ($testExit -ne 0) { throw "HTTPS gateway fixture $attempt failed: $testExit. Output: $($output | Out-String)" }
+    }
+    Write-Output '::notice title=Internet gateway::PASS: 5 independent fixtures, trusted/untrusted IP TLS in the Windows client, local login, admin isolation and spoof-resistant rate limiting; real ACME and external router not tested.'
 }
 catch {
     $detail = ($_ | Format-List * -Force | Out-String).Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
