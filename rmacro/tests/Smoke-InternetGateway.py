@@ -258,7 +258,10 @@ def main():
                     wrong = directory / "wrong" / "EternalCore.exe"
                     srv.configure_loader(args.loader, configured, base, root)
                     srv.configure_loader(args.loader, wrong, base, other_root)
-                    print("Checking actual Windows API client, private trust and update staging...", flush=True)
+                    configured_bytes = configured.read_bytes()
+                    assert root_key.read_bytes() not in configured_bytes, "Private CA key leaked into the client"
+                    assert (ca_dir / "intermediate.key").read_bytes() not in configured_bytes, "Intermediate key leaked"
+                    print("Checking actual Windows API client, private trust, GUI and update staging...", flush=True)
                     run([args.dotnet_runner, base, "trusted", str(configured), str(wrong), args.loader])
                     wrong_name = "https://127.0.0.2:%d" % port
                     named = directory / "wrong-name" / "EternalCore.exe"

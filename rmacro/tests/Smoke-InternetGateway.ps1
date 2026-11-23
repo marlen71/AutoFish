@@ -70,13 +70,14 @@ try {
     Add-Type -AssemblyName System.Web.Extensions
     Add-Type -AssemblyName System.Security
     Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
     $csc = Join-Path ([System.Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()) 'csc.exe'
     $runner = Join-Path $directory 'InternetClientRunner.exe'
     $compile = @('/nologo', '/noconfig', '/target:exe', '/platform:anycpu', '/utf8output', '/warnaserror+',
         '/main:InternetClientRunner', "/out:$runner", "/reference:$([System.Diagnostics.Process].Assembly.Location)",
         "/reference:$([System.Linq.Enumerable].Assembly.Location)", "/reference:$([System.Web.Script.Serialization.JavaScriptSerializer].Assembly.Location)",
         "/reference:$([System.Security.Cryptography.ProtectedData].Assembly.Location)",
-        "/reference:$([System.Windows.Forms.Form].Assembly.Location)",
+        "/reference:$([System.Windows.Forms.Form].Assembly.Location)", "/reference:$([System.Drawing.Color].Assembly.Location)",
         (Join-Path $root 'rmacro\client\ClientCore.cs'), (Join-Path $root 'rmacro\client\UpdatePolicy.cs'),
         (Join-Path $root 'rmacro\client\Updater.cs'), (Join-Path $root 'rmacro\tests\InternetClientRunner.cs'))
     $ErrorActionPreference = 'Continue'
@@ -97,7 +98,7 @@ try {
         foreach ($line in $output) { Write-Host $line }
         if ($testExit -ne 0) { throw "HTTPS gateway fixture $attempt failed: $testExit. Output: $($output | Out-String)" }
     }
-    Write-Output '::notice title=Internet gateway::PASS: 5 private CA fixtures; Windows login, wrong root/IP/expiry/EKU rejection, update preservation, no Windows root installation, local admin isolation and rate limiting. External router not tested.'
+    Write-Output '::notice title=Internet gateway::PASS: 5 private CA fixtures; built loader GUI login, session/root binding, wrong root/IP/expiry/EKU rejection, update preservation, no Windows root installation, local admin isolation and rate limiting. External router not tested.'
 }
 catch {
     $detail = ($_ | Format-List * -Force | Out-String).Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')

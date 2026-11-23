@@ -24,6 +24,21 @@ srv = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(srv)
 
 
+class WindowsSourceEncodingTests(unittest.TestCase):
+    def test_non_ascii_powershell_and_csharp_have_utf8_bom(self):
+        # Windows PowerShell 5.1 and the legacy Framework compiler otherwise
+        # decode UTF-8 Russian text using the machine's ANSI code page.
+        root = SERVER_PATH.parents[2]
+        paths = list(root.glob("*.ps1")) + list((root / "src").glob("*.cs"))
+        paths += list((root / "rmacro").rglob("*.ps1")) + list((root / "rmacro").rglob("*.cs"))
+        for path in paths:
+            content = path.read_bytes()
+            if any(byte >= 128 for byte in content):
+                with self.subTest(path=str(path)):
+                    self.assertTrue(content.startswith(b"\xef\xbb\xbf"), str(path))
+                    content.decode("utf-8-sig")
+
+
 class HandlerLoggingTests(unittest.TestCase):
     def test_idle_socket_timeout_before_request_does_not_raise(self):
         errors = []

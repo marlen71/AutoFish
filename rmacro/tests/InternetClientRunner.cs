@@ -2,8 +2,10 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
+using System.Windows.Forms;
 using RMacro;
 
 // Local Windows fixture: no CA is installed or globally trusted.
@@ -71,6 +73,71 @@ internal static class InternetClientRunner
         finally { LoaderUpdater.Discard(staged); }
     }
 
+    private static void CheckBuiltGui(string configured, string wrong, ServerConnectionSettings connection, string device)
+    {
+        // Load the actual configured PE and exercise its real LoaderForm with
+        // a WinForms message loop. An unpinned form cannot log in to this CA.
+        Assembly built = Assembly.LoadFrom(configured);
+        Type settingsType = built.GetType("RMacro.ServerSettings", true);
+        MethodInfo read = settingsType.GetMethod("ReadConnectionFromExecutable", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+        Type formType = built.GetType("RMacro.LoaderForm", true);
+        string local = Path.Combine(Path.GetDirectoryName(configured), "gui-profile");
+        Directory.CreateDirectory(local);
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
+        for (int iteration = 0; iteration < 2; iteration++)
+        {
+            bool changedRoot = iteration == 1;
+            object actualSettings = read.Invoke(null, new object[] { changedRoot ? wrong : configured });
+            Form form = (Form)Activator.CreateInstance(formType, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                null, new object[] { local, device, actualSettings, false }, null);
+            Exception error = null;
+            bool submitted = false;
+            Stopwatch elapsed = Stopwatch.StartNew();
+            System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
+            timer.Interval = 100;
+            form.Shown += delegate { timer.Start(); };
+            timer.Tick += delegate
+            {
+                try
+                {
+                    // Let the production Shown handler finish its initial
+                    // saved-session check before submitting a fresh login.
+                    if (!changedRoot && !submitted && elapsed.ElapsedMilliseconds >= 300)
+                    {
+                        submitted = true;
+                        ((TextBox)form.Controls.Find("usernameEditor", true)[0]).Text = "fixture_user";
+                        ((TextBox)form.Controls.Find("passwordEditor", true)[0]).Text = "fixture-user-password";
+                        ((Button)form.Controls.Find("loginButton", true)[0]).PerformClick();
+                        return;
+                    }
+                    if (!changedRoot && form.Controls.Find("dashboardPage", true)[0].Visible)
+                    {
+                        SavedSession saved = new SessionStore(local).Load();
+                        Check(saved != null && saved.TrustId == connection.TrustId, "Built GUI did not bind the remembered session to its root.");
+                        timer.Stop(); form.Close();
+                    }
+                    else if (changedRoot && new SessionStore(local).Load() == null)
+                    {
+                        Check(form.Controls.Find("loginPage", true)[0].Visible, "Changed root should require a new login.");
+                        timer.Stop(); form.Close();
+                    }
+                    else if (elapsed.ElapsedMilliseconds > 15000)
+                    {
+                        Label message = (Label)form.Controls.Find("loginMessage", true)[0];
+                        throw new Exception("Built GUI did not finish: " + message.Text);
+                    }
+                }
+                catch (Exception ex) { error = ex; timer.Stop(); form.Close(); }
+            };
+            try { Application.Run(form); }
+            finally { timer.Dispose(); form.Dispose(); }
+            if (error != null) throw new Exception("Built pinned GUI test failed", error);
+        }
+        Console.WriteLine("PASS: built configured GUI logged in with its pin and discarded the session after a root change.");
+    }
+
+    [STAThread]
     private static int Main(string[] args)
     {
         try
@@ -122,6 +189,7 @@ internal static class InternetClientRunner
             }
             catch (ApiException ex) { Check(ex.Status == 404, "Expected admin API to be blocked."); }
             api.Logout(token, device);
+            CheckBuiltGui(args[2], args[3], connection, device);
             Check(Object.ReferenceEquals(before, ServicePointManager.ServerCertificateValidationCallback), "Global TLS callback changed.");
             Console.WriteLine("PASS: private pinned HTTPS, login, wrong root, default trust isolation and update preservation.");
             return 0;
