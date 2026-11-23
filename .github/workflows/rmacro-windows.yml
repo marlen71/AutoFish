@@ -25,16 +25,27 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $ErrorActionPreference = 'Continue'
-          $log = & gh api "repos/$env:GITHUB_REPOSITORY/actions/jobs/137981169148/logs" 2>&1
-          $result = $LASTEXITCODE
-          $ErrorActionPreference = 'Stop'
-          if ($result -ne 0) { throw "Could not read prior CI job log: $result" }
-          $lines = @($log | Where-Object { $_ -match 'Traceback \(most recent|AssertionError|URLError|TimeoutError|ConnectionResetError|RemoteDisconnected|Smoke-InternetGateway\.py.*, line' } | Select-Object -Last 12)
-          if ($lines.Count -eq 0) { throw 'No Python failure found in prior CI job log.' }
-          $detail = ($lines -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
-          if ($detail.Length -gt 5000) { $detail = $detail.Substring(0, 5000) }
-          Write-Output "::notice title=Prior HTTPS fixture error::$detail"
+          try {
+            $ErrorActionPreference = 'Continue'
+            $log = & gh api "repos/$env:GITHUB_REPOSITORY/actions/jobs/137981169148/logs" 2>&1
+            $result = $LASTEXITCODE
+            $ErrorActionPreference = 'Stop'
+            if ($result -ne 0) {
+              $safe = (($log | Out-String) -replace 'https://[^\s"'']+', '[url redacted]')
+              throw "Could not read prior CI job log: $result $safe"
+            }
+            $lines = @($log | Where-Object { $_ -match 'Traceback \(most recent|AssertionError|URLError|TimeoutError|ConnectionResetError|RemoteDisconnected|Smoke-InternetGateway\.py.*, line' } | Select-Object -Last 12)
+            if ($lines.Count -eq 0) { throw "No Python failure found in prior CI job log ($($log.Count) lines)." }
+            $detail = ($lines -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            if ($detail.Length -gt 5000) { $detail = $detail.Substring(0, 5000) }
+            Write-Output "::notice title=Prior HTTPS fixture error::$detail"
+          }
+          catch {
+            $detail = ($_ | Format-List * -Force | Out-String).Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            if ($detail.Length -gt 5000) { $detail = $detail.Substring(0, 5000) }
+            Write-Output "::error title=Prior CI log diagnosis::$detail"
+            throw
+          }
 
       - name: Set up Python
         uses: actions/setup-python@v5

@@ -718,9 +718,15 @@ public static class TestRunner
 
         FakeKeys keys = new FakeKeys();
         FakePort port = new FakePort { Frame = SyntheticCast(880, true), Focus = false };
-        int f9 = 0, f10 = 0, escape = 0, mouse = 0, faults = 0, callbackThread = 0;
+        int f9 = 0, f10 = 0, escape = 0, mouse = 0, faults = 0, callbackThread = 0, observedF9Up = 0;
         using (FishingEngine engine = new FishingEngine(port))
-        using (SafetyKeyMonitor monitor = new SafetyKeyMonitor(keys.Read,
+        using (SafetyKeyMonitor monitor = new SafetyKeyMonitor(
+            delegate(int key)
+            {
+                bool down = keys.Read(key);
+                if (key == SafetyKeyMonitor.F9 && !down) Interlocked.Increment(ref observedF9Up);
+                return down;
+            },
             delegate(EmergencySignal signal, bool first)
             {
                 callbackThread = Thread.CurrentThread.ManagedThreadId;
@@ -737,8 +743,10 @@ public static class TestRunner
             Check(WaitUntil(delegate { return f9 == 1; }, 1000), "F9 is detected without WM_HOTKEY");
             Thread.Sleep(60);
             Check(f9 == 1, "holding F9 produces one diagnostic request");
+            int readsBeforeRelease = Interlocked.CompareExchange(ref observedF9Up, 0, 0);
             keys.Set(SafetyKeyMonitor.F9, false);
-            Thread.Sleep(30);
+            Check(WaitUntil(delegate { return Interlocked.CompareExchange(ref observedF9Up, 0, 0) > readsBeforeRelease; }, 1000),
+                "poller observes F9 release before the next press");
             keys.Set(SafetyKeyMonitor.F9, true);
             Check(WaitUntil(delegate { return f9 == 2; }, 1000), "F9 works again after release");
             keys.Set(SafetyKeyMonitor.F9, false);
