@@ -51,7 +51,8 @@ try {
     $csc = Join-Path ([System.Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()) 'csc.exe'
     $runner = Join-Path $directory 'InternetClientRunner.exe'
     $compile = @('/nologo', '/noconfig', '/target:exe', '/platform:anycpu', '/utf8output', '/warnaserror+',
-        '/main:InternetClientRunner', "/out:$runner", "/reference:$([System.Web.Script.Serialization.JavaScriptSerializer].Assembly.Location)",
+        '/main:InternetClientRunner', "/out:$runner", "/reference:$([System.Diagnostics.Process].Assembly.Location)",
+        "/reference:$([System.Linq.Enumerable].Assembly.Location)", "/reference:$([System.Web.Script.Serialization.JavaScriptSerializer].Assembly.Location)",
         "/reference:$([System.Security.Cryptography.ProtectedData].Assembly.Location)",
         (Join-Path $root 'rmacro\client\ClientCore.cs'), (Join-Path $root 'rmacro\tests\InternetClientRunner.cs'))
     $ErrorActionPreference = 'Continue'
