@@ -267,14 +267,14 @@ public static class GuiSafetyRunner
             Check(dialog.Result != null && dialog.Result.Matches(frame), "synthetic notice selection did not save a matching mask");
         }
 
-        FieldInfo mode = typeof(MainForm).GetField("calibrationMode", BindingFlags.Instance | BindingFlags.NonPublic);
+        FieldInfo calibrationModeField = typeof(MainForm).GetField("calibrationMode", BindingFlags.Instance | BindingFlags.NonPublic);
         MethodInfo stop = typeof(MainForm).GetMethod("HandleEmergency", BindingFlags.Instance | BindingFlags.NonPublic);
-        Check(mode != null && stop != null, "calibration safety hooks are missing");
-        mode.SetValue(form, 1);
+        Check(calibrationModeField != null && stop != null, "calibration safety hooks are missing");
+        calibrationModeField.SetValue(form, 1);
         Find<PowerButton>(form, "powerButton").PerformClick();
         Check(!engine.Snapshot().Running, "fishing started during a calibration");
         stop.Invoke(form, new object[] { EmergencySignal.F10, true });
-        Check((int)mode.GetValue(form) == 0, "F10 did not cancel calibration");
+        Check((int)calibrationModeField.GetValue(form) == 0, "F10 did not cancel calibration");
     }
 
     private static void CheckWindowDrag(MainForm form)

@@ -295,6 +295,15 @@ def main():
                     assert status == 404, ("public admin login with body", status)
                 status, data = request(opener, base, "/api/health")
                 assert status == 200 and json.loads(data)["ok"], ("gateway remains healthy", status)
+                status, data = request(opener, base, "/api/status")
+                public = json.loads(data)
+                assert status == 200 and public["ok"] and public["total_products"] == 1, ("public status", status)
+                assert public["products"] == [{"code": "rmfish", "name": "RMFish",
+                    "game_name": "GTA5 · RMRP", "status": "OUTDATED"}], public
+                assert b"fixture_user" not in data and b"password" not in data, "Public status leaked account information"
+                monitor = load("discord_gateway_smoke", ROOT / "server" / "discord_monitor.py")
+                observer = monitor.Transport({"status_url": base + "/api/status", "server_ca_file": str(root_pem)})
+                assert observer.status() == public, "External monitor failed to read status with the public CA"
                 assert not forwarded_admin_login.wait(0.5), "The gateway forwarded public admin login."
                 local = "http://127.0.0.1:%d" % httpd.server_address[1]
                 status, _ = request(plain, local, "/admin/")
