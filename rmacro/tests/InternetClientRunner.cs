@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
@@ -52,7 +52,9 @@ internal static class InternetClientRunner
         try { new ServerConnectionSettings("http://127.0.0.1:8765", connection.TrustedRoot); }
         catch (InvalidOperationException) { rejected = true; }
         Check(rejected, "A pinned root must never be used with plaintext HTTP.");
-        UpdateRelease release = new UpdateRelease { Version = new Version(FileVersionInfo.GetVersionInfo(source).ProductVersion) };
+        FileVersionInfo info = FileVersionInfo.GetVersionInfo(source);
+        Version numericVersion = new Version(info.FileMajorPart, info.FileMinorPart, info.FileBuildPart);
+        UpdateRelease release = new UpdateRelease { Version = numericVersion };
         try
         {
             LoaderUpdater.StageVerified(release, configured, connection, new byte[] { 0x4d, 0x5a });
@@ -62,9 +64,31 @@ internal static class InternetClientRunner
         StagedUpdate staged = null;
         try
         {
-            // Exercise the same staging function used after a verified download,
-            // without depending on the currently published release version.
-            staged = LoaderUpdater.StageVerified(release, configured, connection, image);
+            if (String.Equals(info.ProductVersion, numericVersion.ToString(3), StringComparison.Ordinal))
+            {
+                // A stable build can test its own bytes without the network.
+                staged = LoaderUpdater.StageVerified(release, configured, connection, image);
+            }
+            else
+            {
+                // Preview builds are deliberately ineligible for the stable
+                // updater. Prove that its version guard rejects this preview;
+                // then exercise actual pin-preserving staging using the current
+                // verified stable release, without installing it.
+                bool previewRejected = false;
+                StagedUpdate unexpected = null;
+                try { unexpected = LoaderUpdater.StageVerified(release, configured, connection, image); }
+                catch (InvalidDataException ex)
+                {
+                    Check(ex.Message.Contains("Версия EXE"), "Preview failed for a reason other than its product version.");
+                    previewRejected = true;
+                }
+                finally { LoaderUpdater.Discard(unexpected); }
+                Check(previewRejected, "Updater must reject a preview image for a stable release.");
+                release = LoaderUpdater.FindNewer(new Version(0, 0, 0));
+                Check(release != null, "No verified stable loader was available for the pinned staging test.");
+                staged = LoaderUpdater.Prepare(release, configured);
+            }
             string payload = Path.Combine(staged.Directory, "payload.exe");
             Check(connection.SameAs(ServerSettings.ReadConnectionFromExecutable(payload)), "Updater lost or changed the endpoint/root.");
             Check(LoaderUpdater.HashFile(payload) == LoaderUpdater.HashFile(staged.Helper), "Staged helper mismatch.");

@@ -150,6 +150,8 @@ try {
     # Exercise independent private-CA fixtures without touching Windows trust.
     # Each tests a valid chain, wrong CA, wrong IP, expired leaf, wrong EKU,
     # updater pin preservation, admin isolation, and repeated connections.
+    # For a preview EXE the runner also downloads the verified stable release
+    # as a staging fixture; the preview itself must be rejected by the updater.
     for ($attempt = 1; $attempt -le 5; $attempt++) {
         Write-Host "HTTPS gateway fixture $attempt of 5"
         $ErrorActionPreference = 'Continue'
