@@ -151,10 +151,10 @@ namespace RMFish
 
         public PixelFrame Capture(GameBounds bounds)
         {
-            int left = (int)Math.Floor(PixelFrame.CropLeft * (double)bounds.Width / PixelFrame.ReferenceWidth);
-            int top = (int)Math.Floor(PixelFrame.CropTop * (double)bounds.Height / PixelFrame.ReferenceHeight);
-            int right = (int)Math.Ceiling(PixelFrame.CropRight * (double)bounds.Width / PixelFrame.ReferenceWidth);
-            int bottom = (int)Math.Ceiling(PixelFrame.CropBottom * (double)bounds.Height / PixelFrame.ReferenceHeight);
+            int left = (int)Math.Floor(PixelFrame.HudLeft * (double)bounds.Width / PixelFrame.ReferenceWidth);
+            int top = (int)Math.Floor(PixelFrame.HudTop * (double)bounds.Height / PixelFrame.ReferenceHeight);
+            int right = (int)Math.Ceiling(PixelFrame.HudRight * (double)bounds.Width / PixelFrame.ReferenceWidth);
+            int bottom = (int)Math.Ceiling(PixelFrame.HudBottom * (double)bounds.Height / PixelFrame.ReferenceHeight);
             int width = right - left, height = bottom - top;
             if (surface == null || surface.Width != width || surface.Height != height)
             {

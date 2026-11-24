@@ -129,6 +129,14 @@ jobs:
           Write-Output "::notice title=Verified Windows package::Five required files; standalone and packaged EXE SHA-256 match. EXE $exeHash; ZIP $zipHash"
           Write-Host $checksums
 
+      - name: Keep tested standalone Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: rmfish-windows-package
+          path: ${{ runner.temp }}/rmfish-assets/*
+          if-no-files-found: error
+          retention-days: 7
+
       # Only update a matching *draft* prerelease for this branch. Publishing is
       # a separate, explicit step, so ordinary pushes never modify a release.
       - name: Upload to matching draft prerelease, if one exists

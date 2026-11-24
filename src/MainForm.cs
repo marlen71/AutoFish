@@ -275,7 +275,7 @@ namespace RMFish
             AddLabel(shortcut, "Esc  ·  держать 2 сек", 12, 57, 139, 20, 8f, Theme.Muted, FontStyle.Regular);
             AddLabel(shortcut, "ЛКМ + ПКМ  ·  2 сек", 12, 80, 139, 20, 8f, Theme.Muted, FontStyle.Regular);
             AddLabel(shortcut, "Проверьте F10 в игре", 12, 111, 139, 21, 7.8f, Theme.Text, FontStyle.Regular);
-            hotkeyLabel = AddLabel(sidebar, "F8  ·  старт / стоп\nF9  ·  проверка экрана\nВерсия 1.28 beta.1", 19, 560, 154, 55, 8f, Theme.Muted, FontStyle.Regular);
+            hotkeyLabel = AddLabel(sidebar, "F8  ·  старт / стоп\nF9  ·  проверка экрана\nВерсия 1.28 beta.2", 19, 560, 154, 55, 8f, Theme.Muted, FontStyle.Regular);
         }
 
         private void BuildDashboard()
@@ -401,7 +401,7 @@ namespace RMFish
             minimizeInput.Font = new Font("Segoe UI", 9.7f, FontStyle.Bold);
             minimizeInput.ForeColor = Theme.Text;
             settings.Controls.Add(minimizeInput);
-            AddLabel(settings, "Вернитесь в игру после нажатия «Включить».", 69, 292, 520, 22, 8.7f, Theme.Muted, FontStyle.Regular);
+            AddLabel(settings, "Сворачивается только RMFish; GTA5 должна оставаться активной.", 69, 292, 565, 22, 8.7f, Theme.Muted, FontStyle.Regular);
 
             SoftButton save = Button(page, "Сохранить настройки", 30, 466, 220, 42, true);
             save.Name = "saveSettings";
@@ -441,8 +441,8 @@ namespace RMFish
             SoftCard tip = Card(page, 30, 454, 730, 153);
             tip.Fill = Color.FromArgb(13, 42, 39);
             AddLabel(tip, "ВАЖНО", 19, 11, 230, 20, 8f, Theme.Accent, FontStyle.Bold);
-            AddLabel(tip, "Используйте формат 16:9, лучше 1920×1080, и оконный режим без рамки. Окно игры должно быть полностью видно.", 19, 34, 690, 43, 8.8f, Theme.Text, FontStyle.Regular);
-            AddLabel(tip, "Программа не проверяет предметы и улов. Счётчики показывают фазы, а не успешную поимку. Сначала остановите бота перед проверкой F9.", 19, 83, 690, 55, 8.8f, Theme.Muted, FontStyle.Regular);
+            AddLabel(tip, "Формат 16:9, лучше 1920×1080, оконный режим без рамки. Игра должна быть полностью видна и активна.", 19, 34, 690, 43, 8.8f, Theme.Text, FontStyle.Regular);
+            AddLabel(tip, "В свёрнутой игре рыбалка не поддерживается. Счётчики показывают фазы, не улов. Перед проверкой F9 остановите бота.", 19, 83, 690, 55, 8.8f, Theme.Muted, FontStyle.Regular);
         }
 
         private void BuildDiagnostics()
@@ -980,7 +980,7 @@ namespace RMFish
             hotF9 = WindowsNative.RegisterHotKey(Handle, HotF9, NoRepeat, 0x78);
             hotF10 = WindowsNative.RegisterHotKey(Handle, HotF10, NoRepeat, 0x79);
             if (hotF8 && hotF9 && hotF10)
-                hotkeyLabel.Text = "F8  ·  старт / стоп\nF9  ·  проверка экрана\nВерсия 1.28 beta.1";
+                hotkeyLabel.Text = "F8  ·  старт / стоп\nF9  ·  проверка экрана\nВерсия 1.28 beta.2";
             else
             {
                 hotkeyLabel.Text = "Часть клавиш занята.\nПроверьте F10 в игре.";

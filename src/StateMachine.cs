@@ -37,11 +37,13 @@ namespace RMFish
     public sealed class FishingStateMachine
     {
         private readonly EngineOptions options;
-        private bool initialized, castClicked;
+        private bool initialized, castClicked, expectingNextCast, hasLastCastClick;
         private int castSeen, biteSeen, missing;
-        private long phaseSince, lastClick, targetSeenAt;
+        private int lastCastLeft = -1, lastCastRight, lastCastY;
+        private long phaseSince, lastClick, lastCastClick, targetSeenAt;
         private int targetLeft = -1, targetRight = -1, targetBandLeft, targetBandRight, targetY, stableTargetFrames;
         private const int TargetMemoryMilliseconds = 200;
+        private const int NextCastHintMilliseconds = 10000;
 
         public FishingPhase Phase { get; private set; }
         public string Title { get; private set; }
@@ -69,7 +71,9 @@ namespace RMFish
             // no pending click or timeout survives a focus loss.
             initialized = false;
             castClicked = false;
-            castSeen = biteSeen = missing = 0;
+            expectingNextCast = false;
+            biteSeen = missing = 0;
+            ResetCast();
             ForgetTarget();
             Phase = FishingPhase.Searching;
             Title = "Ожидание рыбалки";
@@ -85,10 +89,19 @@ namespace RMFish
                 phaseSince = nowMilliseconds;
             }
 
-            CastInfo cast = Vision.FindCast(frame);
+            bool ambiguousCast;
+            CastInfo cast = Vision.FindCast(frame, out ambiguousCast);
+            bool sameCast = TrackCast(cast);
+            if (Phase == FishingPhase.Casting && cast != null && !sameCast)
+            {
+                // A different candidate cannot inherit a pending click or a
+                // remembered target from the previous bar.
+                castClicked = false;
+                ForgetTarget();
+            }
             ObserveTarget(cast, nowMilliseconds);
             bool bite = Vision.BiteActive(frame);
-            LastDetection = Describe(cast, bite);
+            LastDetection = Describe(cast, bite, ambiguousCast);
             biteSeen = bite ? biteSeen + 1 : 0;
 
             if (Phase == FishingPhase.Reeling)
@@ -99,26 +112,27 @@ namespace RMFish
                     // visible while the previous bar is disappearing: preserve
                     // those observations rather than discarding three frames.
                     missing++;
-                    castSeen = cast != null ? castSeen + 1 : 0;
                     if (castSeen >= 2)
                     {
                         Reels++;
                         Phase = FishingPhase.Casting;
                         Title = "Заброс";
                         phaseSince = nowMilliseconds;
-                        missing = castSeen = 0;
+                        missing = 0;
                         castClicked = false;
+                        expectingNextCast = false;
                         return TryCast(cast, nowMilliseconds);
                     }
                     if (missing >= 3)
                     {
                         Reels++;
                         EnterSearching(nowMilliseconds, "Вываживание завершено. Ждём следующий заброс.");
-                        if (cast != null) castSeen = 1;
+                        if (cast != null) TrackCast(cast);
                     }
                     return FishingAction.None;
                 }
-                missing = castSeen = 0;
+                missing = 0;
+                ResetCast();
                 if (nowMilliseconds - phaseSince >= 45000)
                     return Stop("Шкала вываживания не исчезла за 45 секунд. Проверьте игру.");
                 if (nowMilliseconds - lastClick >= options.ReelClickMilliseconds)
@@ -137,8 +151,10 @@ namespace RMFish
                 // The worker confirms the actual input separately; a physically
                 // held LMB or a lost focus is not a successful click.
                 lastClick = nowMilliseconds - options.ReelClickMilliseconds;
-                missing = castSeen = 0;
+                missing = 0;
+                ResetCast();
                 castClicked = false;
+                expectingNextCast = false;
                 return FishingAction.ReelClick;
             }
             if (bite) return FishingAction.None; // wait for the second confirmation
@@ -164,20 +180,26 @@ namespace RMFish
                             Detail = "Шкала заброса исчезла без нажатия. Ждём её снова.";
                         }
                         phaseSince = nowMilliseconds;
-                        missing = castSeen = 0;
+                        missing = 0;
+                        ResetCast();
                         castClicked = false;
+                        expectingNextCast = false;
                     }
                     return FishingAction.None;
                 }
                 missing = 0;
                 if (nowMilliseconds - phaseSince >= 18000)
                     return Stop("Не удалось завершить заброс за 18 секунд. Проверьте игру и диагностику F9.");
+                if (castSeen < 2)
+                {
+                    Detail = "Подтверждаем положение шкалы в двух кадрах — пока не нажимаем.";
+                    return FishingAction.None;
+                }
                 return TryCast(cast, nowMilliseconds);
             }
 
             if (cast != null)
             {
-                castSeen++;
                 if (castSeen >= 2)
                 {
                     Phase = FishingPhase.Casting;
@@ -185,14 +207,38 @@ namespace RMFish
                     phaseSince = nowMilliseconds;
                     missing = 0;
                     castClicked = false;
+                    expectingNextCast = false;
                     return TryCast(cast, nowMilliseconds);
                 }
                 return FishingAction.None;
             }
-            castSeen = 0;
+            if (expectingNextCast && nowMilliseconds - phaseSince >= NextCastHintMilliseconds)
+            {
+                Title = "Следующая шкала не найдена";
+                Detail = "Проверьте игру. Если шкала видна, остановите бота и нажмите F9; если нет — подготовьте заброс вручную.";
+            }
             if (options.WaitTimeoutSeconds > 0 && nowMilliseconds - phaseSince >= options.WaitTimeoutSeconds * 1000L)
                 return Stop("Слишком долго не видна шкала рыбалки. Проверьте игру и подготовьте удочку. Наживка автоматически не проверяется.");
             return FishingAction.None;
+        }
+
+        // Confirm the same bar across consecutive frames, rather than two
+        // unrelated HUD-like objects elsewhere in the larger search area.
+        // A single missing frame resets confirmation but retains the geometry
+        // briefly; three missing frames or a pause clear it completely.
+        private void ResetCast()
+        {
+            castSeen = 0;
+            lastCastLeft = -1;
+        }
+        private bool TrackCast(CastInfo cast)
+        {
+            if (cast == null) { castSeen = 0; return false; }
+            bool same = lastCastLeft >= 0 && Math.Abs(cast.Left - lastCastLeft) <= 18 &&
+                Math.Abs(cast.Right - lastCastRight) <= 18 && Math.Abs(cast.Y - lastCastY) <= 15;
+            castSeen = same ? Math.Min(2, castSeen + 1) : 1;
+            lastCastLeft = cast.Left; lastCastRight = cast.Right; lastCastY = cast.Y;
+            return same;
         }
 
         // A white hook can temporarily obscure a narrow patch. Remember only
@@ -242,7 +288,9 @@ namespace RMFish
             // while allowing more sampling time than the old one-sixth inset.
             int margin = Math.Max(2, (right - left) / 10);
             bool insideTarget = cast.Hook >= left + margin && cast.Hook <= right - margin;
-            if (insideTarget && (!castClicked || now - lastClick >= 350))
+            // A changed or briefly lost bar must not bypass the cooldown of an
+            // actually sent cast click. Suppressed requests do not start it.
+            if (insideTarget && (!hasLastCastClick || now - lastCastClick >= 350))
                 return FishingAction.CastClick;
             return FishingAction.None;
         }
@@ -254,7 +302,8 @@ namespace RMFish
             if (action == FishingAction.CastClick && Phase == FishingPhase.Casting)
             {
                 castClicked = true;
-                lastClick = nowMilliseconds;
+                hasLastCastClick = true;
+                lastCastClick = lastClick = nowMilliseconds;
             }
             else if (action == FishingAction.ReelClick && Phase == FishingPhase.Reeling)
                 lastClick = nowMilliseconds;
@@ -271,7 +320,9 @@ namespace RMFish
             Title = "Ожидание следующего заброса";
             Detail = detail;
             phaseSince = now;
-            castSeen = biteSeen = missing = 0;
+            biteSeen = missing = 0;
+            ResetCast();
+            expectingNextCast = true;
             castClicked = false; ForgetTarget();
         }
 
@@ -284,10 +335,10 @@ namespace RMFish
             return FishingAction.Stop;
         }
 
-        private static string Describe(CastInfo cast, bool bite)
+        private static string Describe(CastInfo cast, bool bite, bool ambiguous)
         {
-            string s = cast == null ? "нет" : String.Format("зелёная {0}–{1}, светлая {2}, крючок {3}",
-                cast.Left, cast.Right, cast.HasTarget ? cast.TargetLeft + "–" + cast.TargetRight : "не найдена",
+            string s = cast == null ? (ambiguous ? "несколько похожих шкал, заброс заблокирован" : "нет") : String.Format("зелёная {0}–{1}, Y={2}, светлая {3}, крючок {4}",
+                cast.Left, cast.Right, cast.Y, cast.HasTarget ? cast.TargetLeft + "–" + cast.TargetRight : "не найдена",
                 cast.Hook < 0 ? "не найден" : cast.Hook.ToString());
             return "Заброс: " + s + " · Вываживание: " + (bite ? "да" : "нет");
         }

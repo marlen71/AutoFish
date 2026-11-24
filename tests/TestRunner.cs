@@ -166,6 +166,102 @@ public static class TestRunner
         return new PixelFrame(data, width, height, width * 4, 1920, 1080, PixelFrame.CropLeft, PixelFrame.CropTop);
     }
 
+    // The user supplied a partial screenshot after a catch. Only the HUD crop
+    // is stored. The original client geometry is unknown: placing its observed
+    // image coordinates in a 1920x1080 frame is a test assumption, not proof of
+    // where the HUD appeared in the actual game window.
+    private static PixelFrame AfterCatch(int hookX, int offsetX, int offsetY)
+    {
+        const int left = 800, top = 380, width = 510, height = 70;
+        byte[] original;
+        using (FileStream file = File.OpenRead(Path.Combine(fixtures, "cast-after-catch.bgra.gz")))
+        using (GZipStream gzip = new GZipStream(file, CompressionMode.Decompress))
+        using (MemoryStream output = new MemoryStream())
+        {
+            gzip.CopyTo(output);
+            original = output.ToArray();
+        }
+        byte[] data = (byte[])original.Clone();
+        // -2 retains the actual screenshot; other values move the real hook's
+        // white pixels. This is a synthetic sweep, not a recorded game video.
+        if (hookX != -2)
+        {
+            for (int y = 400; y <= 429; y++)
+                for (int x = 934; x <= 950; x++)
+                {
+                    int i = ((y - top) * width + x - left) * 4;
+                    int b = original[i], g = original[i + 1], r = original[i + 2];
+                    bool white = r >= 155 && g >= 155 && b >= 145 &&
+                        Math.Max(r, Math.Max(g, b)) - Math.Min(r, Math.Min(g, b)) <= 45;
+                    if (!white) continue;
+                    int replacement = ((y - top) * width + 958 - left) * 4;
+                    Array.Copy(original, replacement, data, i, 4);
+                    if (hookX >= 0)
+                    {
+                        int destination = ((y - top) * width + x + hookX - 943 - left) * 4;
+                        Array.Copy(original, i, data, destination, 4);
+                    }
+                }
+        }
+        return new PixelFrame(data, width, height, width * 4, 1920, 1080, left + offsetX, top + offsetY);
+    }
+
+    private static void SetWide(byte[] data, int x, int y, int r, int g, int b)
+    {
+        int width = PixelFrame.HudRight - PixelFrame.HudLeft;
+        int i = ((y - PixelFrame.HudTop) * width + x - PixelFrame.HudLeft) * 4;
+        data[i] = (byte)b; data[i + 1] = (byte)g; data[i + 2] = (byte)r; data[i + 3] = 255;
+    }
+
+    private static PixelFrame WideFrame(byte[] data)
+    {
+        int width = PixelFrame.HudRight - PixelFrame.HudLeft, height = PixelFrame.HudBottom - PixelFrame.HudTop;
+        return new PixelFrame(data, width, height, width * 4, 1920, 1080, PixelFrame.HudLeft, PixelFrame.HudTop);
+    }
+
+    private static void DrawWideBar(byte[] data, int dx, int dy)
+    {
+        for (int y = 488; y <= 521; y++)
+            for (int x = 660; x <= 1115; x++)
+            {
+                if (x < 750 || x > 1020) SetWide(data, x + dx, y + dy, 145, 35, 30);
+                else if (x >= 860 && x <= 915) SetWide(data, x + dx, y + dy, 20, 150, 20);
+                else SetWide(data, x + dx, y + dy, 45, 100, 45);
+            }
+        for (int y = 493; y <= 516; y++)
+        {
+            SetWide(data, 880 + dx, y + dy, 250, 250, 245);
+            SetWide(data, 882 + dx, y + dy, 250, 250, 245);
+        }
+        for (int x = 880; x <= 888; x++) SetWide(data, x + dx, 516 + dy, 250, 250, 245);
+    }
+
+    private static PixelFrame WideBars(bool two, int firstDx, int secondDx, int secondDy)
+    {
+        int width = PixelFrame.HudRight - PixelFrame.HudLeft, height = PixelFrame.HudBottom - PixelFrame.HudTop;
+        byte[] data = new byte[width * height * 4];
+        DrawWideBar(data, firstDx, 0);
+        if (two) DrawWideBar(data, secondDx, secondDy);
+        return WideFrame(data);
+    }
+
+    private static PixelFrame AfterCatchWithGreenDistractor()
+    {
+        int width = PixelFrame.HudRight - PixelFrame.HudLeft, height = PixelFrame.HudBottom - PixelFrame.HudTop;
+        byte[] data = new byte[width * height * 4];
+        PixelFrame screenshot = AfterCatch(-2, 0, 0);
+        for (int y = 380; y < 450; y++)
+            for (int x = 800; x < 1310; x++)
+            {
+                int r, g, b; screenshot.Read(x, y, out r, out g, out b);
+                SetWide(data, x, y, r, g, b);
+            }
+        // A larger green patch without a left red end must not hide the HUD.
+        for (int y = 390; y <= 440; y++)
+            for (int x = 400; x <= 720; x++) SetWide(data, x, y, 45, 100, 45);
+        return WideFrame(data);
+    }
+
     private static PixelFrame ShiftCast(PixelFrame frame, int offset)
     {
         int width = PixelFrame.CropRight - PixelFrame.CropLeft;
@@ -185,6 +281,26 @@ public static class TestRunner
         int top = (int)Math.Floor(PixelFrame.CropTop * 720.0 / 1080);
         int right = (int)Math.Ceiling(PixelFrame.CropRight * 1280.0 / 1920);
         int bottom = (int)Math.Ceiling(PixelFrame.CropBottom * 720.0 / 1080);
+        int width = right - left, height = bottom - top;
+        byte[] data = new byte[width * height * 4];
+        for (int y = 0; y < height; y++)
+            for (int x = 0; x < width; x++)
+            {
+                int r, g, b;
+                frame.Read((int)Math.Round((x + left) * 1920.0 / 1280),
+                    (int)Math.Round((y + top) * 1080.0 / 720), out r, out g, out b);
+                int i = (y * width + x) * 4;
+                data[i] = (byte)b; data[i + 1] = (byte)g; data[i + 2] = (byte)r; data[i + 3] = 255;
+            }
+        return new PixelFrame(data, width, height, width * 4, 1280, 720, left, top);
+    }
+
+    private static PixelFrame ScaleWideTo720(PixelFrame frame)
+    {
+        int left = (int)Math.Floor(PixelFrame.HudLeft * 1280.0 / 1920);
+        int top = (int)Math.Floor(PixelFrame.HudTop * 720.0 / 1080);
+        int right = (int)Math.Ceiling(PixelFrame.HudRight * 1280.0 / 1920);
+        int bottom = (int)Math.Ceiling(PixelFrame.HudBottom * 720.0 / 1080);
         int width = right - left, height = bottom - top;
         byte[] data = new byte[width * height * 4];
         for (int y = 0; y < height; y++)
@@ -250,6 +366,37 @@ public static class TestRunner
         CastInfo dockMoved = Vision.FindCast(DockWithHook(850));
         Check(dockMoved != null && dockMoved.HasTarget && dockMoved.Hook >= 846 && dockMoved.Hook <= 854,
             "the real dock hook can be located inside its bright target");
+        PixelFrame afterCatch = AfterCatch(-2, 0, 0);
+        CastInfo shifted = Vision.FindCast(afterCatch);
+        Check(shifted != null && shifted.Y >= 405 && shifted.Y <= 425 && shifted.Left >= 910 && shifted.Right >= 1175 &&
+            shifted.HasTarget && shifted.TargetLeft >= 1015 && shifted.TargetRight <= 1085 && shifted.Hook >= 936 && shifted.Hook <= 950,
+            "the newer after-catch HUD is recognized beyond the old right crop");
+        CastInfo afterCatchSmall = Vision.FindCast(ScaleWideTo720(afterCatch));
+        Check(afterCatchSmall != null && afterCatchSmall.HasTarget && afterCatchSmall.Hook >= 935 && afterCatchSmall.Hook <= 952,
+            "the shifted after-catch HUD survives simulated 720p scaling");
+        CastInfo afterCatchMoved = Vision.FindCast(AfterCatch(1047, 0, 0));
+        Check(afterCatchMoved != null && afterCatchMoved.HasTarget && afterCatchMoved.Hook >= 1040 && afterCatchMoved.Hook <= 1055,
+            "real hook pixels moved synthetically onto the new bright target remain recognizable");
+        Check(Vision.FindCast(AfterCatch(-1, 0, 0)).Hook < 0,
+            "the after-catch background alone is not mistaken for its removed hook");
+        CastInfo leftAndHigh = Vision.FindCast(AfterCatch(-2, -280, -65));
+        Check(leftAndHigh != null && leftAndHigh.HasTarget && leftAndHigh.Y >= 345 && leftAndHigh.Y <= 360 &&
+            leftAndHigh.Hook >= 655 && leftAndHigh.Hook <= 670, "shifted real HUD is found on the left and higher up");
+        CastInfo low = Vision.FindCast(AfterCatch(-2, 0, 145));
+        Check(low != null && low.HasTarget && low.Y >= 550 && low.Y <= 570,
+            "shifted real HUD is found lower in the expanded search area");
+        CastInfo distractor = Vision.FindCast(AfterCatchWithGreenDistractor());
+        Check(distractor != null && distractor.Hook >= 936 && distractor.Hook <= 950 && distractor.HasTarget,
+            "a larger unrelated green region does not hide the real bar");
+        bool ambiguous;
+        Check(Vision.FindCast(WideBars(true, -260, 400, 0), out ambiguous) == null && ambiguous,
+            "two separate complete bars on one row are ambiguous and fail closed");
+        Check(Vision.FindCast(WideBars(true, -260, 400, 70), out ambiguous) == null && ambiguous,
+            "two separate complete bars on different rows are ambiguous and fail closed");
+        Check(Vision.FindCast(WideBars(true, 0, 0, 45), out ambiguous) == null && ambiguous,
+            "two vertically separated bars at the same horizontal position are ambiguous");
+        Check(Vision.Describe(WideBars(true, -260, 400, 0)).Contains("несколько похожих"),
+            "F9 explains ambiguous candidates instead of claiming that no bar exists");
         foreach (double brightness in new double[] { 1.0, 0.85, 0.70 })
         {
             PixelFrame frame = UserBarWithHook(890, brightness);
@@ -316,6 +463,70 @@ public static class TestRunner
         machine.ConfirmClick(FishingAction.CastClick, 90);
         machine.Step(wait, 120); machine.Step(wait, 150); machine.Step(wait, 180);
         Check(machine.Casts == 1 && machine.Reels == 1, "direct reeling-to-cast transition counts each phase once");
+
+        machine = new FishingStateMachine(options);
+        machine.Step(bite, 0);
+        Check(machine.Step(bite, 30) == FishingAction.ReelClick, "reeling starts before the new screenshot test");
+        machine.ConfirmClick(FishingAction.ReelClick, 30);
+        Check(machine.Step(AfterCatch(-2, 0, 0), 60) == FishingAction.None,
+            "newer after-catch frame stops reeling and does not cast outside the target");
+        Check(machine.Step(AfterCatch(1047, 0, 0), 90) == FishingAction.CastClick && machine.Reels == 1,
+            "the same shifted bar can cast when the real hook pixels are moved onto its target");
+        machine.ConfirmClick(FishingAction.CastClick, 90);
+        machine.Step(wait, 120); machine.Step(wait, 150); machine.Step(wait, 180);
+        Check(machine.Casts == 1 && machine.Phase == FishingPhase.WaitingBite,
+            "the shifted after-catch cast is counted only after a sent click and disappearance");
+
+        PixelFrame leftBar = WideBars(false, -260, 0, 0), rightBar = WideBars(false, 400, 0, 0);
+        machine = new FishingStateMachine(options);
+        Check(machine.Step(leftBar, 0) == FishingAction.None && machine.Step(rightBar, 30) == FishingAction.None,
+            "different candidate bars in consecutive frames cannot satisfy two-frame confirmation");
+        Check(machine.Step(rightBar, 60) == FishingAction.CastClick,
+            "a second observation of the same shifted bar permits a verified cast");
+        machine = new FishingStateMachine(options);
+        machine.Step(leftBar, 0);
+        Check(machine.Step(leftBar, 30) == FishingAction.CastClick, "first bar can be confirmed");
+        Check(machine.Step(rightBar, 60) == FishingAction.None,
+            "a different bar during casting must be confirmed again");
+        Check(machine.Step(rightBar, 90) == FishingAction.CastClick,
+            "the replacement bar is allowed only after its second observation");
+        machine = new FishingStateMachine(options);
+        machine.Step(leftBar, 0); machine.Step(leftBar, 30); machine.ConfirmClick(FishingAction.CastClick, 30);
+        Check(machine.Step(rightBar, 60) == FishingAction.None && machine.Step(rightBar, 90) == FishingAction.None,
+            "switching bars cannot bypass the cooldown for an already-sent cast click");
+        Check(machine.Step(rightBar, 380) == FishingAction.CastClick,
+            "a confirmed new bar may be clicked after the last sent cast cooldown");
+        machine = new FishingStateMachine(options);
+        machine.Step(leftBar, 0);
+        PixelFrame ambiguousBars = WideBars(true, -260, 400, 0);
+        Check(machine.Step(ambiguousBars, 30) == FishingAction.None && machine.LastDetection.Contains("несколько похожих"),
+            "ambiguous bars prevent a cast and are reported");
+        Check(machine.Step(leftBar, 60) == FishingAction.None && machine.Step(leftBar, 90) == FishingAction.CastClick,
+            "an ambiguous frame resets cast confirmation");
+
+        machine = new FishingStateMachine(options);
+        machine.Step(bite, 0); machine.Step(bite, 30); machine.ConfirmClick(FishingAction.ReelClick, 30);
+        machine.Step(wait, 60); machine.Step(wait, 90); machine.Step(wait, 120);
+        Check(machine.Step(wait, 10119) == FishingAction.None && machine.Title != "Следующая шкала не найдена",
+            "the post-reel hint waits for ten seconds without clicking");
+        Check(machine.Step(wait, 10120) == FishingAction.None && machine.Title == "Следующая шкала не найдена" &&
+            machine.Detail.Contains("F9"), "a missing next cast produces an actionable diagnostic, not a blind recovery click");
+        Check(machine.Step(AfterCatch(-2, 0, 0), 10150) == FishingAction.None &&
+            machine.Step(AfterCatch(1047, 0, 0), 10180) == FishingAction.CastClick,
+            "normal casting still resumes after the diagnostic hint");
+        machine.Pause(); machine.Step(wait, 20000); machine.Step(wait, 31000);
+        Check(machine.Title != "Следующая шкала не найдена", "focus loss clears the post-reel hint context");
+
+        machine = new FishingStateMachine(options);
+        machine.Step(cast, 0); machine.Step(cast, 30); machine.ConfirmClick(FishingAction.CastClick, 30);
+        machine.Step(wait, 60);
+        Check(machine.Step(cast, 90) == FishingAction.None && machine.Step(cast, 120) == FishingAction.None,
+            "one missing frame requires confirmation again and retains the actual click cooldown");
+        machine.Step(wait, 150); machine.Step(wait, 180); machine.Step(wait, 210);
+        Check(machine.Casts == 1 && machine.Phase == FishingPhase.WaitingBite,
+            "a brief missing frame does not erase an already-sent cast");
+        Check(machine.Step(wait, 11000) == FishingAction.None && machine.Phase == FishingPhase.WaitingBite &&
+            machine.Title == "Ожидание клёва", "normal waiting for a bite is not labelled as a missing next cast");
 
         machine = new FishingStateMachine(options);
         machine.Step(cast, 0);
@@ -419,6 +630,11 @@ public static class TestRunner
         Check(machine.Step(noHook, 30) == FishingAction.None, "no white hook means no click");
         Check(machine.Step(noHook, 18031) == FishingAction.Stop, "an unrecognized hook eventually stops");
         machine = new FishingStateMachine(options);
+        machine.Step(AfterCatch(-1, 0, 0), 0);
+        Check(machine.Step(AfterCatch(-1, 0, 0), 30) == FishingAction.None &&
+            machine.Step(AfterCatch(-1, 0, 0), 10000) == FishingAction.None,
+            "the shifted real background with its hook removed never prompts a cast");
+        machine = new FishingStateMachine(options);
         machine.Step(cast, 0); machine.Step(cast, 30);
         machine.Pause();
         Check(machine.Step(wait, 100000) == FishingAction.None && machine.Casts == 0,
@@ -441,10 +657,9 @@ public static class TestRunner
         public volatile bool Focus, StopFile;
         public int Clicks, Attempts, Captures, CaptureThread, ReleaseThread, Releases;
         public volatile bool SuppressClick;
-        public int BlockAtCapture;
-        public ManualResetEvent CaptureEntered, ContinueCapture, ClickEntered, ContinueClick;
-        public volatile PixelFrame Frame;
-        public PixelFrame Area, NoticeArea;
+        public int BlockAtCapture, BlockAtAreaCapture, AreaCaptures;
+        public ManualResetEvent CaptureEntered, ContinueCapture, AreaEntered, ContinueArea, ClickEntered, ContinueClick;
+        public volatile PixelFrame Frame, Area, NoticeArea;
         public readonly List<GameKey> Keys = new List<GameKey>();
         public int RouteClicks, CursorMoves, FailKeyAt = -1;
         public bool TryGetForeground(out GameBounds bounds, out string reason)
@@ -457,13 +672,14 @@ public static class TestRunner
         public PixelFrame Capture(GameBounds bounds)
         {
             CaptureThread = Thread.CurrentThread.ManagedThreadId;
+            PixelFrame result = Frame;
             int captured = Interlocked.Increment(ref Captures);
             if (captured == BlockAtCapture && CaptureEntered != null && ContinueCapture != null)
             {
                 CaptureEntered.Set();
                 ContinueCapture.WaitOne();
             }
-            return Frame;
+            return result;
         }
         public ClickResult Click(GameBounds bounds, WaitHandle stop, out string error)
         {
@@ -480,7 +696,15 @@ public static class TestRunner
             return ClickResult.Sent;
         }
         public PixelFrame CaptureArea(GameBounds bounds, int left, int top, int right, int bottom)
-        { return left == NoticeTemplate.RegionLeft && NoticeArea != null ? NoticeArea : Area; }
+        {
+            PixelFrame result = left == NoticeTemplate.RegionLeft && NoticeArea != null ? NoticeArea : Area;
+            int captured = Interlocked.Increment(ref AreaCaptures);
+            if (captured == BlockAtAreaCapture && AreaEntered != null && ContinueArea != null)
+            {
+                AreaEntered.Set(); ContinueArea.WaitOne();
+            }
+            return result;
+        }
         public bool MoveCursor(GameBounds bounds, int x, int y, WaitHandle stop, out string error)
         {
             error = "";
@@ -579,6 +803,33 @@ public static class TestRunner
             Check(WaitUntil(delegate { return moving.Clicks > 0; }, 2000), "worker clicks when the white hook reaches the bright target");
             engine.RequestStop();
             Check(engine.WaitForStop(2000), "moving-hook worker stops normally");
+        }
+
+        foreach (PixelFrame candidate in new PixelFrame[] { SyntheticCast(880, true), Fixture("bite", 1920, 1080) })
+        using (ManualResetEvent entered = new ManualResetEvent(false))
+        using (ManualResetEvent proceed = new ManualResetEvent(false))
+        {
+            FakePort slow = new FakePort { Frame = candidate, Focus = true,
+                BlockAtCapture = 2, CaptureEntered = entered, ContinueCapture = proceed };
+            using (FishingEngine engine = new FishingEngine(slow))
+            {
+                try
+                {
+                    Check(engine.Start(new EngineOptions()), "worker starts before delayed-frame test");
+                    Check(entered.WaitOne(2000), "second fishing-bar capture can be delayed");
+                    Thread.Sleep(FishingEngine.MaxFrameAgeMilliseconds + 80);
+                    slow.Frame = Fixture("waiting", 1920, 1080);
+                }
+                finally { proceed.Set(); }
+                Check(WaitUntil(delegate { return slow.Captures >= 4; }, 2000), "worker continues after delayed capture");
+                Check(slow.Attempts == 0 && slow.Clicks == 0,
+                    "a stale captured fishing bar is discarded instead of causing a click");
+                Check(String.Join("\n", engine.Events()).Contains("больше 100 мс"), "delayed capture is explained in the log");
+                slow.Frame = candidate;
+                Check(WaitUntil(delegate { return slow.Clicks > 0; }, 2000), "fresh confirmed frames can still trigger a click");
+                engine.RequestStop();
+                Check(engine.WaitForStop(2000), "worker stops after delayed-frame test");
+            }
         }
     }
 
@@ -686,6 +937,29 @@ public static class TestRunner
                 Thread.Sleep(500);
                 Check(automatic.Keys.Count == 4 && automatic.Keys[0] == GameKey.Space, "persistent notification does not repeat space");
                 engine.RequestStop(); Check(engine.WaitForStop(2000), "auto-relocation worker stops");
+            }
+            using (ManualResetEvent entered = new ManualResetEvent(false))
+            using (ManualResetEvent proceed = new ManualResetEvent(false))
+            {
+                FakePort slowNotice = new FakePort { Focus = true, Frame = Fixture("waiting", 1920, 1080),
+                    Area = gearFrame, NoticeArea = noticeFrame, BlockAtAreaCapture = 2, AreaEntered = entered, ContinueArea = proceed };
+                using (FishingEngine engine = new FishingEngine(slowNotice))
+                {
+                    try
+                    {
+                        Check(engine.Start(new EngineOptions { AutoRelocate = true, Notice = notice, Gear = gear }),
+                            "worker starts for delayed notice test");
+                        Check(entered.WaitOne(2000), "second notice capture can be delayed");
+                        Thread.Sleep(FishingEngine.MaxFrameAgeMilliseconds + 80);
+                        slowNotice.NoticeArea = Fixture("waiting", 1920, 1080);
+                    }
+                    finally { proceed.Set(); }
+                    Check(WaitUntil(delegate { return slowNotice.AreaCaptures >= 3; }, 2000), "notice checks continue after the delay");
+                    Check(slowNotice.Keys.Count == 0 && slowNotice.RouteClicks == 0,
+                        "an old notice observation cannot initiate the movement route");
+                    Check(String.Join("\n", engine.Events()).Contains("больше 100 мс"), "the delayed notice is reported");
+                    engine.RequestStop(); Check(engine.WaitForStop(2000), "delayed notice worker stops");
+                }
             }
             using (FishingEngine engine = new FishingEngine(new FakePort()))
             {

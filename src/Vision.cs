@@ -12,6 +12,11 @@ namespace RMFish
         public const int CropTop = 360;
         public const int CropRight = 1161; // exclusive
         public const int CropBottom = 741; // exclusive
+        // The original crop constants above are kept for the older test frames.
+        // A game HUD can appear farther from the centre: capture a wider area
+        // rather than searching pixels that were never captured. All bounds are
+        // in reference coordinates and right/bottom are exclusive.
+        public const int HudLeft = 380, HudTop = 300, HudRight = 1541, HudBottom = 741;
 
         private readonly byte[] pixels;
         private readonly int width, height, stride, clientWidth, clientHeight, originX, originY;
@@ -79,7 +84,7 @@ namespace RMFish
     public static class Vision
     {
         private static readonly int[] CastOffsets = new int[] { -13, -7, 0, 7, 13 };
-        private const int SearchLeft = 620, SearchRight = 1160;
+        private const int SearchLeft = PixelFrame.HudLeft, SearchRight = PixelFrame.HudRight - 1;
 
         private static bool CastGreen(int r, int g, int b)
         {
@@ -114,15 +119,22 @@ namespace RMFish
 
         public static CastInfo FindCast(PixelFrame frame)
         {
+            bool ambiguous;
+            return FindCast(frame, out ambiguous);
+        }
+
+        public static CastInfo FindCast(PixelFrame frame, out bool ambiguous)
+        {
             if (frame == null) throw new ArgumentNullException("frame");
+            ambiguous = false;
             CastInfo best = null;
             int bestScore = -1;
-            // The user's full-screen image shows this HUD around y=430, whereas
-            // earlier frames put it around y=505. A cheap single-row prefilter
-            // limits the more expensive shape test to plausible locations.
-            for (int y = 385; y <= 535; y += 5)
+            // Search a larger region, not just the original centre crop. A
+            // coarse row test keeps the five-line shape check inexpensive on
+            // ordinary scenery; the red ends must be widely separated.
+            for (int y = 345; y <= 585; y += 5)
             {
-                int leftRed = 0, rightRed = 0, greens = 0;
+                int reds = 0, greens = 0, firstRed = -1, lastRed = -1;
                 for (int x = SearchLeft; x <= SearchRight; x += 4)
                 {
                     int r, g, b;
@@ -130,21 +142,38 @@ namespace RMFish
                     if (CastGreen(r, g, b)) greens++;
                     if (CastRed(r, g, b))
                     {
-                        if (x < 820) leftRed++;
-                        if (x > 960) rightRed++;
+                        if (firstRed < 0) firstRed = x;
+                        lastRed = x; reds++;
                     }
                 }
-                if (greens < 18 || leftRed < 3 || rightRed < 3) continue;
+                if (greens < 18 || reds < 6 || lastRed - firstRed < 150) continue;
                 int score;
-                CastInfo candidate = FindCastAt(frame, y, out score);
-                if (candidate != null && score > bestScore) { best = candidate; bestScore = score; }
+                bool rowAmbiguous;
+                CastInfo candidate = FindCastAt(frame, y, out score, out rowAmbiguous);
+                if (rowAmbiguous) { ambiguous = true; return null; }
+                if (candidate == null) continue;
+                // Do not choose arbitrarily between two complete HUD-like bars.
+                // Adjacent scan lines belonging to the same bar are harmless.
+                if (Complete(candidate) && Complete(best) && !SameCastRegion(candidate, best))
+                { ambiguous = true; return null; }
+                if (score > bestScore) { best = candidate; bestScore = score; }
             }
             return best;
         }
 
-        private static CastInfo FindCastAt(PixelFrame frame, int centerY, out int score)
+        private static bool Complete(CastInfo candidate)
+        { return candidate != null && candidate.HasTarget && candidate.Hook >= 0; }
+
+        private static bool SameCastRegion(CastInfo a, CastInfo b)
         {
-            score = 0;
+            return Math.Abs(a.Left - b.Left) <= 30 && Math.Abs(a.Right - b.Right) <= 30 &&
+                Math.Abs(a.Y - b.Y) <= 30;
+        }
+
+        private static CastInfo FindCastAt(PixelFrame frame, int centerY, out int score, out bool ambiguous)
+        {
+            score = -1;
+            ambiguous = false;
             int n = SearchRight - SearchLeft + 1;
             bool[] green = new bool[n];
             bool[] red = new bool[n];
@@ -171,9 +200,10 @@ namespace RMFish
                 redCounts[x - SearchLeft] = reds;
             }
 
-            // The hook can cover the zone. Merge small holes rather than treating
-            // each visible green fragment as a separate target.
-            int bestLeft = -1, bestRight = -1, bestCount = 0;
+            // A larger crop can contain several green objects. Test every run
+            // against its own red ends instead of choosing the largest run and
+            // accidentally overlooking the real bar. Merge holes from the hook.
+            CastInfo best = null;
             int start = -1, last = -1, count = 0;
             for (int i = 0; i <= n; i++)
             {
@@ -183,43 +213,56 @@ namespace RMFish
                     if (start < 0) { start = i; count = 0; }
                     else if (i - last > 21)
                     {
-                        ConsiderRun(start, last, count, ref bestLeft, ref bestRight, ref bestCount);
-                        start = i;
-                        count = 0;
+                        ConsiderCast(frame, centerY, start, last, count, green, red, chroma, greenCounts, redCounts,
+                            ref best, ref score, ref ambiguous);
+                        start = i; count = 0;
                     }
-                    last = i;
-                    count++;
+                    last = i; count++;
                 }
                 else if (i == n && start >= 0)
-                {
-                    ConsiderRun(start, last, count, ref bestLeft, ref bestRight, ref bestCount);
-                }
+                    ConsiderCast(frame, centerY, start, last, count, green, red, chroma, greenCounts, redCounts,
+                        ref best, ref score, ref ambiguous);
             }
-            if (bestLeft < 0) return null;
+            return best;
+        }
 
-            int left = bestLeft + SearchLeft, right = bestRight + SearchLeft;
-            int leftRed = 0, rightRed = 0, barLeft = left, barRight = right;
+        private static void ConsiderCast(PixelFrame frame, int y, int start, int end, int count,
+                                         bool[] green, bool[] red, int[] chroma, int[] greenCounts, int[] redCounts,
+                                         ref CastInfo best, ref int bestScore, ref bool ambiguous)
+        {
+            int width = end - start + 1;
+            if (width < 70 || width > 370 || count * 100 < width * 65) return;
+            int left = start + SearchLeft, right = end + SearchLeft;
+            int leftRed = 0, rightRed = 0, nearLeft = 0, nearRight = 0, barLeft = left, barRight = right;
             for (int x = Math.Max(SearchLeft, left - 160); x < left - 5; x++)
-                if (red[x - SearchLeft]) { leftRed++; barLeft = Math.Min(barLeft, x); }
+                if (red[x - SearchLeft])
+                {
+                    leftRed++; if (x >= left - 60) nearLeft++;
+                    barLeft = Math.Min(barLeft, x);
+                }
             for (int x = right + 6; x <= Math.Min(SearchRight, right + 160); x++)
-                if (red[x - SearchLeft]) { rightRed++; barRight = Math.Max(barRight, x); }
-            // Red ends plus a wide green middle identify a candidate bar. The
-            // worker still requires a white hook and a bright target before clicking.
-            if (leftRed < 12 || rightRed < 12) return null;
+                if (red[x - SearchLeft])
+                {
+                    rightRed++; if (x <= right + 60) nearRight++;
+                    barRight = Math.Max(barRight, x);
+                }
+            // Widely separated random red objects are not enough: both ends
+            // must also meet the green band, and the whole HUD must have a
+            // plausible size. The hook and target remain mandatory for clicks.
+            int barWidth = barRight - barLeft + 1;
+            if (leftRed < 12 || rightRed < 12 || nearLeft < 8 || nearRight < 8 || barWidth < 280 || barWidth > 600) return;
 
-            // Exclude pale pixels outside the red ends (e.g. the crop or
-            // overlay border) so they cannot outrank the actual hook.
-            int hook = FindHook(frame, barLeft, barRight, centerY);
+            int hook = FindHook(frame, barLeft, barRight, y);
             int targetLeft, targetRight;
             FindBrightTarget(green, chroma, left, right, out targetLeft, out targetRight);
-            // Prefer the slice whose five scan lines actually lie on the bar,
-            // not a partly overlapping slice above or below it. Reliable hook
-            // and target recognition still take precedence over raw coverage.
+            int score = 0;
             for (int x = barLeft; x <= barRight; x++)
                 score += x >= left && x <= right ? greenCounts[x - SearchLeft] : redCounts[x - SearchLeft];
             if (hook >= 0) score += 5000;
             if (targetLeft >= 0) score += 5000;
-            return new CastInfo(left, right, hook, targetLeft, targetRight, centerY);
+            CastInfo candidate = new CastInfo(left, right, hook, targetLeft, targetRight, y);
+            if (Complete(candidate) && Complete(best)) { ambiguous = true; return; }
+            if (score > bestScore) { best = candidate; bestScore = score; }
         }
 
         // The HUD's bright centre is substantially greener than the surrounding
@@ -291,18 +334,6 @@ namespace RMFish
             }
         }
 
-        private static void ConsiderRun(int start, int last, int count,
-                                        ref int bestLeft, ref int bestRight, ref int bestCount)
-        {
-            int width = last - start + 1;
-            if (width >= 70 && width <= 370 && count * 100 >= width * 65 && count > bestCount)
-            {
-                bestLeft = start;
-                bestRight = last;
-                bestCount = count;
-            }
-        }
-
         private static int FindHook(PixelFrame frame, int left, int right, int centerY)
         {
             int bestHook = -1, bestScore = 0;
@@ -329,7 +360,7 @@ namespace RMFish
                     if (runStart < 0) runStart = x;
                     else if (x - last > 3)
                     {
-                        ConsiderHook(runStart, last, pixels, sumX, top, bottom, ref bestHook, ref bestScore);
+                        ConsiderHook(runStart, last, pixels, sumX, top, bottom, centerY, ref bestHook, ref bestScore);
                         runStart = x;
                         pixels = sumX = 0;
                         top = 1000;
@@ -343,7 +374,7 @@ namespace RMFish
                 }
                 else if (runStart >= 0 && x - last > 3)
                 {
-                    ConsiderHook(runStart, last, pixels, sumX, top, bottom, ref bestHook, ref bestScore);
+                    ConsiderHook(runStart, last, pixels, sumX, top, bottom, centerY, ref bestHook, ref bestScore);
                     runStart = -1;
                     pixels = sumX = 0;
                     top = 1000;
@@ -351,17 +382,19 @@ namespace RMFish
                 }
             }
             if (runStart >= 0)
-                ConsiderHook(runStart, last, pixels, sumX, top, bottom, ref bestHook, ref bestScore);
+                ConsiderHook(runStart, last, pixels, sumX, top, bottom, centerY, ref bestHook, ref bestScore);
             return bestHook;
         }
 
-        private static void ConsiderHook(int start, int end, int pixels, int sumX, int top, int bottom,
+        private static void ConsiderHook(int start, int end, int pixels, int sumX, int top, int bottom, int centerY,
                                          ref int bestHook, ref int bestScore)
         {
             int width = end - start + 1, height = bottom - top + 1;
-            // The sprite is a thin outline. Reject solid pale borders or
-            // rectangular highlights that can otherwise outrank the hook.
-            if (width < 3 || width > 36 || height < 8 || pixels < 8 || pixels * 100 > width * height * 65) return;
+            // The hook spans the bar's centre. Pale clothing below or above
+            // the bar must not become a substitute hook on a neighbouring row.
+            // Also reject solid borders and rectangular highlights.
+            if (width < 3 || width > 36 || height < 8 || pixels < 8 ||
+                top > centerY - 3 || bottom < centerY + 3 || pixels * 100 > width * height * 65) return;
             int score = pixels + height * 2;
             if (score > bestScore)
             {
@@ -392,10 +425,11 @@ namespace RMFish
 
         public static string Describe(PixelFrame frame)
         {
-            CastInfo cast = FindCast(frame);
+            bool ambiguous;
+            CastInfo cast = FindCast(frame, out ambiguous);
             bool bite = BiteActive(frame);
-            string castText = cast == null ? "не найдена" :
-                String.Format("зелёная зона {0}–{1}, светлый участок {2}, крючок {3}", cast.Left, cast.Right,
+            string castText = cast == null ? (ambiguous ? "несколько похожих шкал, заброс заблокирован" : "не найдена") :
+                String.Format("зелёная зона {0}–{1}, Y={2}, светлый участок {3}, крючок {4}", cast.Left, cast.Right, cast.Y,
                     cast.HasTarget ? cast.TargetLeft + "–" + cast.TargetRight : "не найден",
                     cast.Hook < 0 ? "не найден" : cast.Hook.ToString());
             return "Заброс: " + castText + "; вываживание: " + (bite ? "найдено" : "не найдено") + ".";

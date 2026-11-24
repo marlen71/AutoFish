@@ -54,6 +54,9 @@ namespace RMFish
         private TimeSpan elapsed;
         private EngineSnapshot current;
         private bool disposing, disposed;
+        // A moving hook can leave the target while capture or analysis stalls.
+        // This is an upper bound from cycle start, not a guarantee of accuracy.
+        internal const int MaxFrameAgeMilliseconds = 100;
 
         public FishingEngine(IGamePort port)
         {
@@ -248,11 +251,23 @@ namespace RMFish
             return (int)Math.Max(1L, (long)interval - Math.Max(0L, elapsed));
         }
 
+        private void DiscardStaleFrame(FishingStateMachine machine, NoticeGate noticeGate, ref bool reported)
+        {
+            machine.Pause();
+            if (noticeGate != null) noticeGate.Pause();
+            if (!reported)
+            {
+                Log("Снимок или его обработка заняли больше 100 мс. Действия по нему отменены, ждём свежие кадры. Проверьте нагрузку ПК.");
+                reported = true;
+            }
+            Publish(machine, false, null);
+        }
+
         private void Run(EngineOptions options)
         {
             FishingStateMachine machine = new FishingStateMachine(options);
             string finalReason = "Остановлено пользователем.";
-            bool wasFocused = false;
+            bool wasFocused = false, slowFrameReported = false;
             NoticeGate noticeGate = options.AutoRelocate ? new NoticeGate() : null;
             long nextNoticeCheck = 0;
             try
@@ -289,6 +304,12 @@ namespace RMFish
                     // A stop may have arrived during the native capture. Do not
                     // analyze or act on a frame obtained before that request.
                     if (stop.WaitOne(0)) break;
+                    if (watch.ElapsedMilliseconds - cycleStarted > MaxFrameAgeMilliseconds)
+                    {
+                        DiscardStaleFrame(machine, noticeGate, ref slowFrameReported);
+                        stop.WaitOne(1);
+                        continue;
+                    }
                     if (options.AutoRelocate && watch.ElapsedMilliseconds >= nextNoticeCheck)
                     {
                         nextNoticeCheck = watch.ElapsedMilliseconds + 120;
@@ -300,13 +321,26 @@ namespace RMFish
                         PixelFrame noticeFrame = port.CaptureArea(bounds, NoticeTemplate.RegionLeft, NoticeTemplate.RegionTop,
                             NoticeTemplate.RegionRight, NoticeTemplate.RegionBottom);
                         if (stop.WaitOne(0)) break;
+                        if (watch.ElapsedMilliseconds - cycleStarted > MaxFrameAgeMilliseconds)
+                        {
+                            DiscardStaleFrame(machine, noticeGate, ref slowFrameReported);
+                            stop.WaitOne(1);
+                            continue;
+                        }
                         if (!port.IsForeground(bounds))
                         {
                             machine.Pause(); noticeGate.Pause(); wasFocused = false;
                             Publish(machine, true, "Фокус изменился во время проверки уведомления.");
                             continue;
                         }
-                        if (noticeGate.Observe(options.Notice.Matches(noticeFrame), watch.ElapsedMilliseconds))
+                        bool noticeMatches = options.Notice.Matches(noticeFrame);
+                        if (watch.ElapsedMilliseconds - cycleStarted > MaxFrameAgeMilliseconds)
+                        {
+                            DiscardStaleFrame(machine, noticeGate, ref slowFrameReported);
+                            stop.WaitOne(1);
+                            continue;
+                        }
+                        if (noticeGate.Observe(noticeMatches, watch.ElapsedMilliseconds))
                         {
                             string routeError;
                             if (!RelocationRunner.Execute(port, bounds, stop, options.Gear, new RelocationTimings(),
@@ -324,6 +358,12 @@ namespace RMFish
                     }
                     FishingAction action = machine.Step(frame, watch.ElapsedMilliseconds);
                     if (stop.WaitOne(0)) break;
+                    if (action != FishingAction.Stop && watch.ElapsedMilliseconds - cycleStarted > MaxFrameAgeMilliseconds)
+                    {
+                        DiscardStaleFrame(machine, noticeGate, ref slowFrameReported);
+                        stop.WaitOne(1);
+                        continue;
+                    }
                     Publish(machine, false, null);
                     if (action == FishingAction.Stop)
                     {
@@ -357,6 +397,12 @@ namespace RMFish
                         {
                             finalReason = SessionLimitReason(options.SessionLimitSeconds);
                             break;
+                        }
+                        if (watch.ElapsedMilliseconds - cycleStarted > MaxFrameAgeMilliseconds)
+                        {
+                            DiscardStaleFrame(machine, noticeGate, ref slowFrameReported);
+                            stop.WaitOne(1);
+                            continue;
                         }
                         string inputError;
                         ClickResult result = port.Click(bounds, stop, out inputError);
