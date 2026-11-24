@@ -216,11 +216,26 @@ public static class GuiSafetyRunner
     // the real, still-unknown fish-depleted notification.
     private static void CheckRelocationUi(MainForm form, FishingEngine engine)
     {
+        using (WindowModeForm mode = new WindowModeForm(GameWindowMode.Active))
+        {
+            mode.Show(form); CheckLayout(mode);
+            Check(mode.SelectedMode == GameWindowMode.Active, "active game mode must be the default");
+            Find<RadioButton>(mode, "minimizedGameMode").Checked = true;
+            Find<Button>(mode, "saveGameMode").PerformClick();
+            Check(mode.SelectedMode == GameWindowMode.MinimizedExperimental, "mode selector did not preserve the explicit selection");
+        }
         using (RelocationSetupForm dialog = new RelocationSetupForm(false, true, false, false))
         {
             dialog.Show(form);
             CheckLayout(dialog);
             Check(!dialog.AutoEnabled && dialog.RodRightButton, "relocation did not default to off");
+            Check(dialog.TurnUnits == 0 && !dialog.TurnConfirmed && !Find<Button>(dialog, "testTurn").Enabled,
+                "camera turn must not have an assumed calibration");
+            NumericUpDown turn = Find<NumericUpDown>(dialog, "turnUnits");
+            turn.Value = 800; Find<CheckBox>(dialog, "confirmedTurn").Checked = true;
+            Check(dialog.TurnConfirmed && Find<Button>(dialog, "testTurn").Enabled, "camera test and confirmation were not available");
+            turn.Value = 900;
+            Check(!dialog.TurnConfirmed, "changing camera sensitivity must invalidate the prior confirmation");
             Check(Find<Button>(dialog, "recordNotice").Text.Contains("нет") &&
                 Find<Button>(dialog, "recordGear").Text.Contains("нет"), "missing calibration was not displayed");
             Find<CheckBox>(dialog, "relocationEnabled").Checked = true;
@@ -328,6 +343,27 @@ public static class GuiSafetyRunner
             FishingEngine engine = (FishingEngine)field.GetValue(form);
 
             form.Invoke((MethodInvoker)delegate { CheckMenu(form); CheckRelocationUi(form, engine); });
+            // A turn probe waits three seconds and must be cancellable from
+            // the lease/safety thread before it can send any input. The loader
+            // must treat even this pending probe as a live input worker.
+            Thread turn = null;
+            form.Invoke((MethodInvoker)delegate
+            {
+                MethodInfo startTurn = typeof(MainForm).GetMethod("StartTurnTest", BindingFlags.Instance | BindingFlags.NonPublic);
+                FieldInfo turnField = typeof(MainForm).GetField("turnTestThread", BindingFlags.Instance | BindingFlags.NonPublic);
+                Check(startTurn != null && turnField != null, "turn test safety hooks are missing");
+                startTurn.Invoke(form, new object[] { 100 });
+                turn = (Thread)turnField.GetValue(form);
+                Check(turn != null && turn.IsAlive && !form.FinishWorkerShutdown(),
+                    "pending turn probe must keep the product from being marked drained");
+            });
+            form.RevokeAuthorization("Test: cancel pending turn probe.");
+            Check(turn.Join(5000), "revocation did not cancel the pending turn probe");
+            form.Invoke((MethodInvoker)delegate
+            {
+                FieldInfo mode = typeof(MainForm).GetField("calibrationMode", BindingFlags.Instance | BindingFlags.NonPublic);
+                Check((int)mode.GetValue(form) == 0, "cancelled turn probe did not clear calibration mode");
+            });
             CheckWindowDrag(form);
             form.Invoke((MethodInvoker)delegate { Find<PowerButton>(form, "powerButton").PerformClick(); });
             Check(WaitUntil(delegate { return engine.Snapshot().Running && engine.Snapshot().Phase == FishingPhase.Paused; }, 5000),

@@ -55,6 +55,12 @@ namespace RMFish
             Input input = new Input(); input.Type = 0; input.Data.Mouse.Flags = flags;
             return SendInput(1, new Input[] { input }, Marshal.SizeOf(typeof(Input))) == 1;
         }
+        public static bool SendRelativeMouse(int dx, int dy)
+        {
+            Input input = new Input(); input.Type = 0;
+            input.Data.Mouse.X = dx; input.Data.Mouse.Y = dy; input.Data.Mouse.Flags = 0x0001u; // MOUSEEVENTF_MOVE
+            return SendInput(1, new Input[] { input }, Marshal.SizeOf(typeof(Input))) == 1;
+        }
 
         public static void HideConsoleWindow()
         {
@@ -252,7 +258,6 @@ namespace RMFish
             switch (key)
             {
                 case GameKey.Space: scan = 0x39; vk = 0x20; break;
-                case GameKey.Back: scan = 0x1f; vk = 0x53; break;
                 case GameKey.Forward: scan = 0x11; vk = 0x57; break;
                 case GameKey.Inventory: scan = 0x17; vk = 0x49; break;
                 default: error = "Неизвестная клавиша маршрута."; return false;
@@ -282,6 +287,30 @@ namespace RMFish
             }
             if (!released) { error = "Не удалось подтвердить отпускание клавиши. Нажмите и отпустите её вручную."; return false; }
             if (!completed) { error = "Остановлено или потерян фокус во время движения; проверьте положение персонажа."; return false; }
+            return true;
+        }
+
+        public bool TurnCamera(GameBounds bounds, int units, WaitHandle stop, out string error)
+        {
+            error = "";
+            if (units < 1 || units > 10000 || !Ready(bounds, stop))
+            { error = "Поворот не настроен, остановлен или игра потеряла фокус."; return false; }
+            // Do not interfere with the user's controls. The chosen movement is
+            // split into bounded steps so F10/focus loss can stop it promptly.
+            int remaining = units;
+            while (remaining > 0)
+            {
+                if (!Ready(bounds, stop) || Held(1) || Held(2) || Held(0x20) ||
+                    Held(0x53) || Held(0x57) || Held(0x49))
+                { error = "Поворот прерван: фокус, стоп или удерживаемые пользователем кнопки."; return false; }
+                int step = Math.Min(50, remaining);
+                if (!WindowsNative.SendRelativeMouse(step, 0))
+                { error = "Windows отклонила движение мыши. Проверьте права игры и программы."; return false; }
+                remaining -= step;
+                if (remaining > 0 && stop.WaitOne(4))
+                { error = "Поворот прерван аварийной остановкой."; return false; }
+            }
+            if (!Ready(bounds, stop)) { error = "Фокус изменился во время поворота."; return false; }
             return true;
         }
 

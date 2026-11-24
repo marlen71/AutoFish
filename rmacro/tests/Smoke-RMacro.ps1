@@ -9,7 +9,10 @@ $configuredProcess = $null
 $oldPort = $env:RMACRO_TEST_PORT
 $oldConfigured = $env:RMACRO_CONFIGURED_EXE
 $oldLocal = $env:LOCALAPPDATA
+$oldProductDll = $env:RMACRO_PRODUCT_DLL
 try {
+    $env:RMACRO_PRODUCT_DLL = Join-Path $root 'dist\RMFishProduct.dll'
+    if (-not (Test-Path -LiteralPath $env:RMACRO_PRODUCT_DLL)) { throw 'Build the separate RMFish product DLL before the GUI test.' }
     New-Item -ItemType Directory -Path $directory | Out-Null
     $db = Join-Path $directory 'fixture.db'
     $ready = Join-Path $directory 'port.txt'
@@ -45,7 +48,8 @@ try {
     $sources = @(
         'src\Vision.cs', 'src\Relocation.cs', 'src\StateMachine.cs', 'src\Engine.cs', 'src\Safety.cs',
         'src\WindowsGame.cs', 'src\UiComponents.cs', 'src\ChromeControls.cs', 'src\RelocationUi.cs', 'src\MainForm.cs',
-        'rmacro\client\UpdatePolicy.cs', 'rmacro\client\Updater.cs', 'rmacro\client\ClientCore.cs', 'rmacro\client\ClientUi.cs', 'rmacro\tests\RMacroTestRunner.cs'
+        'rmacro\client\UpdatePolicy.cs', 'rmacro\client\Updater.cs', 'rmacro\client\ProductUpdateStore.cs',
+        'rmacro\client\ProductWindow.cs', 'rmacro\client\ClientCore.cs', 'rmacro\client\ClientUi.cs', 'rmacro\tests\RMacroTestRunner.cs'
     ) | ForEach-Object { Join-Path $root $_ }
     $references = @(
         [System.Diagnostics.Process].Assembly.Location, [System.Linq.Enumerable].Assembly.Location,
@@ -83,7 +87,9 @@ try {
     # Run the actual PE with its appended configuration, not only the reader
     # in the test assembly. The real Windows loader must still open normally.
     $env:LOCALAPPDATA = Join-Path $directory 'configured-profile'
-    $configuredProcess = Start-Process -FilePath $configured -PassThru
+    # Network updater behavior has its own tests. Skip this once here so the
+    # UI smoke does not depend on GitHub availability or display a warning.
+    $configuredProcess = Start-Process -FilePath $configured -ArgumentList '--skip-update-once' -PassThru
     $null = $configuredProcess.Handle
     $opened = $false
     for ($i = 0; $i -lt 40; $i++) {
@@ -117,6 +123,7 @@ catch {
 finally {
     $env:RMACRO_TEST_PORT = $oldPort
     $env:RMACRO_CONFIGURED_EXE = $oldConfigured
+    $env:RMACRO_PRODUCT_DLL = $oldProductDll
     $env:LOCALAPPDATA = $oldLocal
     if ($guiProcess) { $guiProcess.Refresh(); if (-not $guiProcess.HasExited) { Stop-Process -Id $guiProcess.Id -Force } }
     if ($configuredProcess) { $configuredProcess.Refresh(); if (-not $configuredProcess.HasExited) { Stop-Process -Id $configuredProcess.Id -Force } }

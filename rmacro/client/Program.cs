@@ -8,9 +8,9 @@ using RMFish;
 [assembly: AssemblyTitle("Eternal Core")]
 [assembly: AssemblyDescription("Eternal Core — лоадер игр, макросов и подписок")]
 [assembly: AssemblyProduct("Eternal Core")]
-[assembly: AssemblyVersion("1.3.0.0")]
-[assembly: AssemblyFileVersion("1.3.0.1")]
-[assembly: AssemblyInformationalVersion("1.3.0-vision-test.1")]
+[assembly: AssemblyVersion("1.4.0.0")]
+[assembly: AssemblyFileVersion("1.4.0.1")]
+[assembly: AssemblyInformationalVersion("1.4.0-dev.1")]
 
 namespace RMacro
 {
@@ -30,10 +30,26 @@ namespace RMacro
                 string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
                 if (String.IsNullOrEmpty(local)) throw new InvalidOperationException("Недоступна папка локальных данных Windows.");
                 string directory = Path.Combine(local, "RMacro"); Directory.CreateDirectory(directory);
-                string device = DeviceId.Get();
                 Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
+                // No main loader window exists until the check and, if needed,
+                // the automatic staged installation have finished. A failed
+                // network/update leaves the verified existing EXE in place.
+                try
+                {
+                    bool installing = StartupUpdate.Run<UpdateRelease, StagedUpdate>(args,
+                        LoaderUpdater.FindNewerCurrent,
+                        delegate(UpdateRelease release) { return LoaderUpdater.Prepare(release, Application.ExecutablePath); },
+                        LoaderUpdater.LaunchHelper, LoaderUpdater.Discard);
+                    if (installing) return 0; // helper waits for this process to exit
+                }
+                catch (Exception)
+                {
+                    MessageBox.Show("Не удалось автоматически проверить или установить обновление Eternal Core. Текущая версия сохранена; лоадер будет открыт. Проверьте сеть и повторите запуск.",
+                        "Eternal Core — обновление", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+                string device = DeviceId.Get();
                 ServerConnectionSettings connection = ServerSettings.ReadConnectionFromExecutable(Application.ExecutablePath);
-                using (LoaderForm form = new LoaderForm(directory, device, connection, !LoaderUpdater.SkipCheck(args)))
+                using (LoaderForm form = new LoaderForm(directory, device, connection, false))
                 {
                     form.Shown += delegate { LoaderUpdater.MarkHealthy(args, Application.ExecutablePath); };
                     Application.Run(form);

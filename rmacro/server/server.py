@@ -42,6 +42,10 @@ KEY_RE = re.compile(r"^EC-(?:[0-9A-F]{4}-){7}[0-9A-F]{4}$")
 REQUEST_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 MAX_DURATION = 10 * 366 * 86400
 MAX_KEY_USES = 1_000_000
+# Public product readiness is explicitly chosen by the administrator. It does
+# not grant/revoke a subscription or imply that a program has been tested.
+PRODUCT_STATUSES = ("UPDATED", "ON UPDATE", "AT YOUR OWN RISK", "OUTDATED")
+DEFAULT_PRODUCT_STATUS = "OUTDATED"
 
 
 class ApiError(Exception):
@@ -123,7 +127,9 @@ class Database:
                 );
                 CREATE TABLE IF NOT EXISTS products (
                     code TEXT PRIMARY KEY, name TEXT NOT NULL, created_at INTEGER NOT NULL,
-                    game_code TEXT NOT NULL DEFAULT 'gta5' REFERENCES games(code)
+                    game_code TEXT NOT NULL DEFAULT 'gta5' REFERENCES games(code),
+                    status TEXT NOT NULL DEFAULT 'OUTDATED'
+                        CHECK(status IN ('UPDATED','ON UPDATE','AT YOUR OWN RISK','OUTDATED'))
                 );
                 CREATE TABLE IF NOT EXISTS subscriptions (
                     uid INTEGER NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
@@ -180,6 +186,12 @@ class Database:
                 # SQLite permits an added REFERENCES column only with a NULL
                 # default. Immediately backfill it inside this transaction.
                 db.execute("ALTER TABLE products ADD COLUMN game_code TEXT REFERENCES games(code)")
+            if "status" not in columns:
+                # Preserve existing catalog, subscriptions and sessions. A
+                # conservative default never claims that an unreviewed macro
+                # is updated; the owner can change it in the admin panel.
+                db.execute("""ALTER TABLE products ADD COLUMN status TEXT NOT NULL DEFAULT 'OUTDATED'
+                    CHECK(status IN ('UPDATED','ON UPDATE','AT YOUR OWN RISK','OUTDATED'))""")
             db.execute("UPDATE products SET game_code='gta5' WHERE game_code IS NULL")
             db.execute("INSERT OR IGNORE INTO products(code,name,created_at,game_code) VALUES(?,?,?,?)",
                        ("rmfish", "RMFish", unix_now(), "gta5"))
@@ -429,7 +441,9 @@ class Database:
             raise ApiError(409, "GAME_EXISTS", "Такая игра уже существует.")
         return {"code": code, "name": name.strip()}
 
-    def create_product(self, actor, code, name, game_code="gta5"):
+    def create_product(self, actor, code, name, game_code="gta5", status=DEFAULT_PRODUCT_STATUS):
+        if not isinstance(status, str) or status not in PRODUCT_STATUSES:
+            raise ApiError(400, "BAD_PRODUCT_STATUS", "Выберите один из четырёх статусов продукта.")
         if not isinstance(code, str) or not CODE_RE.fullmatch(code):
             raise ApiError(400, "BAD_PRODUCT", "Код: строчные латинские буквы, цифры, точка, дефис или подчёркивание (до 48 символов).")
         if not isinstance(name, str) or not 1 <= len(name.strip()) <= 80:
@@ -442,14 +456,17 @@ class Database:
                 game = db.execute("SELECT name FROM games WHERE code=?", (game_code,)).fetchone()
                 if not game:
                     raise ApiError(404, "GAME_NOT_FOUND", "Игра не найдена.")
-                db.execute("INSERT INTO products(code,name,created_at,game_code) VALUES(?,?,?,?)",
-                           (code, name.strip(), unix_now(), game_code))
-                self.audit(db, actor, "create_product", None, game_code + "/" + code)
+                db.execute("INSERT INTO products(code,name,created_at,game_code,status) VALUES(?,?,?,?,?)",
+                           (code, name.strip(), unix_now(), game_code, status))
+                self.audit(db, actor, "create_product", None, game_code + "/" + code + " " + status)
         except sqlite3.IntegrityError:
             raise ApiError(409, "PRODUCT_EXISTS", "Такой продукт уже существует.")
-        return {"code": code, "name": name.strip(), "game_code": game_code, "game_name": game["name"]}
+        return {"code": code, "name": name.strip(), "game_code": game_code, "game_name": game["name"], "status": status}
 
-    def update_product(self, actor, code, name, game_code):
+    def update_product(self, actor, code, name, game_code, status=None):
+        # Older panels omit this field; keep the existing value in that case.
+        if status is not None and (not isinstance(status, str) or status not in PRODUCT_STATUSES):
+            raise ApiError(400, "BAD_PRODUCT_STATUS", "Выберите один из четырёх статусов продукта.")
         if not isinstance(code, str) or not CODE_RE.fullmatch(code):
             raise ApiError(400, "BAD_PRODUCT", "Некорректный код продукта.")
         if not isinstance(name, str) or not 1 <= len(name.strip()) <= 80:
@@ -461,11 +478,14 @@ class Database:
             game = db.execute("SELECT name FROM games WHERE code=?", (game_code,)).fetchone()
             if not game:
                 raise ApiError(404, "GAME_NOT_FOUND", "Игра не найдена.")
-            if not db.execute("SELECT code FROM products WHERE code=?", (code,)).fetchone():
+            old = db.execute("SELECT status FROM products WHERE code=?", (code,)).fetchone()
+            if not old:
                 raise ApiError(404, "PRODUCT_NOT_FOUND", "Продукт не найден.")
-            db.execute("UPDATE products SET name=?,game_code=? WHERE code=?", (name.strip(), game_code, code))
-            self.audit(db, actor, "update_product", None, game_code + "/" + code)
-        return {"code": code, "name": name.strip(), "game_code": game_code, "game_name": game["name"]}
+            if status is None:
+                status = old["status"]
+            db.execute("UPDATE products SET name=?,game_code=?,status=? WHERE code=?", (name.strip(), game_code, status, code))
+            self.audit(db, actor, "update_product", None, game_code + "/" + code + " " + status)
+        return {"code": code, "name": name.strip(), "game_code": game_code, "game_name": game["name"], "status": status}
 
     def admin_users(self, query=""):
         now = unix_now()
@@ -493,8 +513,22 @@ class Database:
 
     def admin_products(self):
         with self.connect() as db:
-            return {"products": [dict(r) for r in db.execute("""SELECT p.code,p.name,p.game_code,g.name AS game_name
+            return {"products": [dict(r) for r in db.execute("""SELECT p.code,p.name,p.game_code,g.name AS game_name,p.status
                 FROM products p JOIN games g ON g.code=p.game_code ORDER BY g.name COLLATE NOCASE,p.name COLLATE NOCASE,p.code""")]}
+
+    def public_status(self):
+        # Only the catalog and manually chosen public statuses are disclosed.
+        # No user IDs, sessions, subscriptions, devices or admin data belong here.
+        with self.connect() as db:
+            # Read count and page from the same SQLite snapshot. Discord can
+            # then report omitted products rather than silently hiding them.
+            db.execute("BEGIN")
+            total = db.execute("""SELECT COUNT(*) FROM products p
+                JOIN games g ON g.code=p.game_code""").fetchone()[0]
+            rows = db.execute("""SELECT p.code,p.name,g.name AS game_name,p.status
+                FROM products p JOIN games g ON g.code=p.game_code
+                ORDER BY g.name COLLATE NOCASE,p.name COLLATE NOCASE,p.code LIMIT 100""").fetchall()
+            return {"ok": True, "products": [dict(row) for row in rows], "total_products": total}
 
     def audit_rows(self):
         with self.connect() as db:
@@ -882,6 +916,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_bytes(200, (STATIC / filename).read_bytes(), mime)
             if path == "/api/health":
                 return self.send_json(200, {"ok": True, "server_time": unix_now()})
+            if path == "/api/status":
+                return self.send_json(200, db.public_status())
             if path == "/api/me":
                 user = self.authenticate()
                 return self.send_json(200, db.user_info(user["uid"]))
@@ -951,7 +987,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(201, db.create_game(actor["username"], body.get("code"), body.get("name")))
             if path == "/api/admin/products":
                 actor = self.authenticate(admin=True)
-                return self.send_json(201, db.create_product(actor["username"], body.get("code"), body.get("name"), body.get("game_code", "gta5")))
+                return self.send_json(201, db.create_product(actor["username"], body.get("code"), body.get("name"),
+                    body.get("game_code", "gta5"), body.get("status", DEFAULT_PRODUCT_STATUS)))
             if path == "/api/admin/keys":
                 return self.send_json(201, db.create_key(self.token(), body))
             key_match = re.fullmatch(r"/api/admin/keys/([1-9][0-9]{0,18})/status", path)
@@ -963,7 +1000,8 @@ class Handler(BaseHTTPRequestHandler):
             product_match = re.fullmatch(r"/api/admin/products/([a-z0-9][a-z0-9_.-]{0,47})", path)
             if product_match:
                 actor = self.authenticate(admin=True)
-                return self.send_json(200, db.update_product(actor["username"], product_match.group(1), body.get("name"), body.get("game_code")))
+                return self.send_json(200, db.update_product(actor["username"], product_match.group(1),
+                    body.get("name"), body.get("game_code"), body.get("status")))
             match = re.fullmatch(r"/api/admin/users/([1-9][0-9]{0,18})/(reset-hwid|password|rename|status|grant|set|revoke)", path)
             if match:
                 actor = self.authenticate(admin=True)

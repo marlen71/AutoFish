@@ -7,7 +7,7 @@ namespace RMFish
 {
     // These are the only keys used by the opt-in route. I is the physical key
     // labelled I/Ш, regardless of the current keyboard language.
-    public enum GameKey { Space, Back, Forward, Inventory }
+    public enum GameKey { Space, Forward, Inventory }
 
     internal static class CalibrationFiles
     {
@@ -35,13 +35,16 @@ namespace RMFish
 
     // The user selects the complete, unchanging text of the *actual* empty-fish
     // notice. Only a thresholded text mask is stored, not a screenshot. The
-    // mask is deliberately matched at the same position and resolution, with
-    // both precision and recall requirements; a generic yellow box is not enough.
+    // mask is matched at the recorded horizontal position and resolution, with
+    // both precision and recall requirements. Notifications can shift vertically
+    // as other notices appear or disappear, so search the whole notice region;
+    // a generic yellow box is never enough.
     public sealed class NoticeTemplate
     {
         public const int RegionLeft = 0, RegionTop = 600, RegionRight = 620, RegionBottom = 1000;
         private const string Magic = "RMFISH-NOTICE-1";
         private readonly byte[] mask;
+        private readonly int[] textX, textY;
         public readonly int ClientWidth, ClientHeight, X, Y, Width, Height;
         private readonly int foreground;
 
@@ -61,6 +64,14 @@ namespace RMFish
                 throw new InvalidDataException("Выделите всю надпись целиком, без значка и больших пустых полей.");
             ClientWidth = clientWidth; ClientHeight = clientHeight; X = x; Y = y; Width = width; Height = height;
             this.mask = (byte[])mask.Clone(); foreground = count;
+            textX = new int[count]; textY = new int[count];
+            int index = 0;
+            // Interleave rows so a different notification is rejected quickly.
+            // Every foreground pixel is still considered before a match passes.
+            for (int col = 0; col < width; col++)
+                for (int row = 0; row < height; row++)
+                    if (mask[row * width + col] != 0)
+                    { textX[index] = col; textY[index] = row; index++; }
         }
 
         private static bool TextPixel(int r, int g, int b)
@@ -87,14 +98,35 @@ namespace RMFish
         public bool Matches(PixelFrame frame)
         {
             if (frame == null || frame.ClientWidth != ClientWidth || frame.ClientHeight != ClientHeight) return false;
-            int matches = 0, actual = 0;
+            // The same message can move between stacked notification slots.
+            // Keep the user's X and search only within the explicitly captured
+            // notice region, preferring the originally recorded Y.
+            if (MatchesAt(frame, Y)) return true;
+            int maxOffset = Math.Max(Y - RegionTop, RegionBottom - Height - Y);
+            for (int offset = 1; offset <= maxOffset; offset++)
+            {
+                if (Y - offset >= RegionTop && MatchesAt(frame, Y - offset)) return true;
+                if (Y + offset + Height <= RegionBottom && MatchesAt(frame, Y + offset)) return true;
+            }
+            return false;
+        }
+
+        private bool MatchesAt(PixelFrame frame, int y)
+        {
+            int matches = 0, missed = 0;
+            int maximumMissed = foreground - (foreground * 92 + 99) / 100;
+            for (int i = 0; i < foreground; i++)
+            {
+                int r, g, b; frame.Read(X + textX[i], y + textY[i], out r, out g, out b);
+                if (TextPixel(r, g, b)) matches++;
+                else if (++missed > maximumMissed) return false;
+            }
+            int actual = 0;
             for (int row = 0; row < Height; row++)
                 for (int col = 0; col < Width; col++)
                 {
-                    int r, g, b; frame.Read(X + col, Y + row, out r, out g, out b);
-                    if (!TextPixel(r, g, b)) continue;
-                    actual++;
-                    if (mask[row * Width + col] != 0) matches++;
+                    int r, g, b; frame.Read(X + col, y + row, out r, out g, out b);
+                    if (TextPixel(r, g, b)) actual++;
                 }
             return actual >= 50 && matches * 100 >= foreground * 92 && matches * 100 >= actual * 92;
         }
@@ -267,7 +299,7 @@ namespace RMFish
 
     internal sealed class RelocationTimings
     {
-        public int Space = 65, Walk = 7000, Inventory = 65, Open = 1200, Hover = 300, Between = 900;
+        public int Space = 65, Walk = 7000, TurnSettle = 250, Inventory = 65, Open = 1200, Hover = 300, Between = 900;
     }
 
     internal static class RelocationRunner
@@ -284,18 +316,29 @@ namespace RMFish
             return !stop.WaitOne(0) && !port.StopFileExists() && port.IsForeground(bounds);
         }
 
-        public static bool Execute(IGamePort port, GameBounds bounds, WaitHandle stop, GearMacro gear,
+        public static bool Execute(IGamePort port, GameBounds bounds, WaitHandle stop, GearMacro gear, int turnUnits,
                                    RelocationTimings timings, Action<string> status, out string error)
         {
             error = "";
             if (gear == null || gear.ClientWidth != bounds.Width || gear.ClientHeight != bounds.Height)
             { error = "Разрешение игры отличается от записи инвентаря."; return false; }
+            if (turnUnits < 1 || turnUnits > 10000)
+            { error = "Поворот камеры не откалиброван."; return false; }
             status("Останавливаем рыбалку одним коротким пробелом.");
             if (!port.HoldKey(bounds, GameKey.Space, timings.Space, stop, out error)) return false;
-            status("Отходим назад: S, 7 секунд.");
-            if (!port.HoldKey(bounds, GameKey.Back, timings.Walk, stop, out error)) return false;
-            status("Возвращаемся: W, 7 секунд. Возврат приблизительный.");
+            if (!WaitSafe(port, bounds, stop, timings.TurnSettle)) { error = "Прервано после остановки рыбалки."; return false; }
+            status("Разворачиваем камеру и идём вперёд W, 7 секунд.");
+            if (!port.TurnCamera(bounds, turnUnits, stop, out error)) return false;
+            if (!WaitSafe(port, bounds, stop, timings.TurnSettle)) { error = "Прервано после поворота камеры."; return false; }
             if (!port.HoldKey(bounds, GameKey.Forward, timings.Walk, stop, out error)) return false;
+            // Allow the injected W-up event to reach Windows before checking
+            // held controls and beginning another camera turn.
+            if (!WaitSafe(port, bounds, stop, timings.TurnSettle)) { error = "Прервано после движения."; return false; }
+            status("Разворачиваем камеру ещё раз и возвращаемся W, 7 секунд. Возврат приблизительный.");
+            if (!port.TurnCamera(bounds, turnUnits, stop, out error)) return false;
+            if (!WaitSafe(port, bounds, stop, timings.TurnSettle)) { error = "Прервано после поворота камеры."; return false; }
+            if (!port.HoldKey(bounds, GameKey.Forward, timings.Walk, stop, out error)) return false;
+            if (!WaitSafe(port, bounds, stop, timings.TurnSettle)) { error = "Прервано после движения."; return false; }
             status("Открываем инвентарь и проверяем записанные элементы.");
             if (!port.HoldKey(bounds, GameKey.Inventory, timings.Inventory, stop, out error)) return false;
             if (!WaitSafe(port, bounds, stop, timings.Open)) { error = "Прервано до проверки инвентаря."; return false; }

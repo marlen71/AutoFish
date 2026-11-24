@@ -237,6 +237,38 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.request("/api/admin/products/other", {"name": "X", "game_code": "missing"}, self.admin)[0], 404)
         self.assertEqual(self.request("/api/admin/games")[0], 401)
 
+    def test_manual_public_product_statuses_and_authorization_are_independent(self):
+        uid = self.create()
+        self.assertEqual(self.admin_action(uid, "grant", {"product": "rmfish", "seconds": 3600})[0], 200)
+        token = self.login()[1]["token"]
+        public = self.request("/api/status")[1]
+        self.assertEqual(public, {"ok": True, "products": [{"code": "rmfish", "name": "RMFish",
+                         "game_name": "GTA5 · RMRP", "status": "OUTDATED"}], "total_products": 1})
+        for choice in srv.PRODUCT_STATUSES:
+            body = {"name": "RMFish", "game_code": "gta5", "status": choice}
+            self.assertEqual(self.request("/api/admin/products/rmfish", body)[0], 401)
+            self.assertEqual(self.request("/api/admin/products/rmfish", body, self.admin)[0], 200)
+            self.assertEqual(self.request("/api/status")[1]["products"][0]["status"], choice)
+            self.assertEqual(self.request("/api/authorize", {"product": "rmfish"}, token, self.device_a)[0], 200)
+        self.assertEqual(self.request("/api/admin/products/rmfish", {"name": "X", "game_code": "gta5", "status": "ONLINE"}, self.admin)[0], 400)
+        # An old panel can edit a product without resetting its chosen status.
+        self.assertEqual(self.request("/api/admin/products/rmfish", {"name": "RMFish", "game_code": "gta5", "status": "ON UPDATE"}, self.admin)[0], 200)
+        self.assertEqual(self.request("/api/admin/products/rmfish", {"name": "Renamed", "game_code": "gta5"}, self.admin)[0], 200)
+        self.assertEqual(self.request("/api/status")[1]["products"][0]["status"], "ON UPDATE")
+        self.assertEqual(srv.Database(self.db.path).public_status()["products"][0]["name"], "Renamed")
+        self.assertNotIn("fisher", json.dumps(self.request("/api/status")[1]))
+
+    def test_public_status_reports_catalog_truncation(self):
+        with self.db.connect() as db:
+            for index in range(107):
+                db.execute("INSERT INTO products(code,name,created_at,game_code,status) VALUES(?,?,?,?,?)",
+                           ("test-%03d" % index, "Product %03d" % index, srv.unix_now(), "gta5", "OUTDATED"))
+        status, public, _ = self.request("/api/status")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(public["products"]), 100)
+        self.assertEqual(public["total_products"], 108)
+        self.assertTrue(all(set(p) == {"code", "name", "game_name", "status"} for p in public["products"]))
+
     def test_concurrent_first_login_binds_only_one_device(self):
         self.create()
         barrier = threading.Barrier(2)
@@ -545,6 +577,9 @@ class MigrationAndConfigurationTests(unittest.TestCase):
             self.assertEqual(profile["user"]["username"], "old-user")
             self.assertEqual({p["game_code"] for p in profile["products"]}, {"gta5"})
             self.assertEqual(len(profile["products"]), 2)
+            public = migrated.public_status()
+            self.assertEqual(public["total_products"], 2)
+            self.assertEqual({p["status"] for p in public["products"]}, {"OUTDATED"})
             self.assertEqual(srv.Database(path).authorize(42,"rmfish")["code"], "rmfish")
 
     def test_conflicting_legacy_accounts_are_never_merged_or_taken_over(self):

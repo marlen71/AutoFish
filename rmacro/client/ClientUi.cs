@@ -297,7 +297,11 @@ namespace RMacro
         private ApiClient api;
         private string token, persistentNotice;
         private Profile profile;
-        private MainForm fishForm, drainingFish;
+        private Form fishForm;
+        private ProductWindow fishProduct, drainingFish;
+        // GUI tests can supply deterministic offline metadata; production always
+        // checks the fixed public GitHub repository before every product launch.
+        internal static Func<string, ProductSelection> ResolveProduct = ProductUpdater.CheckAndInstall;
         private ProductLease lease;
         private Mutex fishMutex;
         private bool ownsFishMutex, busy, refreshing, closing;
@@ -329,7 +333,7 @@ namespace RMacro
             drainTimer.Interval = 300;
             drainTimer.Tick += delegate
             {
-                if (drainingFish != null && drainingFish.FinishWorkerShutdown())
+                if (drainingFish != null && drainingFish.Finish())
                 { drainingFish = null; drainTimer.Stop(); ReleaseFishMutex(); UpdateProfileView(); }
             };
             updateTimer.Interval = 5000;
@@ -579,8 +583,7 @@ namespace RMacro
             updateChecking = true;
             try
             {
-                Version current = Assembly.GetExecutingAssembly().GetName().Version;
-                UpdateRelease release = await Task.Run(delegate { return LoaderUpdater.FindNewer(current); });
+                UpdateRelease release = await Task.Run(delegate { return LoaderUpdater.FindNewerCurrent(); });
                 if (closing) return;
                 if (release == null)
                 {
@@ -858,8 +861,8 @@ namespace RMacro
             productState.ForeColor = active ? Theme.Accent : Theme.Warn;
             statusTitle.Text = chosen == null ? "Выберите макрос" : opened ? "RMFish открыт" :
                 !active ? chosen.Name + " · доступ истёк" : supported ? chosen.Name + " · готов к запуску" : chosen.Name + " · запуск пока недоступен";
-            statusDescription.Text = chosen == null ? "Выберите игру и доступный макрос выше." : opened ? "Окно продукта работает внутри Eternal Core." :
-                !active ? "Для продления обратитесь к администратору." : supported ? "Макрос встроен в Eternal Core, установка не нужна." : "Нужна версия лоадера с поддержкой этого макроса.";
+            statusDescription.Text = chosen == null ? "Выберите игру и доступный макрос выше." : opened ? "Окно продукта работает под контролем Eternal Core." :
+                !active ? "Для продления обратитесь к администратору." : supported ? "Обновление макроса проверяется перед каждым запуском." : "Нужна версия лоадера с поддержкой этого макроса.";
             launchButton.Enabled = !busy && active && supported; productPower.Enabled = !busy && active && supported;
             launchButton.Text = opened ? "Показать RMFish   ↗" : "Открыть   ↗";
 
@@ -909,10 +912,23 @@ namespace RMacro
             { fishForm.WindowState = FormWindowState.Normal; fishForm.Show(); fishForm.Activate(); return; }
             CloseProduct("Повторная проверка доступа. Запрошена остановка.");
             persistentNotice = null;
-            SetBusy(true); statusTitle.Text = "Проверяем доступ…"; int expected = generation;
+            if (drainingFish != null)
+            {
+                persistentNotice = "RMFish ещё останавливается. Дождитесь завершения предыдущего экземпляра.";
+                UpdateProfileView(); return;
+            }
+            SetBusy(true); statusTitle.Text = "Проверяем обновление RMFish…"; int expected = generation;
             ApiClient current = api; string currentToken = token; bool refreshAfterFailure = false;
+            ProductLease currentLease = null; ProductWindow currentProduct = null;
             try
             {
+                // The GitHub asset is public. Resolve it before requesting the
+                // lease, so download time cannot consume a stale lease interval.
+                ProductSelection selection = await Task.Run(delegate { return ResolveProduct(localDirectory); });
+                if (closing || expected != generation) return;
+                if (selection == null) throw new InvalidOperationException("Обновление продукта не подготовлено.");
+                if (!String.IsNullOrEmpty(selection.Notice)) { persistentNotice = selection.Notice; connectionText.Text = selection.Notice; }
+                statusTitle.Text = "Проверяем доступ…";
                 LeaseInfo initial = await Task.Run(delegate { return current.Authorize(currentToken, device, "rmfish"); });
                 if (closing || expected != generation) return;
                 if (!AcquireFishMutex())
@@ -921,12 +937,22 @@ namespace RMacro
                     connectionText.Text = persistentNotice; return;
                 }
                 Directory.CreateDirectory(Path.Combine(localDirectory, "Runtime"));
-                ProductLease currentLease = null; MainForm currentForm = null;
                 currentLease = new ProductLease(initial,
                     delegate { return current.Authorize(currentToken, device, "rmfish"); },
                     delegate(string reason)
                     {
-                        if (currentForm != null) currentForm.RevokeAuthorization(reason);
+                        if (currentProduct != null)
+                        {
+                            try { currentProduct.Revoke(reason); }
+                            catch (Exception)
+                            {
+                                // A malformed module must not cause us to drop
+                                // the stop request. Closing is a fallback; the
+                                // mutex remains held until its worker drains.
+                                try { currentProduct.Form.BeginInvoke((MethodInvoker)delegate { currentProduct.Form.Close(); }); }
+                                catch (Exception) { }
+                            }
+                        }
                         try
                         {
                             if (IsHandleCreated && !IsDisposed && !Disposing)
@@ -937,25 +963,30 @@ namespace RMacro
                         }
                         catch (InvalidOperationException) { }
                     });
-                if (!currentLease.IsValid) { currentLease.Dispose(); ReleaseFishMutex(); throw new ApiException(403, "NO_SUBSCRIPTION", "Подписка истекает. Продлите её перед запуском."); }
+                if (!currentLease.IsValid) throw new ApiException(403, "NO_SUBSCRIPTION", "Подписка истекает. Продлите её перед запуском.");
                 string settingsRoot = Path.GetDirectoryName(localDirectory);
-                currentForm = new MainForm(Path.Combine(localDirectory, "Runtime"), settingsRoot, delegate { return currentLease.IsValid; });
-                fishForm = currentForm; lease = currentLease;
+                currentProduct = ProductWindow.Create(selection, Path.Combine(localDirectory, "Runtime"), settingsRoot, delegate { return currentLease.IsValid; });
+                Form currentForm = currentProduct.Form;
+                fishForm = currentForm; fishProduct = currentProduct; lease = currentLease;
                 currentForm.FormClosed += delegate
                 {
                     currentLease.Dispose();
                     if (fishForm == currentForm)
                     {
-                        fishForm = null; lease = null;
-                        if (currentForm.FinishWorkerShutdown()) ReleaseFishMutex();
-                        else { drainingFish = currentForm; drainTimer.Start(); }
+                        fishForm = null; fishProduct = null; lease = null;
+                        if (currentProduct.Finish()) ReleaseFishMutex();
+                        else { drainingFish = currentProduct; drainTimer.Start(); }
                         UpdateProfileView();
                     }
                 };
-                currentLease.Start(); currentForm.Show(); currentForm.Activate(); UpdateProfileView();
+                currentLease.Start();
+                if (!currentLease.IsValid)
+                { CloseProduct("Доступ истёк до открытия продукта. Запрошена остановка."); throw new ApiException(403, "NO_SUBSCRIPTION", "Подписка истекает. Продлите её перед запуском."); }
+                currentForm.Show(); currentForm.Activate(); UpdateProfileView();
             }
             catch (ApiException ex)
             {
+                if (currentLease != null && lease != currentLease) currentLease.Dispose();
                 if (!closing && expected == generation)
                 {
                     if (ex.Status == 401) { store.Delete(); api = null; token = null; profile = null; generation++; ShowLogin("Сессия завершена. Войдите заново."); }
@@ -966,6 +997,7 @@ namespace RMacro
             }
             catch (Exception ex)
             {
+                if (currentLease != null && lease != currentLease) currentLease.Dispose();
                 if (fishForm != null) CloseProduct("Не удалось открыть RMFish. Запрошена остановка.");
                 else if (drainingFish == null) ReleaseFishMutex();
                 if (!closing && expected == generation) { persistentNotice = "Не удалось открыть RMFish: " + ex.Message; connectionText.Text = persistentNotice; }
@@ -991,11 +1023,24 @@ namespace RMacro
         }
         private void CloseProduct(string reason)
         {
-            MainForm current = fishForm; ProductLease currentLease = lease;
-            if (current != null && !current.IsDisposed) { current.RevokeAuthorization(reason); current.Close(); }
+            Form current = fishForm; ProductWindow product = fishProduct; ProductLease currentLease = lease;
+            if (product != null)
+            {
+                try { product.Revoke(reason); } catch (Exception) { }
+            }
+            if (current != null && !current.IsDisposed)
+            {
+                try { current.Close(); } catch (Exception) { }
+            }
             if (currentLease != null) currentLease.Dispose();
-            fishForm = null; lease = null;
-            if (drainingFish == null) ReleaseFishMutex();
+            // A form which refused to close must not release the mutex. If it
+            // was disposed without raising FormClosed, explicitly drain it.
+            if (fishForm == current && product != null && current != null && current.IsDisposed)
+            {
+                fishForm = null; fishProduct = null; lease = null;
+                if (!product.Finish()) { drainingFish = product; drainTimer.Start(); }
+            }
+            if (fishForm == null && drainingFish == null) ReleaseFishMutex();
         }
         private async Task LogoutAsync()
         {

@@ -8,7 +8,7 @@ $cmd = $null
 try {
     New-Item -ItemType Directory -Path $directory | Out-Null
     $env:LOCALAPPDATA = $directory
-    $process = Start-Process -FilePath (Join-Path $root 'dist\EternalCore.exe') -PassThru
+    $process = Start-Process -FilePath (Join-Path $root 'dist\EternalCore.exe') -ArgumentList '--skip-update-once' -PassThru
     $opened = $false
     for ($i = 0; $i -lt 40; $i++) {
         Start-Sleep -Milliseconds 500

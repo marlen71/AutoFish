@@ -25,6 +25,9 @@ namespace RMFish
         bool MoveCursor(GameBounds bounds, int x, int y, WaitHandle stop, out string error);
         ClickResult ClickAt(GameBounds bounds, int x, int y, bool right, WaitHandle stop, out string error);
         bool HoldKey(GameBounds bounds, GameKey key, int milliseconds, WaitHandle stop, out string error);
+        // Relative mouse movement, calibrated and explicitly confirmed by the
+        // player. Never call this without the foreground and stop checks.
+        bool TurnCamera(GameBounds bounds, int units, WaitHandle stop, out string error);
         bool StopFileExists();
         // Called by the worker on the same thread that captured the frame.
         void ReleaseCapture();
@@ -85,8 +88,15 @@ namespace RMFish
                 if (expectedStopVersion.HasValue && stopVersion != expectedStopVersion.Value) return false;
                 if (worker != null && worker.IsAlive) return false;
                 EngineOptions options = requested.CopyValidated();
+                // Selecting the experimental mode must not silently fall back to
+                // desktop capture and system-wide input. A minimized-window
+                // capture/input backend has not yet been validated for GTA5.
+                if (options.WindowMode != GameWindowMode.Active)
+                    throw new InvalidOperationException("Режим свёрнутой игры ещё не реализован; выберите обычный режим.");
                 if (options.AutoRelocate && (options.Notice == null || options.Gear == null))
                     throw new InvalidOperationException("Сначала запишите уведомление и три элемента инвентаря в настройках автоотхода.");
+                if (options.AutoRelocate && (!options.Turn180Confirmed || options.Turn180Units <= 0))
+                    throw new InvalidOperationException("Сначала проверьте и подтвердите поворот камеры на 180° в настройках автоотхода.");
                 if (options.AutoRelocate && (options.Notice.ClientWidth != options.Gear.ClientWidth ||
                     options.Notice.ClientHeight != options.Gear.ClientHeight))
                     throw new InvalidOperationException("Образец уведомления и инвентарь записаны при разном разрешении.");
@@ -343,8 +353,8 @@ namespace RMFish
                         if (noticeGate.Observe(noticeMatches, watch.ElapsedMilliseconds))
                         {
                             string routeError;
-                            if (!RelocationRunner.Execute(port, bounds, stop, options.Gear, new RelocationTimings(),
-                                PublishRelocation, out routeError))
+                            if (!RelocationRunner.Execute(port, bounds, stop, options.Gear, options.Turn180Units,
+                                new RelocationTimings(), PublishRelocation, out routeError))
                             {
                                 finalReason = "Автоотход прерван: " + (String.IsNullOrEmpty(routeError) ? "проверьте игру и положение персонажа." : routeError) +
                                     " Продолжите вручную; автоматического повтора нет.";

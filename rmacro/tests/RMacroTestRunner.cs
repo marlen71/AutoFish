@@ -14,7 +14,7 @@ using RMacro;
 
 internal static class RMacroTestRunner
 {
-    private static int count;
+    private static int count, productChecks;
     private static Control uiDispatcher;
     private const string User = "fixture_user", UserPassword = "fixture-user-password";
     private const string Admin = "fixture_admin", AdminPassword = "fixture-admin-password";
@@ -185,6 +185,56 @@ internal static class RMacroTestRunner
             Check(!offline.IsValid, "offline lease remains denied");
         }
     }
+    // Load the independently built product DLL into the loader test process.
+    // It must accept the same fail-closed authorization gate and direct stop
+    // contract as the embedded form; no GTA5 or real mouse input is used.
+    private static void CheckSeparateProduct(string root)
+    {
+        string path = Environment.GetEnvironmentVariable("RMACRO_PRODUCT_DLL");
+        if (String.IsNullOrEmpty(path) || !File.Exists(path)) throw new Exception("RMACRO_PRODUCT_DLL is required");
+        AssemblyName identity = AssemblyName.GetAssemblyName(path);
+        Version version = new Version(identity.Version.Major, identity.Version.Minor, identity.Version.Build);
+        Check(identity.Name == "RMFishProduct" && identity.Version.Revision == 0 &&
+            version.CompareTo(new Version(ProductUpdateStore.EmbeddedVersion)) >= 0,
+            "separate module identity is compatible with the embedded baseline");
+        string directory = Path.Combine(root, "separate", "RMacro", "Runtime");
+        Directory.CreateDirectory(directory);
+        int authorized = 1;
+        ProductWindow product = ProductWindow.Create(new ProductSelection { Version = version, AssemblyBytes = File.ReadAllBytes(path) },
+            directory, Path.Combine(root, "separate"), delegate { return Interlocked.CompareExchange(ref authorized, 0, 0) == 1; });
+        Form form = product.Form;
+        try
+        {
+            form.Show(); Application.DoEvents();
+            Type type = form.GetType();
+            MethodInfo start = type.GetMethod("StartFishing", BindingFlags.Instance | BindingFlags.NonPublic);
+            FieldInfo engineField = type.GetField("engine", BindingFlags.Instance | BindingFlags.NonPublic);
+            Check(start != null && engineField != null, "separate product has a functioning fishing worker");
+            object engine = engineField.GetValue(form);
+            MethodInfo snapshot = engine.GetType().GetMethod("Snapshot"), wait = engine.GetType().GetMethod("WaitForStop");
+            Func<bool> running = delegate
+            {
+                object value = snapshot.Invoke(engine, null);
+                return (bool)value.GetType().GetField("Running").GetValue(value);
+            };
+            start.Invoke(form, null);
+            WaitUntil(running, 5000, "separate product worker starts while authorized");
+            Exception failure = null;
+            Thread revoke = new Thread(delegate()
+            {
+                try { Interlocked.Exchange(ref authorized, 0); product.Revoke("Тест отзыва доступа."); }
+                catch (Exception ex) { failure = ex; }
+            });
+            revoke.IsBackground = true; revoke.Start();
+            Check(revoke.Join(5000) && failure == null, "separate product receives stop from the independent lease thread");
+            Check((bool)wait.Invoke(engine, new object[] { 5000 }) && !running(), "revocation stops the separate product worker");
+            start.Invoke(form, null);
+            Check(!running(), "a revoked product cannot restart its worker");
+        }
+        finally { form.Close(); Application.DoEvents(); }
+        Check(product.Finish(), "separate product reports worker shutdown before releasing the mutex");
+    }
+
     // Use a real WinForms message loop, just like production. The test thread
     // can deliberately block it to prove the lease stop remains independent.
     private sealed class UiHost : IDisposable
@@ -219,6 +269,60 @@ internal static class RMacroTestRunner
         {
             Run(delegate(LoaderForm f) { context.MainForm = null; f.Close(); });
         }
+    }
+
+    // Exercise the independently built DLL through the real loader and lease,
+    // using deterministic metadata rather than an unpublished GitHub release.
+    private static void CheckLoaderModule(UiHost host)
+    {
+        string path = Environment.GetEnvironmentVariable("RMACRO_PRODUCT_DLL");
+        AssemblyName identity = AssemblyName.GetAssemblyName(path);
+        Version version = new Version(identity.Version.Major, identity.Version.Minor, identity.Version.Build);
+        LoaderForm.ResolveProduct = delegate(string ignored)
+        {
+            Interlocked.Increment(ref productChecks);
+            return new ProductSelection { Version = version, AssemblyBytes = File.ReadAllBytes(path) };
+        };
+        host.Run(delegate(LoaderForm form) { Find<SoftButton>(form, "launchButton").PerformClick(); });
+        WaitUntil(delegate { return host.Value(delegate(LoaderForm f) { Form p = Field<Form>(f, "fishForm"); return p != null && p.Visible; }); },
+            12000, "separate RMFish module opens through loader");
+        Form product = host.Value(delegate(LoaderForm f) { return Field<Form>(f, "fishForm"); });
+        ProductLease lease = host.Value(delegate(LoaderForm f) { return Field<ProductLease>(f, "lease"); });
+        Check(product.GetType().Assembly.GetName().Name == "RMFishProduct" && lease.IsValid,
+            "loader selected the separate module under an active lease");
+        Type type = product.GetType();
+        MethodInfo start = type.GetMethod("StartFishing", BindingFlags.Instance | BindingFlags.NonPublic);
+        object engine = type.GetField("engine", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(product);
+        MethodInfo snapshot = engine.GetType().GetMethod("Snapshot"), wait = engine.GetType().GetMethod("WaitForStop");
+        Func<bool> running = delegate
+        {
+            object state = snapshot.Invoke(engine, null);
+            return (bool)state.GetType().GetField("Running").GetValue(state);
+        };
+        host.Run(delegate(LoaderForm form) { start.Invoke(product, null); });
+        WaitUntil(running, 5000, "separate module worker starts under loader lease");
+        Exception failure = null;
+        Thread revoke = new Thread(delegate()
+        {
+            try { typeof(ProductLease).GetMethod("Invalidate", BindingFlags.Instance | BindingFlags.NonPublic)
+                .Invoke(lease, new object[] { "Test lease revocation." }); }
+            catch (Exception ex) { failure = ex; }
+        });
+        revoke.IsBackground = true; revoke.Start();
+        Check(revoke.Join(5000) && failure == null && !lease.IsValid, "separate module lease invalidates independently of UI");
+        Check((bool)wait.Invoke(engine, new object[] { 5000 }) && !running(), "lease revocation stops the separate module worker");
+        host.Run(delegate(LoaderForm form) { if (!product.IsDisposed) product.Close(); });
+        WaitUntil(delegate { return host.Value(delegate(LoaderForm f) { return Field<Form>(f, "fishForm") == null &&
+            Field<ProductWindow>(f, "drainingFish") == null && !Field<bool>(f, "busy"); }); }, 7000, "module window and worker drain");
+        using (Mutex probe = new Mutex(false, @"Local\RMFish"))
+        {
+            bool acquired = false;
+            try { acquired = probe.WaitOne(0, false); } catch (AbandonedMutexException) { acquired = true; }
+            Check(acquired, "loader releases the product mutex only after the module is drained");
+            if (acquired) probe.ReleaseMutex();
+        }
+        LoaderForm.ResolveProduct = delegate(string ignored)
+        { Interlocked.Increment(ref productChecks); return new ProductSelection { Version = new Version(ProductUpdateStore.EmbeddedVersion) }; };
     }
 
     private static void TraceUi(LoaderForm form)
@@ -320,12 +424,15 @@ internal static class RMacroTestRunner
                 Check(Find<TextBox>(form, "oldPasswordEditor").Text.Length == 0 && Find<TextBox>(form, "newPasswordEditor").Text.Length == 0 &&
                     Find<TextBox>(form, "confirmPasswordEditor").Text.Length == 0, "password fields cleared");
                 Find<SoftButton>(form, "navProducts").PerformClick();
-                Trace("open embedded product"); Find<SoftButton>(form, "launchButton").PerformClick();
             });
             string changedToken;
             Check(api.Login(User, "changed-fixture-user-password", Device, out changedToken).Uid > 0 && changedToken.Length > 0, "new profile password works at next login");
+            Trace("open separate module through loader"); CheckLoaderModule(restored);
+            restored.Run(delegate(LoaderForm form)
+            { Trace("open embedded product"); Find<SoftButton>(form, "launchButton").PerformClick(); });
             WaitUntil(delegate { return restored.Value(delegate(LoaderForm f) { MainForm fish = Field<MainForm>(f, "fishForm"); return fish != null && fish.Visible; }); }, 12000, "embedded RMFish opens");
             Trace("product window opened");
+            Check(productChecks == 2, "a product update check runs before each RMFish window opens");
             MainForm product = restored.Value(delegate(LoaderForm f) { return Field<MainForm>(f, "fishForm"); });
             ProductLease lease = restored.Value(delegate(LoaderForm f) { return Field<ProductLease>(f, "lease"); });
             Check(lease.IsValid, "active GUI lease");
@@ -421,8 +528,13 @@ internal static class RMacroTestRunner
             string port = Environment.GetEnvironmentVariable("RMACRO_TEST_PORT");
             if (String.IsNullOrEmpty(port)) throw new Exception("RMACRO_TEST_PORT is required");
             Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
+            // The updater is independently tested; the GUI test must not
+            // depend on GitHub availability or a real public product release.
+            LoaderForm.ResolveProduct = delegate(string ignored)
+            { Interlocked.Increment(ref productChecks); return new ProductSelection { Version = new Version(ProductUpdateStore.EmbeddedVersion) }; };
             ApiClient api = new ApiClient("http://127.0.0.1:" + port);
             CheckCore(api, root);
+            CheckSeparateProduct(root);
             using (ApplicationContext context = new ApplicationContext())
             {
                 Exception uiError = null;

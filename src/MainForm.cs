@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Text;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace RMFish
@@ -14,9 +15,13 @@ namespace RMFish
         private readonly object calibrationGate = new object();
         private readonly List<GearPoint> gearSamples = new List<GearPoint>();
         // 0: idle, 1: capture notice with F9, 2: record gear with F9,
-        // 3: finish/save the captured sample on the UI or worker thread.
+        // 3: finish/save the captured sample; 4: guarded test of camera turn.
         private int calibrationMode;
-        private bool autoRelocate, rodRight = true, captureRodRight;
+        private ManualResetEvent turnTestStop;
+        private Thread turnTestThread;
+        private bool autoRelocate, rodRight = true, captureRodRight, turnConfirmed;
+        private int turnUnits;
+        private GameWindowMode gameMode = GameWindowMode.Active;
         private readonly FishingEngine engine;
         private readonly Func<bool> accessAllowed;
         private readonly SafetyKeyMonitor safetyKeys;
@@ -403,11 +408,14 @@ namespace RMFish
             settings.Controls.Add(minimizeInput);
             AddLabel(settings, "Сворачивается только RMFish; GTA5 должна оставаться активной.", 69, 292, 565, 22, 8.7f, Theme.Muted, FontStyle.Regular);
 
-            SoftButton save = Button(page, "Сохранить настройки", 30, 466, 220, 42, true);
+            SoftButton save = Button(page, "Сохранить", 30, 466, 150, 42, true);
             save.Name = "saveSettings";
             save.Click += delegate { SaveSettings(true); };
-            settingsFeedback = AddLabel(page, "Изменения — при следующем запуске.", 266, 469, 260, 35, 8.5f, Theme.Muted, FontStyle.Regular);
+            settingsFeedback = AddLabel(page, "Изменения — при следующем запуске.", 192, 469, 175, 35, 8.2f, Theme.Muted, FontStyle.Regular);
             settingsFeedback.Name = "settingsFeedback";
+            SoftButton mode = Button(page, "Режим игры…", 375, 466, 167, 42, false);
+            mode.Name = "windowModeSettings";
+            mode.Click += delegate { ShowWindowMode(); };
             SoftButton relocate = Button(page, "Автоотход…", 551, 466, 209, 42, false);
             relocate.Name = "relocationSettings";
             relocate.Click += delegate { ShowRelocationSetup(); };
@@ -525,7 +533,10 @@ namespace RMFish
                 WaitTimeoutSeconds = (int)timeoutInput.Value,
                 SessionLimitSeconds = (int)sessionInput.Value,
                 MinimizeOnStart = minimizeInput.Checked,
-                AutoRelocate = autoRelocate
+                WindowMode = gameMode,
+                AutoRelocate = autoRelocate,
+                Turn180Units = turnUnits,
+                Turn180Confirmed = turnConfirmed
             };
         }
 
@@ -547,13 +558,18 @@ namespace RMFish
                         if (pair[0] == "wait_seconds" && Int32.TryParse(pair[1], out number)) options.WaitTimeoutSeconds = number;
                         if (pair[0] == "session_seconds" && Int32.TryParse(pair[1], out number)) options.SessionLimitSeconds = number;
                         if (pair[0] == "minimize" && Boolean.TryParse(pair[1], out flag)) options.MinimizeOnStart = flag;
+                        if (pair[0] == "game_mode")
+                            gameMode = pair[1] == "active" ? GameWindowMode.Active : GameWindowMode.MinimizedExperimental;
                         if (pair[0] == "auto_relocate" && Boolean.TryParse(pair[1], out flag)) autoRelocate = flag;
                         if (pair[0] == "rod_right_button" && Boolean.TryParse(pair[1], out flag)) rodRight = flag;
+                        if (pair[0] == "turn_180_units" && Int32.TryParse(pair[1], out number)) turnUnits = number;
+                        if (pair[0] == "turn_180_confirmed" && Boolean.TryParse(pair[1], out flag)) turnConfirmed = flag;
                     }
                 }
             }
             catch (Exception ex) { engine.Log("Не удалось прочитать настройки: " + ex.Message); }
             options = options.CopyValidated();
+            if (turnUnits < 1 || turnUnits > 10000) { turnUnits = 0; turnConfirmed = false; }
             pollInput.Value = options.PollMilliseconds;
             clickInput.Value = options.ReelClickMilliseconds;
             timeoutInput.Value = options.WaitTimeoutSeconds;
@@ -569,8 +585,11 @@ namespace RMFish
                 Directory.CreateDirectory(Path.GetDirectoryName(settingsPath));
                 string text = "poll_ms=" + options.PollMilliseconds + "\r\nreel_click_ms=" + options.ReelClickMilliseconds +
                     "\r\nwait_seconds=" + options.WaitTimeoutSeconds + "\r\nsession_seconds=" + options.SessionLimitSeconds +
-                    "\r\nminimize=" + options.MinimizeOnStart + "\r\nauto_relocate=" + autoRelocate +
-                    "\r\nrod_right_button=" + rodRight + "\r\n";
+                    "\r\nminimize=" + options.MinimizeOnStart +
+                    "\r\ngame_mode=" + (gameMode == GameWindowMode.Active ? "active" : "minimized_experimental") +
+                    "\r\nauto_relocate=" + autoRelocate +
+                    "\r\nrod_right_button=" + rodRight + "\r\nturn_180_units=" + turnUnits +
+                    "\r\nturn_180_confirmed=" + turnConfirmed + "\r\n";
                 File.WriteAllText(settingsPath, text, Encoding.UTF8);
                 if (inform)
                 {
@@ -591,6 +610,22 @@ namespace RMFish
             }
         }
 
+        private void ShowWindowMode()
+        {
+            if (engine.Snapshot().Running)
+            {
+                MessageBox.Show(this, "Сначала остановите рыбалку.", "Режим окна", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            using (WindowModeForm dialog = new WindowModeForm(gameMode))
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                gameMode = dialog.SelectedMode; SaveSettings(false);
+                engine.Log(gameMode == GameWindowMode.Active ? "Выбран обычный режим игры." :
+                    "Выбран режим свёрнутой игры: он пока недоступен, запуск заблокирован.");
+            }
+        }
+
         private void ShowRelocationSetup()
         {
             if (engine.Snapshot().Running)
@@ -605,10 +640,12 @@ namespace RMFish
                 MessageBox.Show(this, "Запись образцов отменена. Откройте настройки ещё раз для новой записи.", "Автоотход");
                 return;
             }
-            using (RelocationSetupForm dialog = new RelocationSetupForm(autoRelocate, rodRight, File.Exists(noticePath), File.Exists(gearPath)))
+            using (RelocationSetupForm dialog = new RelocationSetupForm(autoRelocate, rodRight,
+                File.Exists(noticePath), File.Exists(gearPath), turnUnits, turnConfirmed))
             {
                 if (dialog.ShowDialog(this) != DialogResult.OK) return;
                 autoRelocate = dialog.AutoEnabled; rodRight = dialog.RodRightButton;
+                turnUnits = dialog.TurnUnits; turnConfirmed = dialog.TurnConfirmed;
                 SaveSettings(false);
                 if (dialog.Command == "notice")
                 {
@@ -627,6 +664,16 @@ namespace RMFish
                     lock (calibrationGate) { gearSamples.Clear(); captureRodRight = rodRight; calibrationMode = 2; }
                     engine.Log("Запись инвентаря: наведите на удочку и нажмите F9. F10 отменяет запись.");
                 }
+                else if (dialog.Command == "turn")
+                {
+                    // A test changes the game camera; it cannot establish the
+                    // angle automatically. The player must verify it visually.
+                    turnConfirmed = false; SaveSettings(false);
+                    if (MessageBox.Show(this,
+                        "Через 3 секунды программа попробует повернуть камеру вправо в активной GTA5. Перейдите на безопасное место, не трогайте мышь. W и клики не отправляются. F10 отменяет. Продолжить?",
+                        "Пробный поворот", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) == DialogResult.OK)
+                        StartTurnTest(turnUnits);
+                }
             }
         }
 
@@ -635,8 +682,73 @@ namespace RMFish
             lock (calibrationGate)
             {
                 bool wasActive = calibrationMode != 0;
-                calibrationMode = 0; gearSamples.Clear();
+                // Cancellation is a request, not proof that the test thread has
+                // stopped sending input. Keep mode 4 until its finally block.
+                if (turnTestStop != null) turnTestStop.Set();
+                if (calibrationMode != 4) calibrationMode = 0;
+                gearSamples.Clear();
                 return wasActive;
+            }
+        }
+
+        private void StartTurnTest(int units)
+        {
+            if (units < 1 || units > 10000 || closing || safetyFailed || safetyKeys.StopHeld || !AccessAllowed())
+            { ReportProbe("Пробный поворот недоступен. Проверьте значение, доступ и F10.", "Автоотход: "); return; }
+            long version = engine.StopVersion;
+            ManualResetEvent cancelled = new ManualResetEvent(false);
+            Thread thread = new Thread(delegate()
+            {
+                try
+                {
+                    ReportProbe("Через 3 секунды будет пробный поворот. Переключитесь в GTA5; F10 отменяет.", "Автоотход: ");
+                    if (cancelled.WaitOne(3000)) return;
+                    if (closing || safetyFailed || safetyKeys.StopHeld || !AccessAllowed() ||
+                        engine.Snapshot().Running || engine.StopVersion != version)
+                    { ReportProbe("Пробный поворот отменён.", "Автоотход: "); return; }
+                    using (WindowsGamePort port = new WindowsGamePort(stopFile))
+                    {
+                        GameBounds bounds; string reason;
+                        if (!port.TryGetForeground(out bounds, out reason))
+                        { ReportProbe("Пробный поворот не выполнен: " + reason, "Автоотход: "); return; }
+                        string error;
+                        if (!port.TurnCamera(bounds, units, cancelled, out error))
+                        { ReportProbe("Пробный поворот прерван: " + error, "Автоотход: "); return; }
+                    }
+                    ReportProbe("Проверьте глазами, что камера повернулась ровно на 180°. Затем подтвердите это в настройках.", "Автоотход: ");
+                }
+                catch (Exception ex) { ReportProbe("Ошибка пробного поворота: " + ex.Message, "Автоотход: "); }
+                finally
+                {
+                    lock (calibrationGate)
+                    {
+                        if (Object.ReferenceEquals(turnTestStop, cancelled)) { turnTestStop = null; calibrationMode = 0; }
+                    }
+                    cancelled.Dispose();
+                }
+            });
+            thread.IsBackground = true; thread.Name = "RMFish camera calibration";
+            Exception startError = null;
+            lock (calibrationGate)
+            {
+                if (closing || safetyFailed || safetyKeys.StopHeld || !AccessAllowed() || engine.StopVersion != version ||
+                    calibrationMode != 0 || (turnTestThread != null && turnTestThread.IsAlive) || engine.Snapshot().Running)
+                { cancelled.Dispose(); return; }
+                // Publish and start under the same gate used by cancellation and
+                // FinishWorkerShutdown. An unstarted thread has IsAlive=false;
+                // it must never be observed as an already-drained test.
+                calibrationMode = 4; turnTestStop = cancelled; turnTestThread = thread;
+                try { thread.Start(); }
+                catch (Exception ex)
+                {
+                    turnTestStop = null; calibrationMode = 0; turnTestThread = null;
+                    startError = ex;
+                }
+            }
+            if (startError != null)
+            {
+                cancelled.Dispose();
+                ReportProbe("Не удалось запустить пробный поворот: " + startError.Message, "Автоотход: ");
             }
         }
 
@@ -651,6 +763,11 @@ namespace RMFish
         internal bool FinishWorkerShutdown()
         {
             if (!engine.WaitForStop(0)) return false;
+            // The test can still be inside a native input call after F10,
+            // revocation or closing the form. Keep the loader's RMFish mutex
+            // until that thread has actually returned, too.
+            lock (calibrationGate)
+                if (turnTestThread != null && turnTestThread.IsAlive) return false;
             engine.Dispose();
             return true;
         }
@@ -661,6 +778,7 @@ namespace RMFish
         internal void RevokeAuthorization(string reason)
         {
             engine.RequestStop(reason);
+            CancelCalibration();
             engine.Log(reason);
             try
             {
@@ -675,11 +793,18 @@ namespace RMFish
             if (closing || engine.Snapshot().Running) return;
             lock (calibrationGate)
             {
-                if (calibrationMode != 0)
+                if (calibrationMode != 0 || (turnTestThread != null && turnTestThread.IsAlive))
                 {
-                    engine.Log("Сначала завершите запись образцов или отмените её с F10.");
+                    engine.Log("Сначала дождитесь завершения калибровки или отмените её с F10.");
                     return;
                 }
+            }
+            if (gameMode != GameWindowMode.Active)
+            {
+                engine.Log("Режим свёрнутой игры ещё не готов. Выберите обычный режим.");
+                MessageBox.Show(this, "Режим свёрнутой игры ещё не реализован. Для запуска выберите обычный режим.",
+                    "Режим окна", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
             }
             // Record intent before checking the lease: a concurrent revocation
             // increments StopVersion and must win over this start attempt.
@@ -813,6 +938,7 @@ namespace RMFish
         {
             safetyFailed = true;
             engine.RequestStop("Ошибка контроля аварийной остановки. Запуск заблокирован.");
+            CancelCalibration();
             engine.Log("Ошибка контроля аварийных клавиш: " + ex.Message + ". Перезапустите RMFish.");
             try
             {
@@ -858,7 +984,7 @@ namespace RMFish
                 }
                 if (mode == 1) { CaptureNoticeSample(port, bounds); return; }
                 if (mode == 2) { CaptureGearSample(port, bounds); return; }
-                if (mode == 3) { ReportProbe("Дождитесь завершения текущей записи.", "Автоотход: "); return; }
+                if (mode == 3 || mode == 4) { ReportProbe("Дождитесь завершения текущей калибровки.", "Автоотход: "); return; }
                 PixelFrame frame = port.Capture(bounds);
                 if (!port.IsForeground(bounds))
                 {

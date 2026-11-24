@@ -41,7 +41,7 @@ ARCHIVES = {
 }
 MAX_ARCHIVE = 32 * 1024 * 1024
 MAX_EXECUTABLE = 128 * 1024 * 1024
-CLIENT_PATHS = ("/api/health", "/api/login", "/api/logout", "/api/authorize", "/api/me",
+CLIENT_PATHS = ("/api/health", "/api/status", "/api/login", "/api/logout", "/api/authorize", "/api/me",
                 "/api/me/password", "/api/me/activate-key")
 
 

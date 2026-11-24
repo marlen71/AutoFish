@@ -661,7 +661,8 @@ public static class TestRunner
         public ManualResetEvent CaptureEntered, ContinueCapture, AreaEntered, ContinueArea, ClickEntered, ContinueClick;
         public volatile PixelFrame Frame, Area, NoticeArea;
         public readonly List<GameKey> Keys = new List<GameKey>();
-        public int RouteClicks, CursorMoves, FailKeyAt = -1;
+        public readonly List<string> RouteActions = new List<string>();
+        public int RouteClicks, CursorMoves, Turns, FailKeyAt = -1, FailTurnAt = -1;
         public bool TryGetForeground(out GameBounds bounds, out string reason)
         {
             bounds = Focus ? new GameBounds { Handle = new IntPtr(42), Width = 1920, Height = 1080 } : null;
@@ -721,7 +722,14 @@ public static class TestRunner
         {
             error = "";
             if (!Focus || StopFile || stop.WaitOne(0) || Keys.Count == FailKeyAt) { error = "interrupted"; return false; }
-            Keys.Add(key); return true;
+            Keys.Add(key); RouteActions.Add(key.ToString()); return true;
+        }
+        public bool TurnCamera(GameBounds bounds, int units, WaitHandle stop, out string error)
+        {
+            error = "";
+            if (!Focus || StopFile || stop.WaitOne(0) || units < 1 || units > 10000 || Turns == FailTurnAt)
+            { error = "turn interrupted"; return false; }
+            Turns++; RouteActions.Add("Turn:" + units); return true;
         }
         public bool StopFileExists() { return StopFile; }
         public void ReleaseCapture()
@@ -750,6 +758,15 @@ public static class TestRunner
         FakePort port = new FakePort { Frame = SyntheticCast(880, true), Focus = false };
         using (FishingEngine engine = new FishingEngine(port))
         {
+            bool modeRefused = false;
+            try { engine.Start(new EngineOptions { WindowMode = GameWindowMode.MinimizedExperimental }); }
+            catch (InvalidOperationException) { modeRefused = true; }
+            Check(modeRefused && port.Attempts == 0 && port.Captures == 0,
+                "unfinished minimized mode cannot capture the desktop or send input");
+            modeRefused = false;
+            try { engine.Start(new EngineOptions { WindowMode = (GameWindowMode)999 }); }
+            catch (InvalidOperationException) { modeRefused = true; }
+            Check(modeRefused && port.Attempts == 0, "unknown window mode fails closed");
             Check(engine.Start(new EngineOptions()), "worker starts");
             Check(!engine.Start(new EngineOptions()), "worker cannot be started twice");
             Thread.Sleep(220);
@@ -844,6 +861,26 @@ public static class TestRunner
         }
     }
 
+    // The original image is a partial screenshot; its position in a 1920x1080
+    // game client is unknown. These offsets and removed pixels are synthetic.
+    private static PixelFrame NoticeStack(int originY, bool includeEmptyFish)
+    {
+        const int width = 375, height = 224;
+        byte[] data;
+        using (FileStream file = File.OpenRead(Path.Combine(fixtures, "notice-stack-emptyfish.bgra.gz")))
+        using (GZipStream gzip = new GZipStream(file, CompressionMode.Decompress))
+        using (MemoryStream output = new MemoryStream())
+        { gzip.CopyTo(output); data = output.ToArray(); }
+        if (!includeEmptyFish)
+            for (int y = 127; y < 165; y++)
+                for (int x = 42; x < 355; x++)
+                {
+                    int i = (y * width + x) * 4;
+                    data[i] = data[i + 1] = data[i + 2] = 20;
+                }
+        return new PixelFrame(data, width, height, width * 4, 1920, 1080, 30, originY);
+    }
+
     private static PixelFrame GearFrame(bool changed, int clientWidth, int clientHeight)
     {
         const int width = 240, height = 120, originX = 400, originY = 350;
@@ -864,6 +901,13 @@ public static class TestRunner
         NoticeTemplate notice = NoticeTemplate.Create(noticeFrame, 69, 768, 165, 24);
         Check(notice.Matches(noticeFrame), "a recorded notification matches its own text mask");
         Check(!notice.Matches(Fixture("waiting", 1920, 1080)), "unrelated screens do not match a notification");
+        PixelFrame stack = NoticeStack(700, true);
+        NoticeTemplate emptyFish = NoticeTemplate.Create(stack, 72, 827, 313, 38);
+        Check(emptyFish.Matches(stack), "actual empty-fish text matches its own image crop");
+        Check(emptyFish.Matches(NoticeStack(640, true)), "the same stacked notification can move upward");
+        Check(emptyFish.Matches(NoticeStack(760, true)), "the same stacked notification can move downward");
+        Check(!emptyFish.Matches(NoticeStack(700, false)), "bait, catch and route notifications do not match empty-fish text");
+        Check(!emptyFish.Matches(Fixture("waiting", 1920, 1080)), "empty-fish text is not invented on an unrelated screen");
         try { NoticeTemplate.Create(noticeFrame, 21, 740, 30, 20); throw new Exception("small notice selection accepted"); }
         catch (InvalidDataException) { Check(true, "a short or ambiguous selection is rejected"); }
 
@@ -905,34 +949,41 @@ public static class TestRunner
                 "focus loss discards partial notice confirmations");
 
             GameBounds bounds = new GameBounds { Handle = new IntPtr(42), Width = 1920, Height = 1080 };
-            RelocationTimings timing = new RelocationTimings { Open = 1, Hover = 1, Between = 1 };
+            RelocationTimings timing = new RelocationTimings { Open = 1, Hover = 1, Between = 1, TurnSettle = 1 };
             using (ManualResetEvent stop = new ManualResetEvent(false))
             {
                 FakePort ok = new FakePort { Focus = true, Area = gearFrame };
                 string error;
-                Check(RelocationRunner.Execute(ok, bounds, stop, gear, timing, delegate(string ignored) { }, out error), "calibrated route completes");
-                Check(ok.Keys.Count == 4 && ok.Keys[0] == GameKey.Space && ok.Keys[1] == GameKey.Back &&
-                    ok.Keys[2] == GameKey.Forward && ok.Keys[3] == GameKey.Inventory,
-                    "route sends exactly one space, then S, W and I in order");
-                Check(timing.Walk == 7000 && ok.RouteClicks == 3, "route uses seven seconds per direction and three guarded clicks");
+                Check(RelocationRunner.Execute(ok, bounds, stop, gear, 800, timing, delegate(string ignored) { }, out error), "calibrated route completes");
+                Check(String.Join(",", ok.RouteActions) == "Space,Turn:800,Forward,Turn:800,Forward,Inventory",
+                    "route sends space, two turns and two forward walks, then I; never S");
+                Check(timing.Walk == 7000 && ok.Turns == 2 && ok.RouteClicks == 3, "route uses seven seconds each way and three guarded clicks");
                 FakePort interrupted = new FakePort { Focus = true, Area = gearFrame, FailKeyAt = 2 };
-                Check(!RelocationRunner.Execute(interrupted, bounds, stop, gear, timing, delegate(string ignored) { }, out error) &&
+                Check(!RelocationRunner.Execute(interrupted, bounds, stop, gear, 800, timing, delegate(string ignored) { }, out error) &&
                     interrupted.Keys.Count == 2 && interrupted.RouteClicks == 0,
-                    "an interrupted walk never starts the return or inventory sequence");
+                    "an interrupted walk never starts the inventory sequence");
+                FakePort turnFailure = new FakePort { Focus = true, Area = gearFrame, FailTurnAt = 1 };
+                Check(!RelocationRunner.Execute(turnFailure, bounds, stop, gear, 800, timing, delegate(string ignored) { }, out error) &&
+                    String.Join(",", turnFailure.RouteActions) == "Space,Turn:800,Forward" && turnFailure.RouteClicks == 0,
+                    "failed second turn cannot start the return walk or inventory");
+                FakePort uncalibrated = new FakePort { Focus = true, Area = gearFrame };
+                Check(!RelocationRunner.Execute(uncalibrated, bounds, stop, gear, 0, timing, delegate(string ignored) { }, out error) &&
+                    uncalibrated.RouteActions.Count == 0, "uncalibrated rotation cannot initiate the route");
                 FakePort mismatch = new FakePort { Focus = true, Area = changed };
-                Check(!RelocationRunner.Execute(mismatch, bounds, stop, gear, timing, delegate(string ignored) { }, out error) &&
+                Check(!RelocationRunner.Execute(mismatch, bounds, stop, gear, 800, timing, delegate(string ignored) { }, out error) &&
                     mismatch.RouteClicks == 0 && error.Contains("не совпал"), "unexpected inventory contents stop before the first click");
                 stop.Set();
                 FakePort stopped = new FakePort { Focus = true, Area = gearFrame };
-                Check(!RelocationRunner.Execute(stopped, bounds, stop, gear, timing, delegate(string ignored) { }, out error) &&
-                    stopped.Keys.Count == 0, "an already-requested stop forbids every route action");
+                Check(!RelocationRunner.Execute(stopped, bounds, stop, gear, 800, timing, delegate(string ignored) { }, out error) &&
+                    stopped.Keys.Count == 0 && stopped.Turns == 0, "an already-requested stop forbids every route action");
             }
 
             FakePort automatic = new FakePort { Focus = true, Frame = Fixture("waiting", 1920, 1080), Area = gearFrame, NoticeArea = noticeFrame };
             using (FishingEngine engine = new FishingEngine(automatic))
             {
-                Check(engine.Start(new EngineOptions { AutoRelocate = true, Notice = notice, Gear = gear, SessionLimitSeconds = 30 }),
-                    "opt-in worker starts with both calibrations");
+                Check(engine.Start(new EngineOptions { AutoRelocate = true, Notice = notice, Gear = gear,
+                    Turn180Units = 800, Turn180Confirmed = true, SessionLimitSeconds = 30 }),
+                    "opt-in worker starts with both templates and a confirmed turn");
                 Check(WaitUntil(delegate { return automatic.RouteClicks == 3; }, 9000), "worker detects a stable calibrated notice and runs the guarded route");
                 Thread.Sleep(500);
                 Check(automatic.Keys.Count == 4 && automatic.Keys[0] == GameKey.Space, "persistent notification does not repeat space");
@@ -947,8 +998,8 @@ public static class TestRunner
                 {
                     try
                     {
-                        Check(engine.Start(new EngineOptions { AutoRelocate = true, Notice = notice, Gear = gear }),
-                            "worker starts for delayed notice test");
+                        Check(engine.Start(new EngineOptions { AutoRelocate = true, Notice = notice, Gear = gear,
+                            Turn180Units = 800, Turn180Confirmed = true }), "worker starts for delayed notice test");
                         Check(entered.WaitOne(2000), "second notice capture can be delayed");
                         Thread.Sleep(FishingEngine.MaxFrameAgeMilliseconds + 80);
                         slowNotice.NoticeArea = Fixture("waiting", 1920, 1080);
@@ -966,6 +1017,15 @@ public static class TestRunner
                 bool refused = false;
                 try { engine.Start(new EngineOptions { AutoRelocate = true }); } catch (InvalidOperationException) { refused = true; }
                 Check(refused, "auto-relocation is refused without both calibrations");
+                refused = false;
+                try { engine.Start(new EngineOptions { AutoRelocate = true, Notice = notice, Gear = gear, Turn180Units = 800 }); }
+                catch (InvalidOperationException) { refused = true; }
+                Check(refused, "auto-relocation cannot run until the player confirms the turn");
+                refused = false;
+                try { engine.Start(new EngineOptions { AutoRelocate = true, Notice = notice, Gear = gear,
+                    Turn180Units = 10001, Turn180Confirmed = true }); }
+                catch (InvalidOperationException) { refused = true; }
+                Check(refused, "out-of-range rotation never becomes a clamped, accepted value");
             }
         }
         finally { Directory.Delete(temp, true); }

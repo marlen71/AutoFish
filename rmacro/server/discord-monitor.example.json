@@ -1,0 +1,7 @@
+{
+  "status_url": "https://REPLACE_WITH_SERVER_ADDRESS:8765/api/status",
+  "server_ca_file": null,
+  "status_webhook": "https://discord.com/api/webhooks/REPLACE_ID/REPLACE_SECRET",
+  "update_webhook": "https://discord.com/api/webhooks/REPLACE_ID/REPLACE_SECRET",
+  "interval_seconds": 60
+}

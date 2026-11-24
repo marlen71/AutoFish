@@ -62,7 +62,22 @@ namespace RMacro
             }
         }
 
-        public static UpdateRelease FindNewer(Version current)
+        public static UpdateRelease FindNewer(Version current) { return FindNewerKind(current, false, false); }
+        public static UpdateRelease FindNewerProduct(Version current) { return FindNewerKind(current, true, false); }
+
+        // A published stable 1.4.0 is newer than 1.4.0-dev.1 even though
+        // their numeric AssemblyVersion is the same. Stable builds never
+        // reinstall an equal version, and preview releases are never selected.
+        public static UpdateRelease FindNewerCurrent()
+        {
+            Assembly current = typeof(LoaderUpdater).Assembly;
+            Version version = current.GetName().Version;
+            object[] attributes = current.GetCustomAttributes(typeof(AssemblyInformationalVersionAttribute), false);
+            string information = attributes.Length == 1 ? ((AssemblyInformationalVersionAttribute)attributes[0]).InformationalVersion : null;
+            return FindNewerKind(version, false, UpdatePolicy.IsPrerelease(version, information));
+        }
+
+        private static UpdateRelease FindNewerKind(Version current, bool product, bool allowEqual)
         {
             UpdateRelease best = null;
             // GitHub orders releases by creation time. Three bounded pages avoid
@@ -81,14 +96,14 @@ namespace RMacro
                 JavaScriptSerializer json = new JavaScriptSerializer(); json.MaxJsonLength = MetadataLimit;
                 object[] releases = json.DeserializeObject(new UTF8Encoding(false, true).GetString(bytes)) as object[];
                 if (releases == null || releases.Length > 100) throw new InvalidDataException("Некорректный список релизов.");
-                UpdateRelease candidate = UpdatePolicy.Select(releases, current);
+                UpdateRelease candidate = product ? UpdatePolicy.SelectProduct(releases, current) : UpdatePolicy.SelectLoader(releases, current, allowEqual);
                 if (candidate != null && (best == null || candidate.Version.CompareTo(best.Version) > 0)) best = candidate;
                 if (releases.Length < 100) break;
             }
             return best;
         }
 
-        private static byte[] Download(UpdateRelease release)
+        internal static byte[] DownloadVerified(UpdateRelease release)
         {
             Uri current = new Uri(release.DownloadUrl);
             for (int hop = 0; hop <= 4; hop++)
@@ -111,7 +126,7 @@ namespace RMacro
                     if (bytes.LongLength != release.Size || !String.Equals(Hash(bytes), release.Sha256, StringComparison.Ordinal))
                         throw new InvalidDataException("Размер или SHA-256 обновления не совпадает с GitHub.");
                     if (bytes.Length < 2 || bytes[0] != 0x4d || bytes[1] != 0x5a)
-                        throw new InvalidDataException("Обновление не является Windows EXE.");
+                        throw new InvalidDataException("Обновление не является исполняемым файлом Windows (PE).");
                     return bytes;
                 }
             }
@@ -135,7 +150,7 @@ namespace RMacro
             if (!String.Equals(Path.GetFileName(target), "EternalCore.exe", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("Для обновления имя приложения должно быть EternalCore.exe.");
             ServerConnectionSettings connection = ServerSettings.ReadConnectionFromExecutable(target);
-            byte[] verified = Download(release);
+            byte[] verified = DownloadVerified(release);
             return StageVerified(release, target, connection, verified);
         }
 
@@ -186,7 +201,6 @@ namespace RMacro
         }
 
         public static bool IsApply(string[] args) { return args != null && args.Length > 0 && args[0] == "--apply-update"; }
-        public static bool SkipCheck(string[] args) { return args != null && args.Length == 1 && args[0] == "--skip-update-once"; }
 
         public static void MarkHealthy(string[] args, string executable)
         {

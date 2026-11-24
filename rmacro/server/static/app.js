@@ -105,7 +105,7 @@
     const keySelect = $('key-product'), previousKey = keySelect.value;
     select.replaceChildren(); editSelect.replaceChildren(); keySelect.replaceChildren();
     for (const p of products) {
-      list.append(element('span','product-tag',p.game_name + ' / ' + p.name + ' · ' + p.code));
+      list.append(element('span','product-tag',p.game_name + ' / ' + p.name + ' · ' + p.code + ' · ' + (p.status || 'OUTDATED')));
       const option = element('option','',p.game_name + ' / ' + p.name); option.value = p.code; select.append(option);
       const editOption = element('option','',p.game_name + ' / ' + p.name); editOption.value = p.code; editSelect.append(editOption);
       const keyOption = element('option','',p.game_name + ' / ' + p.name); keyOption.value = p.code; keySelect.append(keyOption);
@@ -121,6 +121,7 @@
     const product = products.find(p => p.code === $('edit-product-code').value);
     $('edit-product-name').value = product ? product.name : '';
     $('edit-product-game').value = product ? product.game_code : '';
+    if ($('edit-product-status')) $('edit-product-status').value = product && product.status ? product.status : 'OUTDATED';
   }
   function renderKeys() {
     const list = $('key-list'); list.replaceChildren();
@@ -237,7 +238,11 @@
   });
   $('edit-product-code').addEventListener('change',syncProductEditor);
   $('edit-product').addEventListener('submit',async event => {
-    event.preventDefault(); try { const code=$('edit-product-code').value; await api('/api/admin/products/' + encodeURIComponent(code),{name:$('edit-product-name').value.trim(),game_code:$('edit-product-game').value}); await refresh(); text($('app-message'),'Макрос изменён; подписки сохранены.'); }
+    event.preventDefault(); try {
+      const code=$('edit-product-code').value, body={name:$('edit-product-name').value.trim(),game_code:$('edit-product-game').value};
+      if ($('edit-product-status')) body.status=$('edit-product-status').value;
+      await api('/api/admin/products/' + encodeURIComponent(code),body); await refresh(); text($('app-message'),'Макрос изменён; подписки сохранены.');
+    }
     catch(e) { error($('app-message'),e.message); }
   });
   $('create-product').addEventListener('submit',async event => {

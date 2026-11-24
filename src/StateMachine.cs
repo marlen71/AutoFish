@@ -4,6 +4,7 @@ namespace RMFish
 {
     public enum FishingPhase { Searching, Casting, WaitingBite, Reeling, Relocating, Paused, Stopped }
     public enum FishingAction { None, CastClick, ReelClick, Stop }
+    public enum GameWindowMode { Active, MinimizedExperimental }
 
     public sealed class EngineOptions
     {
@@ -12,7 +13,12 @@ namespace RMFish
         public int WaitTimeoutSeconds = 300; // zero means no separate waiting limit
         public int SessionLimitSeconds = 120; // always bounded, including while paused
         public bool MinimizeOnStart = true;
+        public GameWindowMode WindowMode = GameWindowMode.Active;
         public bool AutoRelocate;
+        // Relative mouse counts for a 180-degree turn. Zero is uncalibrated;
+        // confirmation is invalidated when the value changes in the UI.
+        public int Turn180Units;
+        public bool Turn180Confirmed;
         public NoticeTemplate Notice;
         public GearMacro Gear;
 
@@ -24,7 +30,12 @@ namespace RMFish
             result.WaitTimeoutSeconds = Math.Max(0, Math.Min(3600, WaitTimeoutSeconds));
             result.SessionLimitSeconds = Math.Max(1, Math.Min(1800, SessionLimitSeconds));
             result.MinimizeOnStart = MinimizeOnStart;
+            if (WindowMode != GameWindowMode.Active && WindowMode != GameWindowMode.MinimizedExperimental)
+                throw new InvalidOperationException("Неизвестный режим окна игры.");
+            result.WindowMode = WindowMode;
             result.AutoRelocate = AutoRelocate;
+            result.Turn180Units = Turn180Units >= 1 && Turn180Units <= 10000 ? Turn180Units : 0;
+            result.Turn180Confirmed = result.Turn180Units > 0 && Turn180Confirmed;
             result.Notice = Notice;
             result.Gear = Gear;
             return result;
