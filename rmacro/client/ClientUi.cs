@@ -927,6 +927,7 @@ namespace RMacro
                 ProductSelection selection = await Task.Run(delegate { return ResolveProduct(localDirectory); });
                 if (closing || expected != generation) return;
                 if (selection == null) throw new InvalidOperationException("Обновление продукта не подготовлено.");
+                bool pendingProductUpdate = selection.HasPendingInstallation;
                 if (!String.IsNullOrEmpty(selection.Notice)) { persistentNotice = selection.Notice; connectionText.Text = selection.Notice; }
                 statusTitle.Text = "Проверяем доступ…";
                 LeaseInfo initial = await Task.Run(delegate { return current.Authorize(currentToken, device, "rmfish"); });
@@ -982,7 +983,16 @@ namespace RMacro
                 currentLease.Start();
                 if (!currentLease.IsValid)
                 { CloseProduct("Доступ истёк до открытия продукта. Запрошена остановка."); throw new ApiException(403, "NO_SUBSCRIPTION", "Подписка истекает. Продлите её перед запуском."); }
-                currentForm.Show(); currentForm.Activate(); UpdateProfileView();
+                currentForm.Show();
+                if (!currentLease.IsValid || currentForm.IsDisposed)
+                { CloseProduct("Доступ истёк при открытии продукта. Запрошена остановка."); throw new ApiException(403, "NO_SUBSCRIPTION", "Не удалось подтвердить доступ к продукту."); }
+                // A verified DLL becomes the installed version only after its
+                // window really opened. Constructor/Show failures leave the
+                // previously installed product selected on the next launch.
+                selection.CommitInstallation();
+                if (pendingProductUpdate)
+                { persistentNotice = "RMFish обновлён до версии " + selection.Version.ToString(3) + "."; connectionText.Text = persistentNotice; }
+                currentForm.Activate(); UpdateProfileView();
             }
             catch (ApiException ex)
             {

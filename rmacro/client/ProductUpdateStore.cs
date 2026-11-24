@@ -16,6 +16,16 @@ namespace RMacro
         public Assembly ValidatedAssembly;
         public Version Version;
         public string Notice;
+        internal Action PendingCommit;
+
+        public bool HasPendingInstallation { get { return PendingCommit != null; } }
+        public void CommitInstallation()
+        {
+            // On failure keep the callback and the previous manifest intact.
+            if (PendingCommit == null) return;
+            PendingCommit();
+            PendingCommit = null;
+        }
     }
 
     // Only RMFish is implemented today. Code from this repository's stable
@@ -147,11 +157,14 @@ namespace RMacro
                         throw new InvalidDataException("Сохранённый файл RMFish повреждён.");
                 }
                 else File.Move(temporary, artifact);
-                // Commit a small atomic pointer only after all checks. Older
-                // artifacts remain available for manual recovery.
-                WriteManifest(directory, release.Version, release.Sha256);
-                return new ProductSelection { AssemblyBytes = bytes, ValidatedAssembly = validated, Version = release.Version,
-                    Notice = "RMFish обновлён до версии " + release.Version.ToString(3) + "." };
+                // The loader commits this small atomic pointer only after the
+                // verified module creates and opens its window successfully.
+                // Failed construction leaves the prior version selected.
+                Version pendingVersion = release.Version;
+                string pendingDigest = release.Sha256;
+                return new ProductSelection { AssemblyBytes = bytes, ValidatedAssembly = validated, Version = pendingVersion,
+                    Notice = "Подготовлено обновление RMFish до версии " + pendingVersion.ToString(3) + ".",
+                    PendingCommit = delegate { WriteManifest(directory, pendingVersion, pendingDigest); } };
             }
             finally { if (File.Exists(temporary)) File.Delete(temporary); }
         }

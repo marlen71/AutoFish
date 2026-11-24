@@ -278,14 +278,24 @@ internal static class RMacroTestRunner
         string path = Environment.GetEnvironmentVariable("RMACRO_PRODUCT_DLL");
         AssemblyName identity = AssemblyName.GetAssemblyName(path);
         Version version = new Version(identity.Version.Major, identity.Version.Minor, identity.Version.Build);
-        LoaderForm.ResolveProduct = delegate(string ignored)
+        LoaderForm.ResolveProduct = delegate(string local)
         {
             Interlocked.Increment(ref productChecks);
-            return new ProductSelection { Version = version, AssemblyBytes = File.ReadAllBytes(path) };
+            byte[] bytes = File.ReadAllBytes(path);
+            UpdateRelease release = new UpdateRelease { Version = version, Tag = "rmfish-product-v" + version.ToString(3),
+                AssetName = "RMFishProduct.dll", Size = bytes.Length, Sha256 = LoaderUpdater.Hash(bytes) };
+            ProductSelection prepared = ProductUpdateStore.CheckAndInstall(local, new Version(0, 0, 0),
+                delegate(Version current) { return release; }, delegate(UpdateRelease r) { return bytes; }, ProductWindow.ValidateModule);
+            if (!prepared.HasPendingInstallation || File.Exists(Path.Combine(local, "Products", "rmfish", "installed.txt")))
+                throw new Exception("The module was committed before its window opened.");
+            return prepared;
         };
         host.Run(delegate(LoaderForm form) { Find<SoftButton>(form, "launchButton").PerformClick(); });
-        WaitUntil(delegate { return host.Value(delegate(LoaderForm f) { Form p = Field<Form>(f, "fishForm"); return p != null && p.Visible; }); },
-            12000, "separate RMFish module opens through loader");
+        WaitUntil(delegate { return host.Value(delegate(LoaderForm f) { Form p = Field<Form>(f, "fishForm");
+            return p != null && p.Visible && !Field<bool>(f, "busy"); }); }, 12000, "separate RMFish module opens through loader");
+        string localDirectory = host.Value(delegate(LoaderForm f) { return Field<string>(f, "localDirectory"); });
+        Check(File.Exists(Path.Combine(localDirectory, "Products", "rmfish", "installed.txt")),
+            "a verified module is committed after its real loader window opens");
         Form product = host.Value(delegate(LoaderForm f) { return Field<Form>(f, "fishForm"); });
         ProductLease lease = host.Value(delegate(LoaderForm f) { return Field<ProductLease>(f, "lease"); });
         Check(product.GetType().Assembly.GetName().Name == "RMFishProduct" && lease.IsValid,

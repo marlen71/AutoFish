@@ -34,9 +34,18 @@ def load(name, path):
 
 
 def free_port():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
+    # Caddy enables HTTP/3 as well as TCP. Windows reserves some UDP port
+    # ranges independently of TCP, so a TCP-only free port can still fail.
+    for _ in range(100):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as tcp, socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
+            tcp.bind(("0.0.0.0", 0))
+            port = tcp.getsockname()[1]
+            try:
+                udp.bind(("0.0.0.0", port))
+            except OSError:
+                continue
+            return port
+    raise RuntimeError("No port available for both TCP and UDP gateway listeners")
 
 
 def run(command, **kwargs):

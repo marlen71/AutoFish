@@ -5,8 +5,13 @@ try {
     New-Item -ItemType Directory -Path $directory | Out-Null
     $csc = Join-Path ([System.Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()) 'csc.exe'
     $fixture = Join-Path $directory 'RMFishProduct.dll'
+    $newerDirectory = Join-Path $directory 'newer'
+    New-Item -ItemType Directory -Path $newerDirectory | Out-Null
+    $newerFixture = Join-Path $newerDirectory 'RMFishProduct.dll'
     & $csc /nologo /noconfig /target:library "/out:$fixture" (Join-Path $PSScriptRoot 'ProductModuleFixture.cs')
     if ($LASTEXITCODE -ne 0) { throw 'Could not compile the harmless product module fixture.' }
+    & $csc /nologo /noconfig /target:library /define:NEWER_FIXTURE "/out:$newerFixture" (Join-Path $PSScriptRoot 'ProductModuleFixture.cs')
+    if ($LASTEXITCODE -ne 0) { throw 'Could not compile the newer product module fixture.' }
     $sources = @(
         (Join-Path $root 'rmacro\client\UpdatePolicy.cs'),
         (Join-Path $root 'rmacro\client\ProductUpdateStore.cs'),
@@ -14,7 +19,7 @@ try {
     )
     $references = @([System.Diagnostics.Process].Assembly.Location, [System.Linq.Enumerable].Assembly.Location) | Select-Object -Unique
     Add-Type -LiteralPath $sources -ReferencedAssemblies $references
-    $result = [ProductUpdateStoreRunner]::Main([string[]]@($fixture))
+    $result = [ProductUpdateStoreRunner]::Main([string[]]@($fixture, $newerFixture))
     if ($result -ne 0) { throw "Product update store tests failed: $result" }
 }
 finally { if (Test-Path $directory) { Remove-Item -LiteralPath $directory -Recurse -Force -ErrorAction SilentlyContinue } }

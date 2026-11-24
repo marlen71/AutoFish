@@ -23,8 +23,8 @@ public static class ProductUpdateStoreRunner
         string root = Path.Combine(Path.GetTempPath(), "rmfish-product-store-" + Guid.NewGuid().ToString("N"));
         try
         {
-            if (args.Length != 1) throw new ArgumentException("Fixture DLL is required.");
-            byte[] module = File.ReadAllBytes(args[0]);
+            if (args.Length != 2) throw new ArgumentException("Both fixture DLL versions are required.");
+            byte[] module = File.ReadAllBytes(args[0]), newerModule = File.ReadAllBytes(args[1]);
             Version baseline = new Version("1.29.0");
             Version checkedVersion = null; int checks = 0;
             ProductSelection current = ProductUpdateStore.CheckAndInstall(root, baseline,
@@ -46,11 +46,25 @@ public static class ProductUpdateStoreRunner
             current = ProductUpdateStore.CheckAndInstall(root, baseline,
                 delegate(Version version) { checks++; return good; }, delegate(UpdateRelease release) { return module; });
             Check(current.Version == good.Version && Hash(current.AssemblyBytes) == good.Sha256,
-                "a verified newer module installs without rebuilding the loader");
+                "a verified newer module is prepared without rebuilding the loader");
             string directory = Path.Combine(root, "Products", "rmfish");
             string manifest = Path.Combine(directory, "installed.txt");
-            Check(File.Exists(manifest) && File.ReadAllText(manifest).Contains(good.Sha256), "installed pointer records version and digest");
+            Check(current.HasPendingInstallation && !File.Exists(manifest),
+                "a prepared module cannot replace the installed pointer before its window succeeds");
+            current.CommitInstallation();
+            Check(!current.HasPendingInstallation && File.Exists(manifest) && File.ReadAllText(manifest).Contains(good.Sha256),
+                "successful activation atomically records the version and digest");
             string saved = File.ReadAllText(manifest);
+            UpdateRelease newer = Release(new Version("1.31.0"), newerModule);
+            ProductSelection candidate = ProductUpdateStore.CheckAndInstall(root, baseline,
+                delegate(Version version) { return newer; }, delegate(UpdateRelease release) { return newerModule; });
+            Check(candidate.HasPendingInstallation && File.ReadAllText(manifest) == saved,
+                "preparing a later version preserves the last working pointer until its window opens");
+            // Simulate a constructor or Show failure: do not commit the candidate.
+            ProductSelection retained = ProductUpdateStore.CheckAndInstall(root, baseline,
+                delegate(Version version) { return null; }, delegate(UpdateRelease release) { return newerModule; });
+            Check(retained.Version == good.Version && Hash(retained.AssemblyBytes) == good.Sha256,
+                "failed activation keeps the last working version for the next launch");
             current = ProductUpdateStore.CheckAndInstall(root, baseline,
                 delegate(Version version) { checkedVersion = version; checks++; return null; },
                 delegate(UpdateRelease release) { throw new Exception("Unexpected download"); });
