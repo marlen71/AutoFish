@@ -11,6 +11,16 @@ from .tracking import Tracker
 from .core import Box
 
 
+class DeviceTests(unittest.TestCase):
+    def test_cuda_unavailable_does_not_force_gpu(self):
+        from .detector import resolve_device
+        self.assertEqual(resolve_device('0', False), ('cpu', True))
+        self.assertEqual(resolve_device('auto', False), ('cpu', False))
+        self.assertEqual(resolve_device('cpu', True), ('cpu', False))
+        self.assertEqual(resolve_device('auto', True), ('0', False))
+        self.assertEqual(resolve_device('0', True), ('0', False))
+
+
 class SettingsTests(unittest.TestCase):
     def test_cli_round_trip(self):
         with tempfile.TemporaryDirectory() as tmp:

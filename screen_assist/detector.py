@@ -4,6 +4,14 @@ import time
 from .core import Box
 
 
+def resolve_device(requested, cuda_available):
+    if requested == 'cpu':
+        return 'cpu', False
+    if cuda_available:
+        return '0', False
+    return 'cpu', requested == '0'
+
+
 class Detector:
     def __init__(self, args, monitor):
         self.args, self.monitor = args, monitor
@@ -45,23 +53,22 @@ class Detector:
             classes = [c for c in requested if str(names.get(c, '')).lower() not in ('self', 'own_player')]
             if not classes or any(c not in names for c in classes):
                 raise ValueError(f'Invalid player classes {a.classes}; model classes: {names}')
-            device = ('0' if torch.cuda.is_available() else 'cpu') if a.device == 'auto' else a.device
+            device, fallback = resolve_device(a.device, torch.cuda.is_available())
             low_conf = min(a.confidence,a.track_confidence)
             # Fuse once before capture, not on the first enabled frame.
             model.fuse(verbose=False)
             warmup = np.zeros((a.imgsz,a.imgsz,3), dtype=np.uint8)
-            fallback = False
             try:
                 model.predict(warmup,classes=classes,conf=low_conf,imgsz=a.imgsz,device=device,verbose=False)
             except Exception:
-                if a.device != 'auto' or device == 'cpu':
+                if device == 'cpu':
                     raise
                 device = 'cpu'
                 fallback = True
                 model.to('cpu')
                 model.predictor = None
                 model.predict(warmup,classes=classes,conf=low_conf,imgsz=a.imgsz,device=device,verbose=False)
-            self.status = f'{device} | input {a.imgsz}' + (' | GPU incompatible, CPU fallback' if fallback else '')
+            self.status = f'{device} | input {a.imgsz}' + (' | GPU unavailable: CPU fallback (Install_GPU_1080Ti.bat)' if fallback else '')
             with mss.mss() as capture:
                 while not self.stop.is_set():
                     if not self.enabled.wait(.1):
