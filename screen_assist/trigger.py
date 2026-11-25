@@ -7,10 +7,16 @@ def activation_allowed(enabled, menu_open, focused, mode, rmb):
 
 
 def candidate_under_crosshair(tracks, origin, mode, now, captured, radius, max_age=.12, head=.13, body=.42, min_conf=0.):
-    eligible = [t for t in tracks if t.seen == captured and now-t.seen <= max_age and t.box.confidence >= min_conf
-                and t.box.x1 <= origin[0] <= t.box.x2 and t.box.y1 <= origin[1] <= t.box.y2
-                and math.dist(t.box.point(mode, head, body), origin) <= radius]
-    return min(eligible, key=lambda t: math.dist(t.box.point(mode, head, body), origin), default=None)
+    from .aim_control import safe_point
+    eligible=[]
+    for track in tracks:
+        box=track.raw or track.box
+        point=safe_point(box,mode,head,body)
+        if (track.seen == captured and 0<=now-track.seen<=max_age and box.confidence>=min_conf and point
+                and box.x1<=origin[0]<=box.x2 and box.y1<=origin[1]<=box.y2
+                and math.dist(point,origin)<=radius):
+            eligible.append((math.dist(point,origin),track))
+    return min(eligible,key=lambda item:item[0])[1] if eligible else None
 
 
 class Trigger:

@@ -10,12 +10,14 @@ DEFAULTS = dict(model='', classes='0', monitor=1, confidence=.22, track_confiden
                 aim_activation='rmb', aim_point='head', esp_enabled=True, show_fov=True,
                 trigger_enabled=False, trigger_radius=6., trigger_delay_ms=100., trigger_interval_ms=220.,
                 capture_backend='auto', capture_region='full', crop_size=960, dxgi_output=0,
-                inference_backend='auto', onnx_provider='auto')
+                inference_backend='auto', onnx_provider='auto', aim_gain=.35, aim_step_limit=4.,
+                aim_deadzone=2., aim_confirm_frames=2, crosshair_x=0., crosshair_y=0.)
 RANGES = dict(monitor=(1,32), confidence=(.05,1), track_confidence=(.01,1), cpu_threads=(1,8),
               box_smooth_ms=(0,150), aim_age=(.03,.3), esp_age=(.05,.6), prediction_ms=(0,100),
               fov=(10,2000), smooth=(1,100), speed=(10,10000), head_ratio=(0,1), body_ratio=(0,1),
               trigger_radius=(1,30), trigger_delay_ms=(30,1000), trigger_interval_ms=(100,2000),
-              crop_size=(256,2048), dxgi_output=(0,8))
+              crop_size=(256,2048), dxgi_output=(0,8), aim_gain=(.05,1), aim_step_limit=(1,12),
+              aim_deadzone=(0,15), aim_confirm_frames=(2,5), crosshair_x=(-500,500), crosshair_y=(-500,500))
 CHOICES = dict(device=['auto','cpu','0'], imgsz=[320,416,512,640,960,1280], origin=['center','cursor'],
                aim_activation=['rmb','auto'], aim_point=['head','body'],
                capture_backend=['auto','dxgi','mss'], capture_region=['full','center'],

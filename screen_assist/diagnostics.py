@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from .detector import Detector
 from .menu import theme
+from . import __version__
 
 
 def open_diagnostics(parent,settings):
@@ -49,8 +50,8 @@ def open_diagnostics(parent,settings):
     def report():
         metrics,_=detector.diagnostics()
         requested={key:settings[key] for key in ('capture_backend','capture_region','crop_size','monitor','dxgi_output',
-                                                  'inference_backend','onnx_provider','device','imgsz')}
-        return dict(schema='assist-pipeline-v2',model=Path(settings['model']).name,requested=requested,
+                                                  'inference_backend','onnx_provider','device','imgsz','head_ratio','body_ratio','crosshair_x','crosshair_y','aim_gain','aim_step_limit')}
+        return dict(schema='assist-pipeline-v2',version=__version__,model=Path(settings['model']).name,requested=requested,
                     metrics=metrics,warning=detector.warning,error=detector.error,
                     note='Preview JPEG overhead included in total. No input injection.')
 

@@ -77,8 +77,16 @@ class Detector:
                 if self.preview:
                     import cv2
                     image = frame.copy()
+                    from .aim_control import safe_point
                     for b in boxes:
                         cv2.rectangle(image,(round(b.x1),round(b.y1)),(round(b.x2),round(b.y2)),(70,220,140),2)
+                        point=safe_point(b,self.args.aim_point,self.args.head_ratio,self.args.body_ratio)
+                        if point:
+                            cv2.circle(image,(round(point[0]),round(point[1])),3,(0,210,255),-1)
+                    if self.args.origin=='center':
+                        center=(round(self.monitor['width']/2+self.args.crosshair_x-x),
+                                round(self.monitor['height']/2+self.args.crosshair_y-y))
+                        cv2.drawMarker(image,center,(0,210,255),cv2.MARKER_CROSS,12,1)
                     scale = min(640/image.shape[1],360/image.shape[0],1.)
                     image = cv2.resize(image,None,fx=scale,fy=scale)
                     ok,encoded = cv2.imencode('.jpg',image,[cv2.IMWRITE_JPEG_QUALITY,80])

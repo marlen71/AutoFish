@@ -1,12 +1,11 @@
 """Assist screen-only overlay. python Assist.py --help"""
 import argparse
 import ctypes
-import math
 import os
 import sys
 import time
 from pathlib import Path
-from .core import smooth_step
+from .aim_control import AimController, safe_point
 from .tracking import Tracker
 from .detector import Detector
 from .trigger import Trigger, candidate_under_crosshair, activation_allowed
@@ -77,7 +76,8 @@ def main():
     detector = Detector(a,mon)
     tracker = Tracker(hold=max(.3,a.esp_age),tau=a.box_smooth_ms/1000,acquire=a.confidence)
     trigger = Trigger()
-    state = dict(enabled=False,last=time.perf_counter(),keys={},rx=0.,ry=0.,sequence=0,
+    aim_controller = AimController()
+    state = dict(enabled=False,keys={},sequence=0,
                  locked=None,latency=0.,game_hwnd=None,menu=False,stats_at=0.)
 
     def down(key):
@@ -94,9 +94,9 @@ def main():
             user.mouse_event(0x0004,0,0,0,0)
 
     def reset_input():
+        aim_controller.reset()
         release_trigger()
         state['locked'] = None
-        state['rx'] = state['ry'] = 0.
 
     panel = tk.Toplevel(root)
     panel.withdraw()
@@ -196,7 +196,7 @@ def main():
                 if pressed(0xDB):
                     a.fov = max(10,a.fov-10)
             canvas.delete('all')
-            ox,oy = mon['width']/2,mon['height']/2
+            ox,oy = mon['width']/2+a.crosshair_x,mon['height']/2+a.crosshair_y
             if a.origin == 'cursor':
                 pos = wintypes.POINT()
                 user.GetCursorPos(ctypes.byref(pos))
@@ -218,39 +218,44 @@ def main():
                         if x2 <= x1 or y2 <= y1:
                             continue
                         canvas.create_rectangle(x1,y1,x2,y2,outline=color,width=2,dash=(4,3) if coasting else ())
-                        px,py = b.point(a.aim_point,a.head_ratio,a.body_ratio)
-                        canvas.create_oval(px-2,py-2,px+2,py+2,fill=color,outline=color)
+                        point=safe_point(track.raw or track.box,a.aim_point,a.head_ratio,a.body_ratio) if not coasting else None
+                        if point:
+                            px,py=point
+                            canvas.create_oval(px-2,py-2,px+2,py+2,fill='#f0b94b',outline='#f0b94b')
                 if a.capture_region == 'center':
                     from .capture import region_for
                     x1,y1,x2,y2=region_for(mon,a.capture_region,a.crop_size)
                     canvas.create_rectangle(x1,y1,x2,y2,outline='#c6935d',dash=(6,4))
                 if a.show_fov:
                     canvas.create_oval(ox-a.fov,oy-a.fov,ox+a.fov,oy+a.fov,outline='#8e8e96')
-            dt = min(now-state['last'],.05)
-            state['last'] = now
+            canvas.create_line(ox-5,oy,ox+5,oy,fill='#f0b94b')
+            canvas.create_line(ox,oy-5,ox,oy+5,fill='#f0b94b')
             focused = user.GetForegroundWindow() == state['game_hwnd']
             active = state['enabled'] and focused and not state['menu']
             activated = activation_allowed(state['enabled'],state['menu'],focused,a.aim_activation,down(0x02))
+            activated = activated and 0<=ox<mon['width'] and 0<=oy<mon['height']
             if not activated:
                 reset_input()
             track = tracker.choose((ox,oy),a.fov,a.aim_point,now,state['locked'],max_age=a.aim_age,
-                                   head=a.head_ratio,body=a.body_ratio,prediction=prediction) if activated and a.aim_enabled else None
+                                   head=a.head_ratio,body=a.body_ratio,prediction=0.,confirmed_at=captured) if activated and a.aim_enabled else None
             if track:
-                if state['locked'] != track.id:
-                    state['rx'] = state['ry'] = 0.
                 state['locked'] = track.id
-                target = track.projected(now,prediction).point(a.aim_point,a.head_ratio,a.body_ratio)
-                dx,dy = smooth_step((ox,oy),target,a.smooth,dt,a.speed)
-                dx,dy = dx+state['rx'],dy+state['ry']
-                ix,iy = round(dx),round(dy)
-                state['rx'],state['ry'] = dx-ix,dy-iy
+                confirmed_box=track.raw or track.box
+                target = safe_point(confirmed_box,a.aim_point,a.head_ratio,a.body_ratio)
+                ix,iy=aim_controller.step(state['sequence'],track.seen,track.id,confirmed_box,(ox,oy),target,now,
+                                          smooth=a.smooth,speed=a.speed,gain=a.aim_gain,limit=a.aim_step_limit,
+                                          deadzone=a.aim_deadzone,confirm_frames=a.aim_confirm_frames,max_age=a.aim_age)
                 # Recheck focus immediately before injection.
-                if user.GetForegroundWindow() == state['game_hwnd'] and not down(0x79):
+                if (ix or iy) and user.GetForegroundWindow() == state['game_hwnd'] and not down(0x79):
                     user.mouse_event(1,ix&0xffffffff,iy&0xffffffff,0,0)
-                canvas.create_line(ox,oy,*target,fill='#ffcc00')
+                if target:
+                    canvas.create_rectangle(confirmed_box.x1,confirmed_box.y1,confirmed_box.x2,confirmed_box.y2,
+                                            outline='#ffcc00',width=1)
+                    canvas.create_line(ox,oy,*target,fill='#ffcc00')
+                    canvas.create_oval(target[0]-3,target[1]-3,target[0]+3,target[1]+3,outline='#ffcc00')
             else:
+                aim_controller.reset()
                 state['locked'] = None
-                state['rx'] = state['ry'] = 0.
             candidate = candidate_under_crosshair(tracker.visible(now),(ox,oy),a.aim_point,now,captured,
                                                   a.trigger_radius,max_age=min(.12,a.aim_age),
                                                   head=a.head_ratio,body=a.body_ratio,min_conf=a.confidence) if activated else None

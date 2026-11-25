@@ -10,8 +10,9 @@ inference diagnostics independent of mouse injection.
 | `inference.TorchBackend` | BGR ndarray | local boxes + stage times via Ultralytics |
 | `inference.OnnxBackend` | BGR ndarray | local boxes + direct stage times; raw YOLOv8/11 only |
 | `detector.Detector` | capture + inference | one latest generation-tagged result, mapped monitor coordinates, diagnostics |
-| `diagnostics` | Detector(preview=True) | read-only preview, JSON report; never imports input code |
-| `tracking` | detections + source time | transient identities, confidence hysteresis, bounded lead |
+| `diagnostics` | Detector(preview=True) | read-only preview, JSON report; never injects OS input |
+| `tracking` | detections + source time | transient identities, confidence hysteresis, bounded visual lead |
+| `aim_control` | new sequence + confirmed raw box | one bounded correction per result, stability confirmation, deadzone; no OS calls |
 | `trigger` | confirmed target + explicit gates | nonblocking down/up decisions |
 | `app` | settings + latest result | focus-gated input, overlay, live settings |
 | `menu` / `launcher` | validated settings | one shared sidebar UI, explicit launch/export/data actions |

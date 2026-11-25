@@ -3,6 +3,7 @@ import sys
 import traceback
 from pathlib import Path
 from .settings import load, save, cli
+from . import __version__
 from .menu import SettingsForm, theme
 
 
@@ -16,7 +17,7 @@ def launch():
     theme(root)
     outer = ttk.Frame(root, padding=20)
     outer.pack(fill='both', expand=True)
-    ttk.Label(outer, text='ASSIST', font=('Segoe UI', 25, 'bold'), foreground='#d63a3a').pack(anchor='w')
+    ttk.Label(outer, text=f'ASSIST  {__version__}', font=('Segoe UI', 25, 'bold'), foreground='#d63a3a').pack(anchor='w')
     ttk.Label(outer, text='AI WORKSPACE   /   Захват → модель → трекинг → контролируемый ввод').pack(anchor='w')
     try:
         settings = load()

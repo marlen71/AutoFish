@@ -76,10 +76,14 @@ class Tracker:
         return [(t, t.projected(now, prediction), t.seen != captured)
                 for t in self.visible(now) if now-t.seen <= max_age]
 
-    def choose(self, origin, radius, mode, now, locked=None, max_age=.12, head=.13, body=.42, prediction=0.):
+    def choose(self, origin, radius, mode, now, locked=None, max_age=.12, head=.13, body=.42, prediction=0., confirmed_at=None):
+        def point(t):
+            b=(t.raw or t.box) if confirmed_at is not None else t.projected(now,prediction)
+            return b.point(mode,head,body)
         eligible = [t for t in self.visible(now) if now-t.seen <= max_age
-                    and math.dist(t.projected(now,prediction).point(mode, head, body), origin) <= radius]
+                    and (confirmed_at is None or t.seen == confirmed_at)
+                    and math.dist(point(t),origin) <= radius]
         for t in eligible:
             if t.id == locked:
                 return t
-        return min(eligible, key=lambda t: math.dist(t.projected(now,prediction).point(mode, head, body), origin), default=None)
+        return min(eligible, key=lambda t: math.dist(point(t),origin), default=None)
