@@ -41,7 +41,7 @@ def launch():
         values[name] = tk.StringVar(value=default)
         ttk.Entry(row, textvariable=values[name], width=15).pack(side='right')
     for label, name, options in [('Устройство распознавания', 'device', ['cpu', '0']),
-                                  ('Размер входа (меньше = быстрее)', 'imgsz', ['512', '416', '640'])]:
+                                  ('Размер входа (меньше = быстрее)', 'imgsz', ['416', '320', '512', '640'])]:
         row = ttk.Frame(frame)
         row.pack(fill='x', pady=3)
         ttk.Label(row, text=label).pack(side='left')

@@ -37,14 +37,16 @@ class Detector:
             import numpy as np
             import torch
             from ultralytics import YOLO
-            torch.set_num_threads(2)
             a = self.args
+            torch.set_num_threads(a.cpu_threads)
             model = YOLO(a.model, task='detect')
             names = model.names
             classes = [c for c in a.classes if str(names.get(c, '')).lower() not in ('self', 'own_player')]
             if not classes or any(c not in names for c in classes):
                 raise ValueError(f'Invalid player classes {a.classes}; model classes: {names}')
-            self.status = f'{a.device} | {names}'
+            self.status = f'{a.device} | input {a.imgsz} | {a.cpu_threads} CPU threads'
+            # Fuse once before capture, not on the first enabled frame.
+            model.fuse(verbose=False)
             with mss.mss() as capture:
                 while not self.stop.is_set():
                     if not self.enabled.wait(.1):

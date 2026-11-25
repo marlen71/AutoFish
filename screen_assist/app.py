@@ -17,7 +17,9 @@ def arguments():
     p.add_argument('--monitor', type=int, default=1)
     p.add_argument('--confidence', type=float, default=.35)
     p.add_argument('--device', choices=['cpu', '0'], default='cpu')
-    p.add_argument('--imgsz', type=int, choices=[416, 512, 640], default=512)
+    p.add_argument('--imgsz', type=int, choices=[320, 416, 512, 640], default=416)
+    p.add_argument('--cpu-threads', type=int, choices=range(1, 9), default=4)
+    p.add_argument('--box-smooth-ms', type=float, default=0, help='Optional box filter; 0 = no extra lag')
     p.add_argument('--aim-age', type=float, default=.2, help='Maximum target age in seconds')
     p.add_argument('--fov', type=int, default=100, help='Aim radius in screen pixels')
     p.add_argument('--smooth', type=float, default=10, help='Higher = slower')
@@ -30,6 +32,8 @@ def arguments():
         p.error('--model must be an existing local weights file')
     if not (0 < a.confidence <= 1 and a.fov > 0 and a.smooth >= 1 and a.speed > 0 and .03 <= a.aim_age <= .3):
         p.error('Invalid confidence, fov, smooth or speed')
+    if not 0 <= a.box_smooth_ms <= 150:
+        p.error('--box-smooth-ms must be 0..150')
     if not (0 <= a.head_ratio <= 1 and 0 <= a.body_ratio <= 1):
         p.error('Point ratios must be between 0 and 1')
     try:
@@ -85,7 +89,7 @@ def main():
         capture.close()
         raise SystemExit('Cannot exclude overlay from capture; Windows 10 2004+ required.')
     detector = Detector(a, mon)
-    tracker = Tracker(hold=.3)
+    tracker = Tracker(hold=.3, tau=a.box_smooth_ms/1000)
     state = dict(enabled=False, mode='head', last=time.perf_counter(), keys={}, rx=0., ry=0.,
                  sequence=0, locked=None, latency=0.)
 
@@ -135,7 +139,7 @@ def main():
                 state['sequence'], captured, boxes, state['latency'] = snapshot
                 tracker.update(boxes, captured)
             if state['enabled']:
-                for track in tracker.visible(now):
+                for track in tracker.display(now, snapshot[1] if snapshot else None):
                     b = track.box
                     canvas.create_rectangle(b.x1, b.y1, b.x2, b.y2, outline='#00ff88', width=2)
                     px, py = b.point(state['mode'], a.head_ratio, a.body_ratio)
@@ -165,12 +169,13 @@ def main():
             else:
                 state['rx'] = state['ry'] = 0.
                 state['locked'] = None
+            age_ms = (now-snapshot[1])*1000 if snapshot else 0.
             stale = bool(snapshot and now-snapshot[1] > a.aim_age)
             canvas.create_text(16, 16, anchor='nw', fill='white', text=(
                 f"{'ON' if state['enabled'] else 'OFF'} | {state['mode']} | smooth {a.smooth:g} | FOV {a.fov}\n"
                 f'F8 toggle | F6 head/body | +/- smooth | [ ] FOV | F10 exit\n'
-                f'Inference {state["latency"]*1000:.0f} ms | {detector.status}'
-                + (' | STALE: try input 416' if stale else '')))
+                f'Inference {state["latency"]*1000:.0f} ms | frame age {age_ms:.0f} ms | {detector.status}'
+                + (' | STALE: try input 320' if stale else '')))
             root.after(16, tick)
         except Exception as exc:
             print(f'Stopped safely: {exc}', file=sys.stderr)

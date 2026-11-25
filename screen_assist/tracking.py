@@ -18,7 +18,7 @@ class Track:
 
 
 class Tracker:
-    def __init__(self, hold=.18, tau=.055):
+    def __init__(self, hold=.18, tau=0.0):
         self.hold, self.tau = hold, tau
         self.tracks = {}
         self.next_id = 1
@@ -32,7 +32,7 @@ class Tracker:
             if score < .2 or k in used_tracks or i in used_boxes:
                 continue
             t, b = self.tracks[k], boxes[i]
-            alpha = 1-math.exp(-max(.001, captured-t.seen)/self.tau)
+            alpha = 1.0 if self.tau <= 0 else 1-math.exp(-max(.001, captured-t.seen)/self.tau)
             coords = [getattr(t.box, v)+(getattr(b, v)-getattr(t.box, v))*alpha
                       for v in ('x1','y1','x2','y2')]
             t.box = Box(*coords, b.confidence)
@@ -47,6 +47,10 @@ class Tracker:
     def visible(self, now):
         self.tracks = {k: t for k, t in self.tracks.items() if now-t.seen <= self.hold}
         return list(self.tracks.values())
+
+    def display(self, now, captured, max_age=.2):
+        """Only boxes confirmed by the latest result; no unmatched ghost trails."""
+        return [t for t in self.visible(now) if t.seen == captured and now-t.seen <= max_age]
 
     def choose(self, origin, radius, mode, now, locked=None, max_age=.12, head=.13, body=.42):
         eligible = [t for t in self.visible(now) if now-t.seen <= max_age

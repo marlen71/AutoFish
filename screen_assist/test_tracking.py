@@ -5,7 +5,7 @@ from .tracking import Tracker
 
 class TrackingTests(unittest.TestCase):
     def test_smoothing_and_id(self):
-        tracker = Tracker()
+        tracker = Tracker(tau=.055)
         tracker.update([Box(0, 0, 100, 200)], 1.)
         tracker.update([Box(10, 0, 110, 200)], 1.03)
         tracks = tracker.visible(1.03)
@@ -35,3 +35,26 @@ class TrackingTests(unittest.TestCase):
         tracker.update([Box(500, 0, 600, 200)], 1.02)
         self.assertEqual(len(tracker.visible(1.02)), 2)
         self.assertEqual(len(tracker.visible(1.3)), 0)
+
+    def test_default_follows_latest_coordinates_without_filter_delay(self):
+        tracker = Tracker()
+        tracker.update([Box(0, 0, 100, 200)], 1.)
+        tracker.update([Box(30, 0, 130, 200)], 1.02)
+        self.assertEqual(tracker.visible(1.02)[0].box.x1, 30)
+        self.assertEqual(tracker.visible(1.02)[0].id, 1)
+
+    def test_unmatched_track_is_not_drawn_as_a_trail(self):
+        tracker = Tracker(hold=.3)
+        tracker.update([Box(0, 0, 100, 200)], 1.)
+        tracker.update([Box(500, 0, 600, 200)], 1.05)
+        self.assertEqual(len(tracker.visible(1.06)), 2)
+        shown = tracker.display(1.06, 1.05)
+        self.assertEqual(len(shown), 1)
+        self.assertEqual(shown[0].box.x1, 500)
+        self.assertEqual(tracker.display(1.26, 1.05), [])
+
+    def test_empty_latest_result_does_not_draw_old_box(self):
+        tracker = Tracker(hold=.3)
+        tracker.update([Box(0, 0, 100, 200)], 1.)
+        tracker.update([], 1.05)
+        self.assertEqual(tracker.display(1.06, 1.05), [])
