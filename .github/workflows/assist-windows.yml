@@ -1,0 +1,38 @@
+name: Build Assist for Windows
+on:
+  push:
+    branches: [arena/6d9323ef-autofish]
+    paths:
+      - 'Assist.py'
+      - 'screen_assist/**'
+      - '.github/workflows/assist-windows.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install CPU PyTorch
+        run: python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+      - name: Install dependencies
+        run: python -m pip install -r screen_assist/requirements.txt pyinstaller
+      - name: Test
+        run: python -m unittest screen_assist.test_core -v
+      - name: Build standalone application
+        run: >-
+          python -m PyInstaller --noconfirm --clean --onedir --windowed
+          --name Assist --collect-all ultralytics --collect-all mss
+          --collect-all torchvision --collect-all torch Assist.py
+      - name: Include instructions
+        run: Copy-Item screen_assist/README.md dist/Assist/README.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Assist-Windows-x64
+          path: dist/Assist/
+          retention-days: 30

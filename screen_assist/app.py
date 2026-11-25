@@ -151,6 +151,8 @@ def main():
             root.after(10, tick)
         except Exception as exc:
             print(f'Stopped safely: {exc}', file=sys.stderr)
+            from tkinter import messagebox
+            messagebox.showerror('Assist — остановлен', str(exc), parent=root)
             root.destroy()
 
     try:
