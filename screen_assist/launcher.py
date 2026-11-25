@@ -10,7 +10,7 @@ def launch():
 
     root = tk.Tk()
     root.title('Assist')
-    root.geometry('560x440')
+    root.geometry('600x560')
     root.resizable(False, False)
     frame = ttk.Frame(root, padding=20)
     frame.pack(fill='both', expand=True)
@@ -59,7 +59,23 @@ def launch():
             chosen.extend(['--' + name, value.get()])
         root.destroy()
 
+    def collect_frames():
+        try:
+            monitor = int(values['monitor'].get())
+            if monitor < 1:
+                raise ValueError('Номер монитора должен быть больше 0.')
+            from .collector import collect
+            root.withdraw()
+            collect(root, monitor)
+        except Exception as exc:
+            messagebox.showerror('Assist — сбор кадров', str(exc), parent=root)
+        finally:
+            root.deiconify()
+
     ttk.Button(frame, text='Запустить Assist', command=start).pack(fill='x', pady=12)
+    ttk.Separator(frame).pack(fill='x', pady=4)
+    ttk.Button(frame, text='Сбор кадров для обучения (модель не нужна)', command=collect_frames).pack(fill='x', pady=6)
+    ttk.Label(frame, text='Собирает изображения локально. Не обучает модель автоматически.').pack(anchor='w')
     root.mainloop()
     if not chosen:
         return
