@@ -58,3 +58,33 @@ class TrackingTests(unittest.TestCase):
         tracker.update([Box(0, 0, 100, 200)], 1.)
         tracker.update([], 1.05)
         self.assertEqual(tracker.display(1.06, 1.05), [])
+
+    def test_low_confidence_continues_but_cannot_create_track(self):
+        tracker = Tracker(hold=.4, acquire=.3)
+        tracker.update([Box(0,0,100,200,.2)],1.)
+        self.assertEqual(tracker.visible(1.),[])
+        tracker.update([Box(0,0,100,200,.8)],1.01)
+        tracker.update([Box(5,0,105,200,.15)],1.05)
+        tracks = tracker.visible(1.05)
+        self.assertEqual(len(tracks),1)
+        self.assertEqual(tracks[0].id,1)
+        self.assertEqual(tracks[0].box.confidence,.15)
+
+    def test_motion_compensation_is_bounded(self):
+        tracker = Tracker(hold=.5)
+        tracker.update([Box(0,0,100,200)],1.)
+        tracker.update([Box(40,0,140,200)],1.02)
+        track = tracker.visible(1.02)[0]
+        predicted = track.projected(1.12,.06)
+        self.assertGreater(predicted.x1,40)
+        self.assertLessEqual(predicted.x1,90)
+        self.assertEqual(track.projected(1.4,.06),predicted)
+        self.assertEqual(track.projected(1.12,0).x1,40)
+
+    def test_coasting_is_marked_and_expires(self):
+        tracker = Tracker(hold=.4)
+        tracker.update([Box(0,0,100,200)],1.)
+        tracker.update([],1.1)
+        rendered = tracker.render(1.15,1.1,max_age=.3)
+        self.assertTrue(rendered[0][2])
+        self.assertEqual(tracker.render(1.35,1.1,max_age=.3),[])

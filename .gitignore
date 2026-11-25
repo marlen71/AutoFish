@@ -5,3 +5,5 @@ Assist_captures/
 
 .venv/
 Assist_training/
+assist_settings.json
+assist_settings.tmp

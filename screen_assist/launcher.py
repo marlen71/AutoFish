@@ -1,74 +1,49 @@
-"""Desktop launcher for Assist; also used by the packaged executable."""
+"""Assist desktop dashboard; independent from FishMod."""
 import sys
 import traceback
 from pathlib import Path
+from .settings import load, save, cli
+from .menu import SettingsForm, theme
 
 
 def launch():
     import tkinter as tk
     from tkinter import filedialog, messagebox, ttk
-
     root = tk.Tk()
-    root.title('НейроАссист / Assist')
-    root.geometry('700x830')
-    root.resizable(False, False)
-    frame = ttk.Frame(root, padding=20)
-    frame.pack(fill='both', expand=True)
-    ttk.Label(frame, text='Assist', font=('Segoe UI', 22, 'bold')).pack(anchor='w')
-    ttk.Label(frame, text='Экранные боксы и помощь в наведении').pack(anchor='w', pady=(0, 16))
+    root.title('Assist — управление')
+    root.geometry(f"820x{min(790, root.winfo_screenheight()-70)}")
+    root.minsize(760, 620)
+    theme(root)
+    outer = ttk.Frame(root, padding=20)
+    outer.pack(fill='both', expand=True)
+    ttk.Label(outer, text='ASSIST', font=('Segoe UI', 25, 'bold'), foreground='#d63a3a').pack(anchor='w')
+    ttk.Label(outer, text='Экранный детектор • наведение • локальное обучение').pack(anchor='w')
+    try:
+        settings = load()
+    except Exception as exc:
+        from .settings import DEFAULTS
+        settings = dict(DEFAULTS)
+        messagebox.showwarning('Настройки сброшены', str(exc), parent=root)
     bundled = Path(__file__).resolve().parent.parent / 'game_detector_final.pt'
-    model = tk.StringVar(value=str(bundled) if bundled.is_file() else '')
-    ttk.Label(frame, text='Модель YOLO (.pt), обученная на персонажах игры:').pack(anchor='w')
-    row = ttk.Frame(frame)
-    row.pack(fill='x', pady=6)
-    ttk.Entry(row, textvariable=model).pack(side='left', fill='x', expand=True)
-
-    def browse():
-        filename = filedialog.askopenfilename(parent=root, title='Выберите модель', filetypes=[('YOLO weights', '*.pt')])
-        if filename:
-            model.set(filename)
-
-    ttk.Button(row, text='Обзор…', command=browse).pack(side='right', padx=(8, 0))
-    values = {}
-    for label, name, default in [('Классы персонажей (через запятую)', 'classes', '0'),
-                                 ('Монитор', 'monitor', '1'),
-                                 ('Радиус FOV', 'fov', '100'),
-                                 ('Плавность (больше = медленнее)', 'smooth', '10'),
-                                 ('Порог уверенности (0..1)', 'confidence', '0.35')]:
-        row = ttk.Frame(frame)
-        row.pack(fill='x', pady=3)
-        ttk.Label(row, text=label).pack(side='left')
-        values[name] = tk.StringVar(value=default)
-        ttk.Entry(row, textvariable=values[name], width=15).pack(side='right')
-    for label, name, options in [('Устройство распознавания', 'device', ['cpu', '0']),
-                                  ('Размер входа (меньше = быстрее)', 'imgsz', ['416', '320', '512', '640'])]:
-        row = ttk.Frame(frame)
-        row.pack(fill='x', pady=3)
-        ttk.Label(row, text=label).pack(side='left')
-        values[name] = tk.StringVar(value=options[0])
-        ttk.Combobox(row, textvariable=values[name], values=options, state='readonly', width=13).pack(side='right')
-    ttk.Label(frame, text='F8 — включить • F6 — голова/туловище • ПКМ — доводка\nF10 — выход • +/− — плавность • [ / ] — радиус').pack(anchor='w', pady=12)
-    ttk.Label(frame, text='game_detector_final: 0 = player, 1 = self (исключён). GPU 0 требует CUDA.').pack(anchor='w')
+    if not Path(settings['model']).is_file() and bundled.is_file():
+        settings['model'] = str(bundled)
+    form = SettingsForm(outer, settings)
+    values = form.vars
+    model = values['model']
     chosen = []
+    frame = form.tabs['data']
+    propose = tk.BooleanVar(value=True)
 
     def start():
-        if not Path(model.get()).is_file() or Path(model.get()).suffix.lower() != '.pt':
-            messagebox.showerror('Assist', 'Выберите существующий файл модели .pt', parent=root)
-            return
         try:
-            if int(values['monitor'].get()) < 1 or int(values['fov'].get()) < 1 or float(values['smooth'].get()) < 1:
-                raise ValueError()
-            if not 0 < float(values['confidence'].get()) <= 1:
-                raise ValueError()
-            for item in values['classes'].get().split(','):
-                int(item)
-        except ValueError:
-            messagebox.showerror('Assist', 'Проверьте числовые настройки.', parent=root)
-            return
-        chosen.extend(['--model', model.get()])
-        for name, value in values.items():
-            chosen.extend(['--' + name, value.get()])
-        root.destroy()
+            settings = form.get()
+            if not Path(settings['model']).is_file():
+                raise ValueError('Выберите существующую модель во вкладке «Детектор».')
+            save(settings)
+            chosen.extend(cli(settings))
+            root.destroy()
+        except Exception as exc:
+            messagebox.showerror('Assist', str(exc), parent=root)
 
     def collect_frames():
         try:
@@ -85,13 +60,10 @@ def launch():
         finally:
             root.deiconify()
 
-    ttk.Button(frame, text='Запустить Assist', command=start).pack(fill='x', pady=12)
-    ttk.Separator(frame).pack(fill='x', pady=4)
-    propose = tk.BooleanVar(value=True)
-    ttk.Checkbutton(frame, text='Фоновая предразметка (без своей модели скачает YOLO11n)', variable=propose).pack(anchor='w')
-    ttk.Button(frame, text='Сбор кадров и предложений боксов', command=collect_frames).pack(fill='x', pady=6)
-    ttk.Label(frame, text='Собирает изображения локально. Не обучает модель автоматически.').pack(anchor='w')
-
+    ttk.Label(frame, text='ЛОКАЛЬНЫЙ ДАТАСЕТ', font=('Segoe UI',14,'bold')).pack(anchor='w',pady=8)
+    ttk.Checkbutton(frame, text='Фоновая предразметка', variable=propose).pack(anchor='w')
+    ttk.Button(frame, text='Собирать кадры и предложения', command=collect_frames).pack(fill='x',pady=8)
+    ttk.Label(frame, text='Захватывается весь монитор, включая чат и личные окна.\nНичего не отправляется автоматически.').pack(anchor='w',pady=8)
     def review_frames():
         try:
             from .review import review
@@ -148,6 +120,10 @@ def launch():
     ttk.Checkbutton(frame, text='Обучать на GPU 0 (только с совместимым PyTorch/CUDA)', variable=gpu).pack(anchor='w')
     ttk.Button(frame, text='Дообучить отдельную модель по проверенным кадрам', command=train_frames).pack(fill='x', pady=6)
     ttk.Label(frame, textvariable=training_status, wraplength=590).pack(anchor='w')
+    bar = ttk.Frame(outer)
+    bar.pack(fill='x', pady=(10,0))
+    ttk.Label(bar, text='После запуска: F8 в окне игры • Insert — настройки • F10 — выход', wraplength=500).pack(side='left')
+    ttk.Button(bar, text='Запустить Assist', style='Accent.TButton', command=start).pack(side='right')
     root.mainloop()
     if not chosen:
         return

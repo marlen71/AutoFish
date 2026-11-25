@@ -41,12 +41,27 @@ class Detector:
             torch.set_num_threads(a.cpu_threads)
             model = YOLO(a.model, task='detect')
             names = model.names
-            classes = [c for c in a.classes if str(names.get(c, '')).lower() not in ('self', 'own_player')]
+            requested = [int(c) for c in a.classes.split(',')] if isinstance(a.classes,str) else a.classes
+            classes = [c for c in requested if str(names.get(c, '')).lower() not in ('self', 'own_player')]
             if not classes or any(c not in names for c in classes):
                 raise ValueError(f'Invalid player classes {a.classes}; model classes: {names}')
-            self.status = f'{a.device} | input {a.imgsz} | {a.cpu_threads} CPU threads'
+            device = ('0' if torch.cuda.is_available() else 'cpu') if a.device == 'auto' else a.device
+            low_conf = min(a.confidence,a.track_confidence)
             # Fuse once before capture, not on the first enabled frame.
             model.fuse(verbose=False)
+            warmup = np.zeros((a.imgsz,a.imgsz,3), dtype=np.uint8)
+            fallback = False
+            try:
+                model.predict(warmup,classes=classes,conf=low_conf,imgsz=a.imgsz,device=device,verbose=False)
+            except Exception:
+                if a.device != 'auto' or device == 'cpu':
+                    raise
+                device = 'cpu'
+                fallback = True
+                model.to('cpu')
+                model.predictor = None
+                model.predict(warmup,classes=classes,conf=low_conf,imgsz=a.imgsz,device=device,verbose=False)
+            self.status = f'{device} | input {a.imgsz}' + (' | GPU incompatible, CPU fallback' if fallback else '')
             with mss.mss() as capture:
                 while not self.stop.is_set():
                     if not self.enabled.wait(.1):
@@ -57,8 +72,8 @@ class Detector:
                         generation = self.generation
                     captured = time.perf_counter()
                     frame = np.asarray(capture.grab(self.monitor))[:, :, :3].copy()
-                    result = model.predict(frame, classes=classes, conf=a.confidence, imgsz=a.imgsz,
-                                           device=a.device, verbose=False)[0]
+                    result = model.predict(frame, classes=classes, conf=low_conf, imgsz=a.imgsz,
+                                           device=device, verbose=False)[0]
                     boxes = []
                     if result.boxes is not None:
                         for xy, conf in zip(result.boxes.xyxy.cpu().tolist(), result.boxes.conf.cpu().tolist()):
