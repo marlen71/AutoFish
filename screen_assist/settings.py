@@ -8,13 +8,18 @@ DEFAULTS = dict(model='', classes='0', monitor=1, confidence=.22, track_confiden
                 esp_age=.35, prediction_ms=60., fov=130, smooth=10., speed=900.,
                 head_ratio=.13, body_ratio=.42, origin='center', aim_enabled=True,
                 aim_activation='rmb', aim_point='head', esp_enabled=True, show_fov=True,
-                trigger_enabled=False, trigger_radius=6., trigger_delay_ms=100., trigger_interval_ms=220.)
+                trigger_enabled=False, trigger_radius=6., trigger_delay_ms=100., trigger_interval_ms=220.,
+                capture_backend='auto', capture_region='full', crop_size=960, dxgi_output=0,
+                inference_backend='auto', onnx_provider='auto')
 RANGES = dict(monitor=(1,32), confidence=(.05,1), track_confidence=(.01,1), cpu_threads=(1,8),
               box_smooth_ms=(0,150), aim_age=(.03,.3), esp_age=(.05,.6), prediction_ms=(0,100),
               fov=(10,2000), smooth=(1,100), speed=(10,10000), head_ratio=(0,1), body_ratio=(0,1),
-              trigger_radius=(1,30), trigger_delay_ms=(30,1000), trigger_interval_ms=(100,2000))
+              trigger_radius=(1,30), trigger_delay_ms=(30,1000), trigger_interval_ms=(100,2000),
+              crop_size=(256,2048), dxgi_output=(0,8))
 CHOICES = dict(device=['auto','cpu','0'], imgsz=[320,416,512,640,960,1280], origin=['center','cursor'],
-               aim_activation=['rmb','auto'], aim_point=['head','body'])
+               aim_activation=['rmb','auto'], aim_point=['head','body'],
+               capture_backend=['auto','dxgi','mss'], capture_region=['full','center'],
+               inference_backend=['auto','pytorch','onnx'], onnx_provider=['auto','directml','cuda','cpu'])
 PATH = Path.cwd() / 'assist_settings.json'
 
 

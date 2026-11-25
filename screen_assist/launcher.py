@@ -10,14 +10,14 @@ def launch():
     import tkinter as tk
     from tkinter import filedialog, messagebox, ttk
     root = tk.Tk()
-    root.title('Assist — управление')
-    root.geometry(f"820x{min(790, root.winfo_screenheight()-70)}")
-    root.minsize(760, 620)
+    root.title('Assist — AI Workspace')
+    root.geometry(f"{min(1080,root.winfo_screenwidth()-40)}x{min(820, root.winfo_screenheight()-70)}")
+    root.minsize(940, 620)
     theme(root)
     outer = ttk.Frame(root, padding=20)
     outer.pack(fill='both', expand=True)
     ttk.Label(outer, text='ASSIST', font=('Segoe UI', 25, 'bold'), foreground='#d63a3a').pack(anchor='w')
-    ttk.Label(outer, text='Экранный детектор • наведение • локальное обучение').pack(anchor='w')
+    ttk.Label(outer, text='AI WORKSPACE   /   Захват → модель → трекинг → контролируемый ввод').pack(anchor='w')
     try:
         settings = load()
     except Exception as exc:
@@ -31,6 +31,63 @@ def launch():
     values = form.vars
     model = values['model']
     chosen = []
+    overview = form.tabs['diagnostics']
+    ttk.Label(overview,text='Новый конвейер. Сначала проверьте изображение.',font=('Segoe UI',13,'bold')).pack(anchor='w',pady=(0,12))
+    ttk.Label(overview,text='01  Захват DXGI или резервный MSS\n\n02  PyTorch (.pt) или ONNX Runtime (.onnx)\n\n03  Трекинг с ограниченной компенсацией задержки\n\n04  Наведение и триггер только после явного F8',wraplength=570).pack(anchor='w',pady=12)
+    ttk.Label(overview,text='Проверка ниже не двигает мышь и не нажимает кнопки.\n'
+              'Full сохраняет весь экран. Center ограничивает и ESP.\n'
+              'Логи и кадры остаются локально.',foreground='#aaaab8',wraplength=570).pack(anchor='w',pady=12)
+    def diagnose():
+        try:
+            settings=form.get()
+            if not Path(settings['model']).is_file():
+                raise ValueError('Сначала выберите модель в разделе «Модель».')
+            from .diagnostics import open_diagnostics
+            root.withdraw()
+            open_diagnostics(root,settings)
+        except Exception as exc:
+            messagebox.showerror('Диагностика',str(exc),parent=root)
+        finally:
+            root.deiconify()
+    ttk.Button(overview,text='Проверить захват и модель — без ввода',style='Accent.TButton',command=diagnose).pack(fill='x',pady=12)
+    export_status=tk.StringVar(value='Для DirectML сначала экспортируйте свои веса в ONNX.')
+    exporting={}
+    def export_model():
+        import subprocess,os
+        if exporting.get('process') and exporting['process'].poll() is None:
+            return
+        try:
+            settings=form.get()
+            source=Path(settings['model'])
+            if not source.is_file() or source.suffix.lower()!='.pt':
+                raise ValueError('Выберите доверенную .pt detection-модель.')
+            output=filedialog.asksaveasfilename(parent=root,initialfile=source.stem+'.onnx',defaultextension='.onnx',filetypes=[('ONNX','*.onnx')])
+            if not output:
+                return
+            log_path=Path.cwd()/'assist_export.log'
+            command=[sys.executable]
+            if not getattr(sys,'frozen',False):
+                command.append(str(Path(__file__).resolve().parent.parent/'Assist.py'))
+            command+=['--export-onnx',str(source),output,'--size',str(settings['imgsz'])]
+            env=dict(os.environ,ASSIST_JOB_LOG=str(log_path))
+            with log_path.open('w',encoding='utf-8') as log:
+                process=subprocess.Popen(command,stdout=log,stderr=log,env=env)
+            exporting['process']=process
+            export_status.set('Экспорт выполняется отдельно. Лог: assist_export.log')
+            def check():
+                if process.poll() is None:
+                    root.after(1000,check)
+                elif process.returncode==0:
+                    form.vars['model'].set(output)
+                    form.vars['inference_backend'].set('auto')
+                    export_status.set('ONNX готов и выбран. Теперь запустите проверку без ввода.')
+                else:
+                    export_status.set('Ошибка экспорта. Пришлите assist_export.log; .pt сохранён.')
+            root.after(1000,check)
+        except Exception as exc:
+            messagebox.showerror('Экспорт ONNX',str(exc),parent=root)
+    ttk.Button(overview,text='Экспорт выбранной .pt → ONNX',command=export_model).pack(fill='x',pady=5)
+    ttk.Label(overview,textvariable=export_status,wraplength=570,foreground='#aaaab8').pack(anchor='w',pady=10)
     frame = form.tabs['data']
     propose = tk.BooleanVar(value=True)
 
@@ -98,8 +155,9 @@ def launch():
             command.append(str(Path(__file__).resolve().parent.parent / 'Assist.py'))
         command += ['--train', folder, '--device', '0' if gpu.get() else 'cpu']
         try:
+            import os
             with log_path.open('w', encoding='utf-8') as log:
-                process = subprocess.Popen(command, stdout=log, stderr=log)
+                process = subprocess.Popen(command, stdout=log, stderr=log,env=dict(os.environ,ASSIST_JOB_LOG=str(log_path)))
             training['process'] = process
         except Exception as exc:
             messagebox.showerror('Обучение', str(exc), parent=root)

@@ -78,7 +78,7 @@ def main():
     tracker = Tracker(hold=max(.3,a.esp_age),tau=a.box_smooth_ms/1000,acquire=a.confidence)
     trigger = Trigger()
     state = dict(enabled=False,last=time.perf_counter(),keys={},rx=0.,ry=0.,sequence=0,
-                 locked=None,latency=0.,game_hwnd=None,menu=False)
+                 locked=None,latency=0.,game_hwnd=None,menu=False,stats_at=0.)
 
     def down(key):
         return bool(user.GetAsyncKeyState(key)&0x8000)
@@ -101,12 +101,16 @@ def main():
     panel = tk.Toplevel(root)
     panel.withdraw()
     panel.title('Assist — настройки (Insert)')
-    panel.geometry(f"820x{min(770,root.winfo_screenheight()-70)}")
+    panel.geometry(f"{min(1080,root.winfo_screenwidth()-40)}x{min(800,root.winfo_screenheight()-70)}")
     theme(panel)
     content = ttk.Frame(panel,padding=18)
     content.pack(fill='both',expand=True)
     ttk.Label(content,text='ASSIST  /  LIVE',font=('Segoe UI',22,'bold'),foreground='#d63a3a').pack(anchor='w')
     form = SettingsForm(content,vars(a),live=True)
+    live_stats = tk.StringVar(value='Ожидание F8 в окне игры…')
+    ttk.Label(form.tabs['diagnostics'],text='LIVE PIPELINE',font=('Segoe UI',15,'bold'),foreground='#d63a3a').pack(anchor='w',pady=12)
+    ttk.Label(form.tabs['diagnostics'],textvariable=live_stats,wraplength=570).pack(anchor='w',pady=12)
+    ttk.Label(form.tabs['diagnostics'],text='Для предпросмотра без ввода и экспорта ONNX: F10 → стартовое меню.\nЗахват и модель меняются после перезапуска.',wraplength=570).pack(anchor='w')
     ttk.Label(form.tabs['data'],text='Сбор, разметка и обучение доступны в стартовом меню.\n'
               'Для смены модели/устройства: F10 и повторный запуск BAT.').pack(anchor='w')
 
@@ -216,6 +220,10 @@ def main():
                         canvas.create_rectangle(x1,y1,x2,y2,outline=color,width=2,dash=(4,3) if coasting else ())
                         px,py = b.point(a.aim_point,a.head_ratio,a.body_ratio)
                         canvas.create_oval(px-2,py-2,px+2,py+2,fill=color,outline=color)
+                if a.capture_region == 'center':
+                    from .capture import region_for
+                    x1,y1,x2,y2=region_for(mon,a.capture_region,a.crop_size)
+                    canvas.create_rectangle(x1,y1,x2,y2,outline='#c6935d',dash=(6,4))
                 if a.show_fov:
                     canvas.create_oval(ox-a.fov,oy-a.fov,ox+a.fov,oy+a.fov,outline='#8e8e96')
             dt = min(now-state['last'],.05)
@@ -253,9 +261,16 @@ def main():
                 user.mouse_event(2 if event == 'down' else 4,0,0,0,0)
             age = (now-captured)*1000 if captured else 0.
             label = 'OFF — F8 в окне игры' if not state['enabled'] else ('ON' if active else 'PAUSE — меню/другое окно')
+            metrics,_ = detector.diagnostics()
+            stages = ' | '.join(f'{name} {metrics.get(key,0):.1f} ms' for name,key in [('Capture','capture_ms'),('Prep','pre_ms'),('Net','infer_ms'),('Post','post_ms')])
+            if now-state['stats_at']>=.25:
+                state['stats_at']=now
+                live_stats.set(f'{detector.status}\n\n{stages}\n\nTotal {state["latency"]*1000:.1f} ms | age {age:.0f} ms\n{detector.warning}')
             text = (f'ASSIST | {label} | {a.aim_point} | {a.aim_activation} | Trigger {"ON" if a.trigger_enabled else "OFF"}\n'
                     f'Insert меню | F6 точка | F7 auto/ПКМ | F8 старт/стоп | F9 триггер | F10 выход\n'
-                    f'Inference {state["latency"]*1000:.0f} ms | age {age:.0f} ms | {detector.status}')
+                    f'Pipeline {state["latency"]*1000:.0f} ms | age {age:.0f} ms | {detector.status}\n{stages}')
+            if detector.warning:
+                text += '\n'+detector.warning[:200]
             if snapshot and age > a.aim_age*1000:
                 text += '\nSTALE: наведение остановлено — уменьшите вход или используйте совместимый GPU'
             canvas.create_text(16,16,anchor='nw',fill='white',text=text)

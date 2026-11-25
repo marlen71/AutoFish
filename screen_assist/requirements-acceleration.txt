@@ -1,0 +1,4 @@
+# Install only one ONNX Runtime distribution in an environment.
+onnxruntime-directml>=1.20,<2; sys_platform == "win32"
+onnxruntime>=1.20,<2; sys_platform != "win32"
+dxcam>=0.0.5,<1; sys_platform == "win32"

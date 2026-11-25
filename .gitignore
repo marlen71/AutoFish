@@ -8,3 +8,10 @@ Assist_training/
 assist_settings.json
 assist_settings.tmp
 .cache/
+.assist-build/
+Assist_app/
+assist_build.log
+assist_export.log
+assist_acceleration.log
+assist_diagnostics.json
+*.onnx
