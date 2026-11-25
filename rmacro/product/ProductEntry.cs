@@ -5,9 +5,9 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("RMFish Product")]
 [assembly: AssemblyDescription("RMFish product module for Eternal Core")]
 [assembly: AssemblyProduct("RMFish")]
-[assembly: AssemblyVersion("1.29.0.0")]
-[assembly: AssemblyFileVersion("1.29.0.0")]
-[assembly: AssemblyInformationalVersion("1.29.0")]
+[assembly: AssemblyVersion("1.30.0.0")]
+[assembly: AssemblyFileVersion("1.30.0.0")]
+[assembly: AssemblyInformationalVersion("1.30.0")]
 
 namespace RMFish
 {

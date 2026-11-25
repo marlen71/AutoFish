@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
@@ -38,15 +39,21 @@ namespace RMFish
             Label steps = new Label(); steps.SetBounds(20, 153, 580, 52);
             steps.Text = "Нужны образец уведомления, три элемента инвентаря и проверенный поворот при текущем разрешении и чувствительности мыши.";
             Controls.Add(steps);
-            Button notice = MakeButton("1. Записать уведомление · " + (hasNotice ? "готово" : "нет"), 20, 205, 330);
+            Button notice = MakeButton("1. Уведомление по F9 · " + (hasNotice ? "готово" : "нет"), 20, 205, 330);
             notice.Name = "recordNotice";
             notice.Click += delegate { Command = "notice"; DialogResult = DialogResult.OK; Close(); };
+            Button noticeFile = MakeButton("Из файла…", 360, 205, 170);
+            noticeFile.Name = "importNotice";
+            noticeFile.Click += delegate { Command = "notice-file"; DialogResult = DialogResult.OK; Close(); };
             rightButton = new CheckBox(); rightButton.Name = "rodRightButton";
             rightButton.Text = "Удочку открывать правой кнопкой мыши";
             rightButton.Checked = rodRight; rightButton.SetBounds(20, 248, 570, 28); Controls.Add(rightButton);
-            Button gear = MakeButton("2. Записать удочку и наживку · " + (hasGear ? "готово" : "нет"), 20, 282, 330);
+            Button gear = MakeButton("2. Инвентарь по F9 · " + (hasGear ? "готово" : "нет"), 20, 282, 330);
             gear.Name = "recordGear";
             gear.Click += delegate { Command = "gear"; DialogResult = DialogResult.OK; Close(); };
+            Button gearFiles = MakeButton("Из файлов…", 360, 282, 170);
+            gearFiles.Name = "importGear";
+            gearFiles.Click += delegate { Command = "gear-files"; DialogResult = DialogResult.OK; Close(); };
             Label turnLabel = new Label(); turnLabel.SetBounds(20, 327, 580, 25);
             turnLabel.Text = "3. Поворот на 180° · относительные шаги мыши (0 — не настроен)";
             Controls.Add(turnLabel);
@@ -117,8 +124,145 @@ namespace RMFish
         }
     }
 
-    // The image is the in-memory region above the minimap, captured by F9.
-    // Only the selected binary text mask, not this image, is saved to disk.
+    // A file is useful for click calibration only if its pixels still have the
+    // original game-client coordinates. A cropped icon cannot supply those.
+    // This checks dimensions, not the image's content: the user must still
+    // confirm that the image really is the whole, unscaled game client.
+    internal static class CalibrationImage
+    {
+        internal const long MaximumFileBytes = 50L * 1024L * 1024L;
+        internal const long MaximumPixels = 16000000L;
+
+        public static PixelFrame Load(string path)
+        {
+            using (FileStream file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                if (file.Length < 1 || file.Length > MaximumFileBytes)
+                    throw new InvalidDataException("Файл пустой или больше 50 МБ.");
+                using (Image source = Image.FromStream(file, false, true))
+                {
+                    if (!source.RawFormat.Equals(ImageFormat.Png) && !source.RawFormat.Equals(ImageFormat.Jpeg) &&
+                        !source.RawFormat.Equals(ImageFormat.Bmp))
+                        throw new InvalidDataException("Выберите PNG, JPEG или BMP.");
+                    int width = source.Width, height = source.Height;
+                    if (width < 1280 || height < 720 || width > 10000 || height > 10000 ||
+                        (long)width * height > MaximumPixels || Math.Abs(width / (double)height - 16.0 / 9.0) > 0.035)
+                        throw new InvalidDataException("Нужен полный снимок окна GTA5 без обрезки и изменения размера: 16:9, от 1280×720, не более 16 мегапикселей. Отдельный значок не содержит координат.");
+                    using (Bitmap copy = new Bitmap(width, height, PixelFormat.Format32bppArgb))
+                    {
+                        using (Graphics graphics = Graphics.FromImage(copy))
+                        {
+                            graphics.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
+                            graphics.DrawImageUnscaled(source, 0, 0);
+                        }
+                        byte[] pixels = new byte[checked(width * height * 4)];
+                        BitmapData bits = copy.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+                        try
+                        {
+                            for (int y = 0; y < height; y++)
+                                Marshal.Copy(IntPtr.Add(bits.Scan0, y * bits.Stride), pixels, y * width * 4, width * 4);
+                        }
+                        finally { copy.UnlockBits(bits); }
+                        for (int i = 3; i < pixels.Length; i += 4)
+                            if (pixels[i] != 255) throw new InvalidDataException("Прозрачное изображение не подходит. Сохраните непрозрачный снимок экрана.");
+                        return new PixelFrame(pixels, width, height, width * 4, width, height, 0, 0);
+                    }
+                }
+            }
+        }
+    }
+
+    // Select a clickable target on an entire game-client screenshot. The
+    // rectangle's centre is the click location; a fixed 40×28 reference-pixel
+    // patch around it is the same visual guard used by the original F9 method.
+    internal sealed class GearImageSelectionForm : Form
+    {
+        private readonly PixelFrame frame;
+        private readonly bool rightButton;
+        private readonly PictureBox preview;
+        private readonly Bitmap image;
+        private Point start, end;
+        private bool selecting, selected;
+        public GearPoint Result { get; private set; }
+
+        public GearImageSelectionForm(PixelFrame frame, string step, bool right)
+        {
+            if (frame == null) throw new ArgumentNullException("frame");
+            this.frame = frame; rightButton = right;
+            Text = "Инвентарь — " + step; StartPosition = FormStartPosition.CenterParent;
+            FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false; MinimizeBox = false;
+            ClientSize = new Size(984, 646); BackColor = Theme.Background; ForeColor = Theme.Text;
+            Font = new Font("Segoe UI", 9f); AutoScaleMode = AutoScaleMode.None;
+            Label instructions = new Label(); instructions.SetBounds(12, 6, 960, 56);
+            instructions.Text = step + ": выделите мышью то, на что нужно нажать. Клик будет в центре рамки; зелёная рамка — проверяемый образец. Не выделяйте счётчик количества.";
+            Controls.Add(instructions);
+            const int width = 960, height = 540;
+            image = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+            byte[] data = new byte[width * height * 4];
+            for (int y = 0; y < height; y++)
+                for (int x = 0; x < width; x++)
+                {
+                    int r, g, b; frame.Read(x * 2, y * 2, out r, out g, out b);
+                    int i = (y * width + x) * 4;
+                    data[i] = (byte)b; data[i + 1] = (byte)g; data[i + 2] = (byte)r; data[i + 3] = 255;
+                }
+            BitmapData bits = image.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+            try { Marshal.Copy(data, 0, bits.Scan0, data.Length); }
+            finally { image.UnlockBits(bits); }
+            preview = new PictureBox(); preview.Name = "gearImagePreview";
+            preview.Image = image; preview.SetBounds(12, 62, width, height); preview.Cursor = Cursors.Cross;
+            preview.MouseDown += delegate(object sender, MouseEventArgs e)
+            {
+                if (e.Button != MouseButtons.Left) return;
+                start = end = Clamp(e.Location); selecting = true; selected = false; preview.Invalidate();
+            };
+            preview.MouseMove += delegate(object sender, MouseEventArgs e)
+            { if (selecting) { end = Clamp(e.Location); preview.Invalidate(); } };
+            preview.MouseUp += delegate(object sender, MouseEventArgs e)
+            { if (selecting) { end = Clamp(e.Location); selecting = false; selected = true; preview.Invalidate(); } };
+            preview.Paint += delegate(object sender, PaintEventArgs e)
+            {
+                if (!selecting && !selected) return;
+                Rectangle rect = Selection();
+                using (Pen pen = new Pen(Color.Yellow, 2)) e.Graphics.DrawRectangle(pen, rect);
+                int x = rect.X + rect.Width / 2, y = rect.Y + rect.Height / 2;
+                using (Pen pen = new Pen(Color.Lime, 1))
+                    e.Graphics.DrawRectangle(pen, x - GearPoint.HalfWidth / 2, y - GearPoint.HalfHeight / 2,
+                        GearPoint.HalfWidth, GearPoint.HalfHeight);
+            };
+            Controls.Add(preview);
+            Button save = new Button(); save.Name = "saveGearImage"; save.Text = "Выбрать этот элемент";
+            save.SetBounds(12, 608, 190, 30); Controls.Add(save);
+            save.Click += delegate
+            {
+                try
+                {
+                    Rectangle rect = Selection();
+                    if (!selected || rect.Width < 4 || rect.Height < 4)
+                        throw new InvalidOperationException("Выделите нужный значок или надпись мышью.");
+                    int x = rect.Left * 2 + rect.Width, y = rect.Top * 2 + rect.Height;
+                    Result = GearPoint.Create(frame, x, y, rightButton);
+                    DialogResult = DialogResult.OK; Close();
+                }
+                catch (Exception ex) { MessageBox.Show(this, ex.Message, "Образец инвентаря", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+            };
+            Button cancel = new Button(); cancel.Text = "Отмена"; cancel.SetBounds(210, 608, 110, 30);
+            cancel.DialogResult = DialogResult.Cancel; Controls.Add(cancel); CancelButton = cancel;
+        }
+
+        private Point Clamp(Point p)
+        { return new Point(Math.Max(0, Math.Min(preview.Width - 1, p.X)), Math.Max(0, Math.Min(preview.Height - 1, p.Y))); }
+        private Rectangle Selection()
+        { return Rectangle.FromLTRB(Math.Min(start.X, end.X), Math.Min(start.Y, end.Y), Math.Max(start.X, end.X), Math.Max(start.Y, end.Y)); }
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) { preview.Image = null; image.Dispose(); }
+            base.Dispose(disposing);
+        }
+    }
+
+    // The image is the in-memory region above the minimap, captured by F9 or
+    // imported from a full-size screenshot. Only its text mask is saved.
     internal sealed class NoticeSelectionForm : Form
     {
         private readonly PixelFrame frame;
@@ -134,7 +278,7 @@ namespace RMFish
             Text = "Выберите текст уведомления"; StartPosition = FormStartPosition.CenterParent;
             FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false; MinimizeBox = false;
             ClientSize = new Size(644, 511); BackColor = Theme.Background; ForeColor = Theme.Text;
-            Font = new Font("Segoe UI", 9f);
+            Font = new Font("Segoe UI", 9f); AutoScaleMode = AutoScaleMode.None;
             Label instructions = new Label(); instructions.SetBounds(12, 6, 620, 48);
             instructions.Text = "Обведите мышью всю неизменную надпись об окончании рыбы. Не включайте значок и пустые края. Не выбирайте другое уведомление.";
             Controls.Add(instructions);

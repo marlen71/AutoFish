@@ -37,7 +37,7 @@ namespace RMacro
         // Must match the separately built RMFishProduct.dll included in this
         // source revision. Newer stable product releases can update it without
         // rebuilding or redistributing the loader.
-        public const string EmbeddedVersion = "1.29.0";
+        public const string EmbeddedVersion = "1.30.0";
         private static readonly Regex Digest = new Regex(@"^[0-9a-f]{64}$", RegexOptions.CultureInvariant);
 
         private static string Hash(byte[] bytes)

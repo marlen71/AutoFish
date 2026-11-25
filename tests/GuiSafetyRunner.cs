@@ -238,6 +238,8 @@ public static class GuiSafetyRunner
             Check(!dialog.TurnConfirmed, "changing camera sensitivity must invalidate the prior confirmation");
             Check(Find<Button>(dialog, "recordNotice").Text.Contains("нет") &&
                 Find<Button>(dialog, "recordGear").Text.Contains("нет"), "missing calibration was not displayed");
+            Check(Find<Button>(dialog, "importNotice").Text.Contains("файла") &&
+                Find<Button>(dialog, "importGear").Text.Contains("файлов"), "image import buttons are missing");
             Find<CheckBox>(dialog, "relocationEnabled").Checked = true;
             Find<CheckBox>(dialog, "rodRightButton").Checked = false;
             Find<Button>(dialog, "saveRelocation").PerformClick();
@@ -267,14 +269,111 @@ public static class GuiSafetyRunner
             Check(dialog.Result != null && dialog.Result.Matches(frame), "synthetic notice selection did not save a matching mask");
         }
 
+        CheckImportedImages(form);
+
         FieldInfo calibrationModeField = typeof(MainForm).GetField("calibrationMode", BindingFlags.Instance | BindingFlags.NonPublic);
         MethodInfo stop = typeof(MainForm).GetMethod("HandleEmergency", BindingFlags.Instance | BindingFlags.NonPublic);
-        Check(calibrationModeField != null && stop != null, "calibration safety hooks are missing");
+        MethodInfo beginImport = typeof(MainForm).GetMethod("BeginImageImport", BindingFlags.Instance | BindingFlags.NonPublic);
+        MethodInfo currentImport = typeof(MainForm).GetMethod("ImageImportCurrent", BindingFlags.Instance | BindingFlags.NonPublic);
+        MethodInfo endImport = typeof(MainForm).GetMethod("EndImageImport", BindingFlags.Instance | BindingFlags.NonPublic);
+        Check(calibrationModeField != null && stop != null && beginImport != null && currentImport != null && endImport != null,
+            "calibration safety hooks are missing");
         calibrationModeField.SetValue(form, 1);
         Find<PowerButton>(form, "powerButton").PerformClick();
         Check(!engine.Snapshot().Running, "fishing started during a calibration");
         stop.Invoke(form, new object[] { EmergencySignal.F10, true });
         Check((int)calibrationModeField.GetValue(form) == 0, "F10 did not cancel calibration");
+        long version = engine.StopVersion;
+        Check((bool)beginImport.Invoke(form, new object[] { version }), "image import did not start safely");
+        Find<PowerButton>(form, "powerButton").PerformClick();
+        Check(!engine.Snapshot().Running, "fishing started with an image dialog open");
+        stop.Invoke(form, new object[] { EmergencySignal.F10, true });
+        Check((int)calibrationModeField.GetValue(form) == 5 && !(bool)currentImport.Invoke(form, new object[] { version }),
+            "F10 did not cancel import or cleared its busy state while the dialog was open");
+        Find<PowerButton>(form, "powerButton").PerformClick();
+        Check(!engine.Snapshot().Running, "fishing started before the cancelled image dialog closed");
+        endImport.Invoke(form, null);
+        Check((int)calibrationModeField.GetValue(form) == 0, "closing the cancelled image dialog did not clear its busy state");
+        Check(!(bool)beginImport.Invoke(form, new object[] { version }), "stale import intent survived F10");
+    }
+
+    private static void CheckImportedImages(MainForm owner)
+    {
+        string root = Path.Combine(Path.GetTempPath(), "rmfish-image-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            string fullPath = Path.Combine(root, "screen.png");
+            using (Bitmap bitmap = new Bitmap(1920, 1080, PixelFormat.Format32bppArgb))
+            {
+                using (Graphics graphics = Graphics.FromImage(bitmap)) graphics.Clear(Color.FromArgb(255, 20, 20, 20));
+                for (int y = 386; y < 414; y++)
+                    for (int x = 460; x < 500; x++)
+                        if ((x / 3 + y / 3) % 2 == 0) bitmap.SetPixel(x, y, Color.White);
+                for (int y = 640; y < 660; y++)
+                    for (int x = 90; x < 190; x++)
+                        if ((x / 3 + y / 4) % 3 != 0) bitmap.SetPixel(x, y, Color.White);
+                bitmap.Save(fullPath, ImageFormat.Png);
+            }
+            PixelFrame full = CalibrationImage.Load(fullPath);
+            Check(full.ClientWidth == 1920 && full.ClientHeight == 1080, "import did not preserve original client geometry");
+            File.Delete(fullPath); // loading must not keep the user's image locked
+            Check(!File.Exists(fullPath), "import left the source file locked");
+            using (NoticeSelectionForm notice = new NoticeSelectionForm(full))
+            {
+                notice.Show(owner); CheckLayout(notice);
+                PictureBox preview = Find<PictureBox>(notice, "noticePreview");
+                SimulateMouse(preview, "OnMouseDown", 80, 30);
+                SimulateMouse(preview, "OnMouseUp", 200, 70);
+                Find<Button>(notice, "saveNotice").PerformClick();
+                Check(notice.Result != null && notice.Result.Matches(full), "a full imported image did not make a matching notice");
+            }
+            using (GearImageSelectionForm gear = new GearImageSelectionForm(full, "1 из 3 · удочка", true))
+            {
+                gear.Show(owner); CheckLayout(gear);
+                PictureBox preview = Find<PictureBox>(gear, "gearImagePreview");
+                // Also exercise dragging from bottom-right to top-left.
+                SimulateMouse(preview, "OnMouseDown", 260, 220);
+                SimulateMouse(preview, "OnMouseMove", 220, 180);
+                SimulateMouse(preview, "OnMouseUp", 220, 180);
+                Find<Button>(gear, "saveGearImage").PerformClick();
+                Check(gear.Result != null && gear.Result.X == 480 && gear.Result.Y == 400 && gear.Result.RightButton &&
+                    gear.Result.Matches(full), "inventory selection did not preserve its centre, button and visual guard");
+            }
+            string smallPath = Path.Combine(root, "cropped-icon.png");
+            using (Bitmap small = new Bitmap(170, 84)) small.Save(smallPath, ImageFormat.Png);
+            bool rejected = false;
+            try { CalibrationImage.Load(smallPath); } catch (InvalidDataException) { rejected = true; }
+            Check(rejected, "a cropped inventory icon was accepted as full-screen coordinates");
+            string wrongPath = Path.Combine(root, "wrong-ratio.png");
+            using (Bitmap wrong = new Bitmap(1280, 800)) wrong.Save(wrongPath, ImageFormat.Png);
+            rejected = false;
+            try { CalibrationImage.Load(wrongPath); } catch (InvalidDataException) { rejected = true; }
+            Check(rejected, "a non-16:9 image was accepted");
+            string alphaPath = Path.Combine(root, "transparent.png");
+            using (Bitmap alpha = new Bitmap(1280, 720, PixelFormat.Format32bppArgb)) alpha.Save(alphaPath, ImageFormat.Png);
+            rejected = false;
+            try { CalibrationImage.Load(alphaPath); } catch (InvalidDataException) { rejected = true; }
+            Check(rejected, "a transparent screenshot was accepted");
+            string scaledPath = Path.Combine(root, "720p.png");
+            using (Bitmap scaled = new Bitmap(1280, 720, PixelFormat.Format32bppArgb))
+            {
+                using (Graphics graphics = Graphics.FromImage(scaled)) graphics.Clear(Color.FromArgb(255, 30, 30, 30));
+                for (int y = 252; y < 282; y++)
+                    for (int x = 305; x < 335; x++)
+                        if ((x / 2 + y / 2) % 2 == 0) scaled.SetPixel(x, y, Color.White);
+                scaled.Save(scaledPath, ImageFormat.Png);
+            }
+            PixelFrame scaledFrame = CalibrationImage.Load(scaledPath);
+            GearPoint scaledPoint = GearPoint.Create(scaledFrame, 480, 400, false);
+            Check(scaledPoint.ClientWidth == 1280 && scaledPoint.ClientHeight == 720 && scaledPoint.Matches(scaledFrame),
+                "720p image did not use reference-space coordinates");
+            bool mixed = false;
+            try { new GearMacro(GearPoint.Create(full, 480, 400, true), scaledPoint, scaledPoint); }
+            catch (InvalidDataException) { mixed = true; }
+            Check(mixed, "mixed screenshot resolutions were accepted for one inventory macro");
+        }
+        finally { Directory.Delete(root, true); }
     }
 
     private static void CheckWindowDrag(MainForm form)

@@ -9,8 +9,8 @@ using RMFish;
 [assembly: AssemblyDescription("Eternal Core — лоадер игр, макросов и подписок")]
 [assembly: AssemblyProduct("Eternal Core")]
 [assembly: AssemblyVersion("1.4.0.0")]
-[assembly: AssemblyFileVersion("1.4.0.1")]
-[assembly: AssemblyInformationalVersion("1.4.0-dev.1")]
+[assembly: AssemblyFileVersion("1.4.0.2")]
+[assembly: AssemblyInformationalVersion("1.4.0-dev.2")]
 
 namespace RMacro
 {

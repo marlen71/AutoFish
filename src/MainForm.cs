@@ -15,10 +15,11 @@ namespace RMFish
         private readonly object calibrationGate = new object();
         private readonly List<GearPoint> gearSamples = new List<GearPoint>();
         // 0: idle, 1: capture notice with F9, 2: record gear with F9,
-        // 3: finish/save the captured sample; 4: guarded test of camera turn.
+        // 3: finish/save a captured sample, 4: guarded camera test, 5: image import.
         private int calibrationMode;
         private ManualResetEvent turnTestStop;
         private Thread turnTestThread;
+        private bool imageImportCancelled;
         private bool autoRelocate, rodRight = true, captureRodRight, turnConfirmed;
         private int turnUnits;
         private GameWindowMode gameMode = GameWindowMode.Active;
@@ -280,7 +281,7 @@ namespace RMFish
             AddLabel(shortcut, "Esc  ·  держать 2 сек", 12, 57, 139, 20, 8f, Theme.Muted, FontStyle.Regular);
             AddLabel(shortcut, "ЛКМ + ПКМ  ·  2 сек", 12, 80, 139, 20, 8f, Theme.Muted, FontStyle.Regular);
             AddLabel(shortcut, "Проверьте F10 в игре", 12, 111, 139, 21, 7.8f, Theme.Text, FontStyle.Regular);
-            hotkeyLabel = AddLabel(sidebar, "F8  ·  старт / стоп\nF9  ·  проверка экрана\nВерсия 1.28 beta.2", 19, 560, 154, 55, 8f, Theme.Muted, FontStyle.Regular);
+            hotkeyLabel = AddLabel(sidebar, "F8  ·  старт / стоп\nF9  ·  проверка экрана\nF10  ·  аварийный стоп", 19, 560, 154, 55, 8f, Theme.Muted, FontStyle.Regular);
         }
 
         private void BuildDashboard()
@@ -640,14 +641,27 @@ namespace RMFish
                 MessageBox.Show(this, "Запись образцов отменена. Откройте настройки ещё раз для новой записи.", "Автоотход");
                 return;
             }
+            long setupStopVersion = engine.StopVersion;
             using (RelocationSetupForm dialog = new RelocationSetupForm(autoRelocate, rodRight,
                 File.Exists(noticePath), File.Exists(gearPath), turnUnits, turnConfirmed))
             {
                 if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                // F8, F10 or a revoked lease can arrive while the dialog is open.
+                if (closing || safetyFailed || safetyKeys.StopHeld || !AccessAllowed() ||
+                    engine.Snapshot().Running || engine.StopVersion != setupStopVersion)
+                { engine.Log("Настройка автоотхода отменена: состояние остановки или доступа изменилось."); return; }
                 autoRelocate = dialog.AutoEnabled; rodRight = dialog.RodRightButton;
                 turnUnits = dialog.TurnUnits; turnConfirmed = dialog.TurnConfirmed;
                 SaveSettings(false);
-                if (dialog.Command == "notice")
+                if (dialog.Command == "notice-file")
+                {
+                    ImportNoticeImage();
+                }
+                else if (dialog.Command == "gear-files")
+                {
+                    ImportGearImages(rodRight);
+                }
+                else if (dialog.Command == "notice")
                 {
                     if (MessageBox.Show(this,
                         "Остановите рыбалку. Переключитесь в GTA5 и дождитесь именно сообщения об окончании рыбы над миникартой. Пока сообщение видно, нажмите F9; затем в открывшемся окне выделите всю надпись. F10 отменяет запись.",
@@ -659,7 +673,7 @@ namespace RMFish
                 {
                     string button = rodRight ? "правой" : "левой";
                     if (MessageBox.Show(this,
-                        "Запись выполняется вручную в игре, без автоматических кликов.\n\n1. Откройте инвентарь I/Ш, наведите курсор на удочку и нажмите F9. После сигнала нажмите на удочку " + button + " кнопкой.\n\n2. Наведите на «Ловить рыбу», нажмите F9 и после сигнала нажмите ЛКМ.\n\n3. Наведите на «Хлебный мякиш», нажмите F9 и после сигнала нажмите ЛКМ.\n\nНе меняйте размер окна. Подводите курсор к узнаваемому значку/тексту, не к пустому месту. F10 отменяет запись.",
+                        "Запись выполняется вручную в игре, без автоматических кликов.\n\n1. Откройте инвентарь I/Ш, наведите курсор на удочку и нажмите F9. После сигнала нажмите на удочку " + button + " кнопкой.\n\n2. Наведите на «Ловить рыбу», нажмите F9 и после сигнала нажмите ЛКМ.\n\n3. Наведите на нужную наживку (хлеб или червь), нажмите F9 и после сигнала нажмите ЛКМ.\n\nНе меняйте размер окна. Подводите курсор к узнаваемому значку/тексту, не к пустому месту. F10 отменяет запись.",
                         "Запись инвентаря", MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK) return;
                     lock (calibrationGate) { gearSamples.Clear(); captureRodRight = rodRight; calibrationMode = 2; }
                     engine.Log("Запись инвентаря: наведите на удочку и нажмите F9. F10 отменяет запись.");
@@ -677,15 +691,151 @@ namespace RMFish
             }
         }
 
+        private bool BeginImageImport(long stopVersion)
+        {
+            lock (calibrationGate)
+            {
+                if (closing || safetyFailed || safetyKeys.StopHeld || !AccessAllowed() ||
+                    engine.StopVersion != stopVersion || engine.Snapshot().Running || calibrationMode != 0 ||
+                    (turnTestThread != null && turnTestThread.IsAlive)) return false;
+                imageImportCancelled = false;
+                calibrationMode = 5;
+                return true;
+            }
+        }
+
+        private bool ImageImportCurrent(long stopVersion)
+        {
+            lock (calibrationGate)
+                return calibrationMode == 5 && !imageImportCancelled && !closing && !safetyFailed &&
+                    !safetyKeys.StopHeld && AccessAllowed() && engine.StopVersion == stopVersion && !engine.Snapshot().Running;
+        }
+
+        private void EndImageImport()
+        {
+            lock (calibrationGate)
+            {
+                if (calibrationMode == 5) calibrationMode = 0;
+                imageImportCancelled = false;
+            }
+        }
+
+        // Only complete, unscaled client screenshots have meaningful positions.
+        // Invalid files are retried for the current step; cancelling leaves all
+        // previously saved calibration files untouched.
+        private PixelFrame ChooseCalibrationImage(string title, long stopVersion)
+        {
+            while (ImageImportCurrent(stopVersion))
+            {
+                using (OpenFileDialog dialog = new OpenFileDialog())
+                {
+                    dialog.Title = title;
+                    dialog.Filter = "Изображения PNG, JPEG и BMP|*.png;*.jpg;*.jpeg;*.bmp";
+                    dialog.CheckFileExists = true; dialog.Multiselect = false;
+                    if (dialog.ShowDialog(this) != DialogResult.OK || !ImageImportCurrent(stopVersion)) return null;
+                    try { return CalibrationImage.Load(dialog.FileName); }
+                    catch (Exception ex)
+                    {
+                        if (!ImageImportCurrent(stopVersion)) return null;
+                        MessageBox.Show(this, "Не удалось использовать изображение. " + ex.Message,
+                            "Снимок игры", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    }
+                }
+            }
+            return null;
+        }
+
+        private void ImportNoticeImage()
+        {
+            long version = engine.StopVersion;
+            if (!BeginImageImport(version)) { engine.Log("Импорт уведомления недоступен. Остановите рыбалку."); return; }
+            try
+            {
+                if (MessageBox.Show(this,
+                    "Выберите полный, не обрезанный и не изменённый снимок окна GTA5, сделанный при том же разрешении. На нём должно быть именно сообщение об окончании рыбы над миникартой, не «Забросьте удочку».\n\nВыделите всю надпись без значка. F10 отменяет импорт; после F10 закройте окно выбора файла или выделения.",
+                    "Уведомление из файла", MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK ||
+                    !ImageImportCurrent(version)) return;
+                PixelFrame frame = ChooseCalibrationImage("Полный снимок игры с уведомлением", version);
+                if (frame == null || !ImageImportCurrent(version)) return;
+                using (NoticeSelectionForm selection = new NoticeSelectionForm(frame))
+                {
+                    if (selection.ShowDialog(this) != DialogResult.OK || selection.Result == null) return;
+                    lock (calibrationGate)
+                    {
+                        if (!ImageImportCurrent(version)) return;
+                        selection.Result.Save(noticePath);
+                    }
+                }
+                engine.Log("Уведомление загружено из снимка. Проверьте совпадение с реальным сообщением в игре.");
+                if (ImageImportCurrent(version)) MessageBox.Show(this, "Образец уведомления сохранён. Проверьте его с настоящим сообщением в игре.",
+                    "Автоотход", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                if (ImageImportCurrent(version)) MessageBox.Show(this, "Не удалось сохранить уведомление: " + ex.Message,
+                    "Уведомление из файла", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            finally { EndImageImport(); }
+        }
+
+        private void ImportGearImages(bool rodRightButton)
+        {
+            long version = engine.StopVersion;
+            if (!BeginImageImport(version)) { engine.Log("Импорт инвентаря недоступен. Остановите рыбалку."); return; }
+            try
+            {
+                if (MessageBox.Show(this,
+                    "Понадобятся три полных снимка окна GTA5 без обрезки и изменения размера, при одинаковом разрешении:\n\n1. Открыт инвентарь и видна удочка.\n2. После нажатия на удочку видно «Ловить рыбу».\n3. После нажатия «Ловить рыбу» видна нужная наживка (хлеб или червь).\n\nНа каждом снимке выделите цель в том состоянии, в котором она будет при наведении. Клик будет в центре рамки; счётчик количества не выбирайте. Настройка не нажимает в игре. F10 отменяет импорт — закройте окно выбора после F10.",
+                    "Инвентарь из файлов", MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK ||
+                    !ImageImportCurrent(version)) return;
+                string[] steps = new string[] { "1 из 3 · удочка", "2 из 3 · «Ловить рыбу»", "3 из 3 · наживка" };
+                GearPoint[] points = new GearPoint[3];
+                for (int i = 0; i < points.Length; i++)
+                {
+                    PixelFrame frame;
+                    while (true)
+                    {
+                        frame = ChooseCalibrationImage("Снимок игры: " + steps[i], version);
+                        if (frame == null || !ImageImportCurrent(version)) return;
+                        if (i == 0 || (frame.ClientWidth == points[0].ClientWidth && frame.ClientHeight == points[0].ClientHeight)) break;
+                        MessageBox.Show(this, "Все три снимка должны быть сделаны при одном разрешении окна игры.",
+                            "Инвентарь из файлов", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        if (!ImageImportCurrent(version)) return;
+                    }
+                    using (GearImageSelectionForm selection = new GearImageSelectionForm(frame, steps[i], i == 0 && rodRightButton))
+                    {
+                        if (selection.ShowDialog(this) != DialogResult.OK || selection.Result == null || !ImageImportCurrent(version)) return;
+                        points[i] = selection.Result;
+                    }
+                }
+                GearMacro gear = new GearMacro(points[0], points[1], points[2]);
+                lock (calibrationGate)
+                {
+                    if (!ImageImportCurrent(version)) return;
+                    gear.Save(gearPath);
+                }
+                engine.Log("Три шага инвентаря загружены из снимков. Проверьте их в игре под наблюдением.");
+                if (ImageImportCurrent(version)) MessageBox.Show(this, "Три шага инвентаря сохранены. Сначала проверьте работу в игре под наблюдением.",
+                    "Автоотход", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                if (ImageImportCurrent(version)) MessageBox.Show(this, "Не удалось сохранить инвентарь: " + ex.Message,
+                    "Инвентарь из файлов", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            finally { EndImageImport(); }
+        }
+
         private bool CancelCalibration()
         {
             lock (calibrationGate)
             {
                 bool wasActive = calibrationMode != 0;
-                // Cancellation is a request, not proof that the test thread has
-                // stopped sending input. Keep mode 4 until its finally block.
+                // Keep a camera test or an open image dialog marked busy until
+                // it really returns. F10 never waits for image dialogs to close.
                 if (turnTestStop != null) turnTestStop.Set();
-                if (calibrationMode != 4) calibrationMode = 0;
+                if (calibrationMode == 5) imageImportCancelled = true;
+                else if (calibrationMode != 4) calibrationMode = 0;
                 gearSamples.Clear();
                 return wasActive;
             }
@@ -984,7 +1134,7 @@ namespace RMFish
                 }
                 if (mode == 1) { CaptureNoticeSample(port, bounds); return; }
                 if (mode == 2) { CaptureGearSample(port, bounds); return; }
-                if (mode == 3 || mode == 4) { ReportProbe("Дождитесь завершения текущей калибровки.", "Автоотход: "); return; }
+                if (mode == 3 || mode == 4 || mode == 5) { ReportProbe("Дождитесь завершения текущей калибровки.", "Автоотход: "); return; }
                 PixelFrame frame = port.Capture(bounds);
                 if (!port.IsForeground(bounds))
                 {
@@ -1079,7 +1229,7 @@ namespace RMFish
             else
             {
                 string next = index == 0 ? "Теперь нажмите на удочку, наведите на «Ловить рыбу» и нажмите F9." :
-                    "Теперь нажмите «Ловить рыбу», наведите на «Хлебный мякиш» и нажмите F9.";
+                    "Теперь нажмите «Ловить рыбу», наведите на нужную наживку (хлеб или червя) и нажмите F9.";
                 ReportProbe("Сохранён шаг " + (index + 1) + ". " + next, "Автоотход: ");
             }
         }
@@ -1106,7 +1256,7 @@ namespace RMFish
             hotF9 = WindowsNative.RegisterHotKey(Handle, HotF9, NoRepeat, 0x78);
             hotF10 = WindowsNative.RegisterHotKey(Handle, HotF10, NoRepeat, 0x79);
             if (hotF8 && hotF9 && hotF10)
-                hotkeyLabel.Text = "F8  ·  старт / стоп\nF9  ·  проверка экрана\nВерсия 1.28 beta.2";
+                hotkeyLabel.Text = "F8  ·  старт / стоп\nF9  ·  проверка экрана\nF10  ·  аварийный стоп";
             else
             {
                 hotkeyLabel.Text = "Часть клавиш занята.\nПроверьте F10 в игре.";
