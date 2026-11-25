@@ -21,10 +21,19 @@ def review(parent):
     except Exception as exc:
         messagebox.showerror('Разметка', str(exc), parent=parent)
         return
+    suggestions = {}
+    for path in (folder / 'suggestions').glob('*.json'):
+        try:
+            suggestions[path.stem] = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            pass
+    images.sort(key=lambda p: (bool(data.get(p.name, {}).get('reviewed')),
+                               -float(suggestions.get(p.stem, {}).get('priority', 1)), p.name))
     win = tk.Toplevel(parent)
     win.title('НейроАссист — проверка кадров')
     ttk.Label(win, text='Обведите ВСЕХ персонажей. Свой — отдельный класс. Союзников отличить нельзя.\n'
-              'Сохранить без боксов = подтверждённый пустой кадр. Переход без сохранения отменяет правки.').pack()
+              'Боксы модели — только предложения! Сначала сомнительные. ПКМ по боксу удаляет его.\n'
+              'Сохранить без боксов = пустой кадр. Проверьте ВСЕ боксы, включая своего, перед подтверждением.').pack()
     kind = tk.StringVar(value='Другой игрок')
     ttk.Combobox(win, textvariable=kind, values=['Другой игрок', 'Свой персонаж'], state='readonly').pack()
     canvas = tk.Canvas(win, width=960, height=600, bg='black')
@@ -47,9 +56,11 @@ def review(parent):
         canvas.photo = ImageTk.PhotoImage(image)
         canvas.delete('all')
         canvas.create_image(0, 0, anchor='nw', image=canvas.photo)
-        record = data.get(images[state['index']].name, {})
+        record = data.get(images[state['index']].name)
+        if not record or not record.get('reviewed'):
+            record = suggestions.get(images[state['index']].stem, {})
         state['boxes'] = [list(b) for b in record.get('boxes', [])]
-        status.set(f"{state['index']+1}/{len(images)} — {images[state['index']].name} — " + ('проверен' if record.get('reviewed') else 'не проверен'))
+        status.set(f"{state['index']+1}/{len(images)} — {images[state['index']].name} — " + ('проверен' if record.get('reviewed') else 'ПРЕДЛОЖЕНИЕ — проверьте/исправьте'))
         redraw()
 
     def point(event):
@@ -85,12 +96,26 @@ def review(parent):
             state['boxes'].pop()
             redraw()
 
+    def remove_at(event):
+        x, y = point(event)
+        for index in range(len(state['boxes'])-1, -1, -1):
+            _, x1, y1, x2, y2 = state['boxes'][index]
+            if x1 <= x <= x2 and y1 <= y <= y2:
+                del state['boxes'][index]
+                redraw()
+                break
+
+    def clear():
+        state['boxes'].clear()
+        redraw()
+
+    canvas.bind('<Button-3>', remove_at)
     canvas.bind('<ButtonPress-1>', begin)
     canvas.bind('<ButtonRelease-1>', finish)
     row = ttk.Frame(win)
     row.pack(fill='x')
     for label, command in [('Назад', lambda: move(-1)), ('Пропустить', lambda: move(1)),
-                            ('Убрать последний бокс', undo), ('Подтвердить и дальше', save)]:
+                            ('Убрать последний', undo), ('Очистить', clear), ('Подтвердить и дальше', save)]:
         ttk.Button(row, text=label, command=command).pack(side='left', padx=4, pady=8)
     load()
     parent.wait_window(win)

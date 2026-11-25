@@ -66,7 +66,9 @@ def launch():
                 raise ValueError('Номер монитора должен быть больше 0.')
             from .collector import collect
             root.withdraw()
-            collect(root, monitor)
+            collect(root, monitor, weights=model.get().strip() or 'yolo11n.pt',
+                    classes=tuple(int(x) for x in values['classes'].get().split(',')),
+                    propose=propose.get())
         except Exception as exc:
             messagebox.showerror('Assist — сбор кадров', str(exc), parent=root)
         finally:
@@ -74,7 +76,9 @@ def launch():
 
     ttk.Button(frame, text='Запустить Assist', command=start).pack(fill='x', pady=12)
     ttk.Separator(frame).pack(fill='x', pady=4)
-    ttk.Button(frame, text='Сбор кадров для обучения (модель не нужна)', command=collect_frames).pack(fill='x', pady=6)
+    propose = tk.BooleanVar(value=True)
+    ttk.Checkbutton(frame, text='Фоновая предразметка (без своей модели скачает YOLO11n)', variable=propose).pack(anchor='w')
+    ttk.Button(frame, text='Сбор кадров и предложений боксов', command=collect_frames).pack(fill='x', pady=6)
     ttk.Label(frame, text='Собирает изображения локально. Не обучает модель автоматически.').pack(anchor='w')
 
     def review_frames():
