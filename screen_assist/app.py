@@ -5,7 +5,9 @@ import sys
 import time
 from pathlib import Path
 
-from .core import Box, select_target, smooth_step
+from .core import smooth_step
+from .tracking import Tracker
+from .detector import Detector
 
 
 def arguments():
@@ -13,7 +15,10 @@ def arguments():
     p.add_argument('--model', required=True, help='Local YOLO detection .pt weights')
     p.add_argument('--classes', default='0', help='Comma-separated player class IDs')
     p.add_argument('--monitor', type=int, default=1)
-    p.add_argument('--confidence', type=float, default=.55)
+    p.add_argument('--confidence', type=float, default=.35)
+    p.add_argument('--device', choices=['cpu', '0'], default='cpu')
+    p.add_argument('--imgsz', type=int, choices=[416, 512, 640], default=512)
+    p.add_argument('--aim-age', type=float, default=.2, help='Maximum target age in seconds')
     p.add_argument('--fov', type=int, default=100, help='Aim radius in screen pixels')
     p.add_argument('--smooth', type=float, default=10, help='Higher = slower')
     p.add_argument('--speed', type=float, default=900, help='Maximum pixels/second')
@@ -23,7 +28,7 @@ def arguments():
     a = p.parse_args()
     if not Path(a.model).is_file():
         p.error('--model must be an existing local weights file')
-    if not (0 < a.confidence <= 1 and a.fov > 0 and a.smooth >= 1 and a.speed > 0):
+    if not (0 < a.confidence <= 1 and a.fov > 0 and a.smooth >= 1 and a.speed > 0 and .03 <= a.aim_age <= .3):
         p.error('Invalid confidence, fov, smooth or speed')
     if not (0 <= a.head_ratio <= 1 and 0 <= a.body_ratio <= 1):
         p.error('Point ratios must be between 0 and 1')
@@ -40,8 +45,6 @@ def main():
     a = arguments()
     import tkinter as tk
     import mss
-    import numpy as np
-    from ultralytics import YOLO
     from ctypes import wintypes
 
     user = ctypes.windll.user32
@@ -55,11 +58,11 @@ def main():
     user.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
     user.mouse_event.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.DWORD,
                                  wintypes.DWORD, ctypes.c_size_t]
-    model = YOLO(a.model, task='detect')
     capture = mss.mss()
     if not 1 <= a.monitor < len(capture.monitors):
         raise SystemExit('Invalid --monitor index')
-    mon = capture.monitors[a.monitor]
+    mon = dict(capture.monitors[a.monitor])
+    capture.close()
     root = tk.Tk()
     root.title('Assist')
     root.overrideredirect(True)
@@ -81,7 +84,10 @@ def main():
         root.destroy()
         capture.close()
         raise SystemExit('Cannot exclude overlay from capture; Windows 10 2004+ required.')
-    state = dict(enabled=False, mode='head', last=time.perf_counter(), keys={}, rx=0., ry=0.)
+    detector = Detector(a, mon)
+    tracker = Tracker(hold=.3)
+    state = dict(enabled=False, mode='head', last=time.perf_counter(), keys={}, rx=0., ry=0.,
+                 sequence=0, locked=None, latency=0.)
 
     def down(key):
         return bool(user.GetAsyncKeyState(key) & 0x8000)
@@ -99,8 +105,14 @@ def main():
                 return
             if pressed(0x77):
                 state['enabled'] = not state['enabled']
+                detector.activate(state['enabled'])
+                tracker.tracks.clear()
+                state['locked'] = None
+                state['rx'] = state['ry'] = 0.
             if pressed(0x75):
                 state['mode'] = 'body' if state['mode'] == 'head' else 'head'
+                state['locked'] = None
+                state['rx'] = state['ry'] = 0.
             if pressed(0xBB):
                 a.smooth = min(100, a.smooth + 1)
             if pressed(0xBD):
@@ -115,27 +127,34 @@ def main():
                 pos = wintypes.POINT()
                 user.GetCursorPos(ctypes.byref(pos))
                 ox, oy = pos.x - mon['left'], pos.y - mon['top']
-            boxes = []
-            if state['enabled']:
-                frame = np.asarray(capture.grab(mon))[:, :, :3].copy()
-                result = model.predict(frame, conf=a.confidence, classes=a.classes, verbose=False)[0]
-                if result.boxes is not None:
-                    for xy, conf in zip(result.boxes.xyxy.cpu().tolist(), result.boxes.conf.cpu().tolist()):
-                        x1, y1, x2, y2 = xy
-                        box = Box(max(0, x1), max(0, y1), min(mon['width'], x2), min(mon['height'], y2), conf)
-                        boxes.append(box)
-                        canvas.create_rectangle(box.x1, box.y1, box.x2, box.y2, outline='#00ff88', width=2)
-                        px, py = box.point(state['mode'], a.head_ratio, a.body_ratio)
-                        canvas.create_oval(px-3, py-3, px+3, py+3, fill='#00ff88')
-                canvas.create_oval(ox-a.fov, oy-a.fov, ox+a.fov, oy+a.fov, outline='#aaaaaa')
             now = time.perf_counter()
+            if detector.error:
+                raise RuntimeError(detector.error)
+            snapshot = detector.read()
+            if state['enabled'] and snapshot and snapshot[0] != state['sequence']:
+                state['sequence'], captured, boxes, state['latency'] = snapshot
+                tracker.update(boxes, captured)
+            if state['enabled']:
+                for track in tracker.visible(now):
+                    b = track.box
+                    canvas.create_rectangle(b.x1, b.y1, b.x2, b.y2, outline='#00ff88', width=2)
+                    px, py = b.point(state['mode'], a.head_ratio, a.body_ratio)
+                    canvas.create_oval(px-3, py-3, px+3, py+3, fill='#00ff88')
+                canvas.create_oval(ox-a.fov, oy-a.fov, ox+a.fov, oy+a.fov, outline='#aaaaaa')
             dt = min(now - state['last'], .05)
             state['last'] = now
-            target = select_target(boxes, (ox, oy), a.fov, state['mode'], a.head_ratio, a.body_ratio)
+            if not down(0x02):
+                state['locked'] = None
+            track = tracker.choose((ox, oy), a.fov, state['mode'], now, state['locked'],
+                                   max_age=a.aim_age, head=a.head_ratio, body=a.body_ratio) if state['enabled'] else None
+            target = track.box.point(state['mode'], a.head_ratio, a.body_ratio) if track else None
             if down(0x79):
                 root.destroy()
                 return
             if target and down(0x02) and state['enabled']:
+                if state['locked'] != track.id:
+                    state['rx'] = state['ry'] = 0.
+                state['locked'] = track.id
                 dx, dy = smooth_step((ox, oy), target, a.smooth, dt, a.speed)
                 dx += state['rx']
                 dy += state['ry']
@@ -145,10 +164,14 @@ def main():
                 canvas.create_line(ox, oy, *target, fill='#ffcc00')
             else:
                 state['rx'] = state['ry'] = 0.
+                state['locked'] = None
+            stale = bool(snapshot and now-snapshot[1] > a.aim_age)
             canvas.create_text(16, 16, anchor='nw', fill='white', text=(
                 f"{'ON' if state['enabled'] else 'OFF'} | {state['mode']} | smooth {a.smooth:g} | FOV {a.fov}\n"
-                'F8 toggle | F6 head/body | +/- smooth | [ ] FOV | F10 exit'))
-            root.after(10, tick)
+                f'F8 toggle | F6 head/body | +/- smooth | [ ] FOV | F10 exit\n'
+                f'Inference {state["latency"]*1000:.0f} ms | {detector.status}'
+                + (' | STALE: try input 416' if stale else '')))
+            root.after(16, tick)
         except Exception as exc:
             print(f'Stopped safely: {exc}', file=sys.stderr)
             from tkinter import messagebox
@@ -156,10 +179,11 @@ def main():
             root.destroy()
 
     try:
-        root.after(10, tick)
+        root.after(16, tick)
         root.mainloop()
     finally:
-        capture.close()
+        detector.stop.set()
+        detector.enabled.set()
 
 
 if __name__ == '__main__':

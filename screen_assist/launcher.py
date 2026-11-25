@@ -10,13 +10,14 @@ def launch():
 
     root = tk.Tk()
     root.title('НейроАссист / Assist')
-    root.geometry('640x720')
+    root.geometry('700x830')
     root.resizable(False, False)
     frame = ttk.Frame(root, padding=20)
     frame.pack(fill='both', expand=True)
     ttk.Label(frame, text='Assist', font=('Segoe UI', 22, 'bold')).pack(anchor='w')
     ttk.Label(frame, text='Экранные боксы и помощь в наведении').pack(anchor='w', pady=(0, 16))
-    model = tk.StringVar()
+    bundled = Path(__file__).resolve().parent.parent / 'game_detector_final.pt'
+    model = tk.StringVar(value=str(bundled) if bundled.is_file() else '')
     ttk.Label(frame, text='Модель YOLO (.pt), обученная на персонажах игры:').pack(anchor='w')
     row = ttk.Frame(frame)
     row.pack(fill='x', pady=6)
@@ -32,14 +33,22 @@ def launch():
     for label, name, default in [('Классы персонажей (через запятую)', 'classes', '0'),
                                  ('Монитор', 'monitor', '1'),
                                  ('Радиус FOV', 'fov', '100'),
-                                 ('Плавность (больше = медленнее)', 'smooth', '10')]:
+                                 ('Плавность (больше = медленнее)', 'smooth', '10'),
+                                 ('Порог уверенности (0..1)', 'confidence', '0.35')]:
         row = ttk.Frame(frame)
         row.pack(fill='x', pady=3)
         ttk.Label(row, text=label).pack(side='left')
         values[name] = tk.StringVar(value=default)
         ttk.Entry(row, textvariable=values[name], width=15).pack(side='right')
+    for label, name, options in [('Устройство распознавания', 'device', ['cpu', '0']),
+                                  ('Размер входа (меньше = быстрее)', 'imgsz', ['512', '416', '640'])]:
+        row = ttk.Frame(frame)
+        row.pack(fill='x', pady=3)
+        ttk.Label(row, text=label).pack(side='left')
+        values[name] = tk.StringVar(value=options[0])
+        ttk.Combobox(row, textvariable=values[name], values=options, state='readonly', width=13).pack(side='right')
     ttk.Label(frame, text='F8 — включить • F6 — голова/туловище • ПКМ — доводка\nF10 — выход • +/− — плавность • [ / ] — радиус').pack(anchor='w', pady=12)
-    ttk.Label(frame, text='Модель не включена. Используйте только доверенные .pt файлы.').pack(anchor='w')
+    ttk.Label(frame, text='game_detector_final: 0 = player, 1 = self (исключён). GPU 0 требует CUDA.').pack(anchor='w')
     chosen = []
 
     def start():
@@ -48,6 +57,8 @@ def launch():
             return
         try:
             if int(values['monitor'].get()) < 1 or int(values['fov'].get()) < 1 or float(values['smooth'].get()) < 1:
+                raise ValueError()
+            if not 0 < float(values['confidence'].get()) <= 1:
                 raise ValueError()
             for item in values['classes'].get().split(','):
                 int(item)
