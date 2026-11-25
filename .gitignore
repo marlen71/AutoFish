@@ -7,3 +7,4 @@ Assist_captures/
 Assist_training/
 assist_settings.json
 assist_settings.tmp
+.cache/

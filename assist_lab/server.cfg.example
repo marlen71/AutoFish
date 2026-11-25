@@ -1,0 +1,16 @@
+# Add to your OWN isolated FiveM server.cfg. Disabled without explicit opt-in.
+set assist_lab_enabled 1
+set assist_lab_players 0
+
+# Replace YOUR_TEST_LICENSE with the license identifier of your test account.
+# Do not grant access to builtin.everyone on a public server.
+add_ace identifier.license:YOUR_TEST_LICENSE assist.lab allow
+
+ensure assist_lab
+
+# Only if deliberately testing with consenting players on the test server:
+# set assist_lab_players 1
+
+# Runtime disable (server console):
+# set assist_lab_enabled 0
+# Or: stop assist_lab
