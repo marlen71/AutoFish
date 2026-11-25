@@ -15,7 +15,11 @@ if __name__ == '__main__':
         log = open(logs / 'assist.log', 'a', encoding='utf-8', buffering=1)
         sys.stdout = log
         sys.stderr = log
-    if len(sys.argv) > 1:
+    if len(sys.argv) > 1 and sys.argv[1] == '--train':
+        del sys.argv[1]
+        from screen_assist.train import main
+        main()
+    elif len(sys.argv) > 1:
         from screen_assist.app import main
         main()
     else:

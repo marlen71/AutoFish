@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 .assist-venv/
 Assist_captures/
+
+.venv/
+Assist_training/

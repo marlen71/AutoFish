@@ -2,6 +2,8 @@
 import ctypes
 import datetime as dt
 import hashlib
+from collections import deque
+from io import BytesIO
 import json
 import sys
 import time
@@ -16,7 +18,7 @@ def collect(parent, monitor=1):
         messagebox.showerror('Assist', 'Сбор кадров поддерживается на Windows.', parent=parent)
         return
     import mss
-    from mss.tools import to_png
+    from PIL import Image
 
     capture = mss.mss()
     if not 1 <= monitor < len(capture.monitors):
@@ -26,18 +28,19 @@ def collect(parent, monitor=1):
     mon = capture.monitors[monitor]
     folder = Path.cwd() / 'Assist_captures' / dt.datetime.now().strftime('%Y%m%d_%H%M%S_%f')
     folder.mkdir(parents=True, exist_ok=False)
-    metadata = dict(format_version=1, created_utc=dt.datetime.now(dt.timezone.utc).isoformat(),
-                    monitor=mon, interval_seconds=2, limit=500, annotated=False,
+    metadata = dict(format_version=2, created_utc=dt.datetime.now(dt.timezone.utc).isoformat(),
+                    monitor=mon, background_interval_seconds=2, buffer_interval_seconds=.25, limit=500, annotated=False,
                     note='Raw screenshots only; review privacy and annotate before training.', frames=[])
-    state = dict(recording=False, last=0., hash=None, closed=False, keys={})
+    state = dict(recording=False, last=0., hash=None, closed=False, keys={}, post_until=0., last_save=0.)
+    buffer = deque(maxlen=3)
     win = tk.Toplevel(parent)
     win.title('Assist — сбор кадров')
-    win.geometry('580x310')
+    win.geometry('620x350')
     status = tk.StringVar(value='Пауза. F8 — запись/пауза, F10 — остановить и показать окно.')
     frame = ttk.Frame(win, padding=16)
     frame.pack(fill='both', expand=True)
     ttk.Label(frame, text='Сбор данных для обучения', font=('Segoe UI', 16, 'bold')).pack(anchor='w')
-    ttk.Label(frame, text='Без модели и без автонаводки. 1 кадр / 2 сек., максимум 500.\n'
+    ttk.Label(frame, text='НейроАссист: кадры до/после ЛКМ + фон раз в 2 сек. Лимит 500.\n'
               'Захватывается ВЕСЬ выбранный монитор: чат, рабочий стол, окна.\n'
               'Ничего не отправляется автоматически. Проверяйте кадры перед отправкой.').pack(anchor='w', pady=10)
     ttk.Label(frame, textvariable=status, wraplength=540).pack(anchor='w', pady=8)
@@ -48,6 +51,8 @@ def collect(parent, monitor=1):
 
     def pause():
         state['recording'] = False
+        buffer.clear()
+        state['post_until'] = 0.
         manifest()
         win.deiconify()
         win.lift()
@@ -60,7 +65,8 @@ def collect(parent, monitor=1):
             status.set('Достигнут лимит 500 кадров. Сохраните ZIP или начните новую сессию.')
         else:
             state['recording'] = True
-            state['last'] = time.monotonic()  # allow time to return to game
+            state['last'] = time.monotonic() + 2  # allow time to return to game
+            state['keys'][0x01] = bool(user.GetAsyncKeyState(0x01) & 0x8000)
             win.iconify()
 
     def export():
@@ -100,6 +106,19 @@ def collect(parent, monitor=1):
         state['keys'][key] = down
         return down and not before
 
+    def save_sample(sample, reason):
+        if len(metadata['frames']) >= metadata['limit']:
+            return
+        raw, info = sample
+        digest = hashlib.sha256(raw).hexdigest()
+        if digest == state['hash']:
+            return
+        name = f"frame_{len(metadata['frames']):05d}.jpg"
+        (folder / name).write_bytes(raw)
+        metadata['frames'].append(dict(file=name, reason=reason, **info))
+        state['hash'] = digest
+        manifest()
+
     def tick():
         if state['closed']:
             return
@@ -109,23 +128,38 @@ def collect(parent, monitor=1):
             if pressed(0x79):
                 pause()
             now = time.monotonic()
-            if state['recording'] and now - state['last'] >= 2:
-                state['last'] = now
-                shot = capture.grab(mon)
-                rgb = shot.rgb
-                digest = hashlib.sha256(rgb).hexdigest()
-                if digest != state['hash']:
-                    name = f"frame_{len(metadata['frames']):05d}.png"
-                    to_png(rgb, shot.size, output=str(folder / name))
-                    metadata['frames'].append(dict(file=name, captured_utc=dt.datetime.now(dt.timezone.utc).isoformat(),
-                                                   width=shot.width, height=shot.height))
-                    state['hash'] = digest
-                    manifest()
+            click = pressed(0x01)
+            if state['recording'] and now >= state['last']:
+                if click:
+                    for sample in buffer:
+                        save_sample(sample, 'before_left_click')
+                    state['post_until'] = now + .75
+                if now - state['last'] >= .25:
+                    state['last'] = now
+                    shot = capture.grab(mon)
+                    stream = BytesIO()
+                    Image.frombytes('RGB', shot.size, shot.rgb).save(stream, format='JPEG', quality=85)
+                    from ctypes import wintypes
+                    pos = wintypes.POINT()
+                    user.GetCursorPos(ctypes.byref(pos))
+                    sample = (stream.getvalue(), dict(
+                        captured_utc=dt.datetime.now(dt.timezone.utc).isoformat(),
+                        width=shot.width, height=shot.height,
+                        cursor=[pos.x-mon['left'], pos.y-mon['top']],
+                        assumed_crosshair=[shot.width/2, shot.height/2],
+                        left_down=bool(user.GetAsyncKeyState(1) & 0x8000),
+                        right_down=bool(user.GetAsyncKeyState(2) & 0x8000)))
+                    buffer.append(sample)
+                    if now <= state['post_until'] or now - state['last_save'] >= 2:
+                        save_sample(sample, 'click_window' if now <= state['post_until'] else 'background')
+                        state['last_save'] = now
                 if len(metadata['frames']) >= metadata['limit']:
                     pause()
-            win.after(100, tick)
+            win.after(25, tick)
         except Exception as exc:
-            pause()
+            state['recording'] = False
+            buffer.clear()
+            win.deiconify()
             messagebox.showerror('Assist — сбор остановлен', str(exc), parent=win)
             win.after(100, tick)
 

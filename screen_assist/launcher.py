@@ -9,8 +9,8 @@ def launch():
     from tkinter import filedialog, messagebox, ttk
 
     root = tk.Tk()
-    root.title('Assist')
-    root.geometry('600x560')
+    root.title('НейроАссист / Assist')
+    root.geometry('640x720')
     root.resizable(False, False)
     frame = ttk.Frame(root, padding=20)
     frame.pack(fill='both', expand=True)
@@ -76,6 +76,63 @@ def launch():
     ttk.Separator(frame).pack(fill='x', pady=4)
     ttk.Button(frame, text='Сбор кадров для обучения (модель не нужна)', command=collect_frames).pack(fill='x', pady=6)
     ttk.Label(frame, text='Собирает изображения локально. Не обучает модель автоматически.').pack(anchor='w')
+
+    def review_frames():
+        try:
+            from .review import review
+            review(root)
+        except Exception as exc:
+            messagebox.showerror('Разметка', str(exc), parent=root)
+
+    training = {}
+    training_status = tk.StringVar(value='Обучение: CPU по умолчанию. GTX 1080 Ti требует совместимой CUDA-сборки.')
+    gpu = tk.BooleanVar(value=False)
+
+    def train_frames():
+        import subprocess
+        import datetime
+        if training.get('process') and training['process'].poll() is None:
+            messagebox.showinfo('Обучение', 'Обучение уже запущено.', parent=root)
+            return
+        folder = filedialog.askdirectory(parent=root, title='Сессия с проверенным annotations.json')
+        if not folder:
+            return
+        if not (Path(folder) / 'annotations.json').is_file():
+            messagebox.showerror('Обучение', 'Сначала проверьте и разметьте кадры.', parent=root)
+            return
+        if not messagebox.askyesno('Обучение', 'Начать 20 эпох? Закройте игру. Нужен интернет для начальных весов.\n'
+                                 'CPU может работать много часов. Модель не заменится автоматически.', parent=root):
+            return
+        logs = Path.cwd() / 'Assist_training'
+        logs.mkdir(exist_ok=True)
+        log_path = logs / ('train_' + datetime.datetime.now().strftime('%Y%m%d_%H%M%S') + '.log')
+        command = [sys.executable]
+        if not getattr(sys, 'frozen', False):
+            command.append(str(Path(__file__).resolve().parent.parent / 'Assist.py'))
+        command += ['--train', folder, '--device', '0' if gpu.get() else 'cpu']
+        try:
+            with log_path.open('w', encoding='utf-8') as log:
+                process = subprocess.Popen(command, stdout=log, stderr=log)
+            training['process'] = process
+        except Exception as exc:
+            messagebox.showerror('Обучение', str(exc), parent=root)
+            return
+        training_status.set(f'Идёт обучение. Лог: {log_path.name}')
+
+        def check():
+            code = process.poll()
+            if code is None:
+                root.after(2000, check)
+            else:
+                training_status.set('Завершено.' if code == 0 else 'Ошибка — откройте лог обучения.')
+                messagebox.showinfo('Обучение', ('Кандидат сохранён в Assist_training.' if code == 0 else 'Ошибка обучения.')
+                                    + f'\nЛог: {log_path}', parent=root)
+        root.after(2000, check)
+
+    ttk.Button(frame, text='Проверить и разметить кадры', command=review_frames).pack(fill='x', pady=6)
+    ttk.Checkbutton(frame, text='Обучать на GPU 0 (только с совместимым PyTorch/CUDA)', variable=gpu).pack(anchor='w')
+    ttk.Button(frame, text='Дообучить отдельную модель по проверенным кадрам', command=train_frames).pack(fill='x', pady=6)
+    ttk.Label(frame, textvariable=training_status, wraplength=590).pack(anchor='w')
     root.mainloop()
     if not chosen:
         return
