@@ -41,7 +41,7 @@ function Stop-Loader([string]$path) {
         } catch { }
     }
 }
-function Start-Helper([string]$target, $parent, [bool]$broken, [bool]$wrongRoot = $false) {
+function Start-Helper([string]$target, $parent, [bool]$broken, [bool]$wrongRoot = $false, [string]$helperSource = $source) {
     $nonce = [Guid]::NewGuid().ToString('N')
     $stage = Join-Path $directory ('.eternal-core-update-' + $nonce)
     New-Item -ItemType Directory -Path $stage | Out-Null
@@ -50,7 +50,7 @@ function Start-Helper([string]$target, $parent, [bool]$broken, [bool]$wrongRoot 
     else { Copy-Item -LiteralPath $source -Destination $payload }
     Append-Footer $payload $wrongRoot
     if (-not $broken) { Append-Footer $payload $wrongRoot } # distinguish the verified new file from the old one
-    Copy-Item -LiteralPath $source -Destination $helperPath
+    Copy-Item -LiteralPath $helperSource -Destination $helperPath
     $hash = (Get-FileHash -LiteralPath $payload -Algorithm SHA256).Hash.ToLowerInvariant()
     $parent.Refresh(); $ticks = $parent.StartTime.ToUniversalTime().Ticks
     $parameters = @('--apply-update', $parent.Id, $ticks, ('"' + $target + '"'), $hash, $nonce)
@@ -77,13 +77,22 @@ try {
     $script:trustRoot = [IO.File]::ReadAllBytes((Join-Path $directory 'first.der'))
     $script:otherRoot = [IO.File]::ReadAllBytes((Join-Path $directory 'second.der'))
     $env:LOCALAPPDATA = Join-Path $directory 'profile'
+    # Test the actual published 1.3.0 updater against this build, not just a
+    # new updater replacing itself. The release hash is pinned independently.
+    $legacy = Join-Path $directory 'legacy-1.3.0.exe'
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $ProgressPreference = 'SilentlyContinue'
+    Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/marlen71/AutoFish/releases/download/eternal-core-v1.3.0/EternalCore.exe' -OutFile $legacy
+    if ((Get-FileHash -LiteralPath $legacy -Algorithm SHA256).Hash.ToLowerInvariant() -ne '4a9598c0f967dde6cf22a4c5f993f24769feb0ef37a24db066fff084781db121') {
+        throw 'The published 1.3.0 loader does not match its pinned SHA-256.'
+    }
     $target = Join-Path $directory 'EternalCore.exe'
-    Copy-Item -LiteralPath $source -Destination $target
+    Copy-Item -LiteralPath $legacy -Destination $target
     Append-Footer $target
     $oldHash = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant()
     $sentinel = Join-Path $directory 'server.py'; [IO.File]::WriteAllText($sentinel, 'must not be updated')
     $parent = Start-Loader $target; $children += $parent
-    $operation = Start-Helper $target $parent $false; $helper = $operation.Process
+    $operation = Start-Helper $target $parent $false $false $legacy; $helper = $operation.Process
     $null = $parent.CloseMainWindow()
     if (-not $parent.WaitForExit(10000)) { throw 'Original loader did not exit.' }
     if (-not $helper.WaitForExit(35000)) { throw 'Successful updater did not exit.' }
@@ -158,7 +167,7 @@ try {
     }
     if (-not $helper.WaitForExit(10000)) { throw 'Trust-change warning could not be dismissed.' }
     $helper.Refresh(); if ($helper.ExitCode -ne 1) { throw 'Changed trust root did not fail the update.' }
-    Write-Output '::notice title=Updater integration::PASS: pinned root preserved, changed root rejected, atomic replacement, backup and broken-update rollback. No GitHub network download exercised.'
+    Write-Output '::notice title=Updater integration::PASS: the published 1.3.0 helper applied a pre-staged build with the pinned root preserved; changed root rejected, atomic backup and broken-update rollback passed. Release selection and actual user networks were not exercised here.'
 }
 catch {
     $detail = ($_ | Format-List * -Force | Out-String).Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')

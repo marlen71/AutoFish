@@ -547,7 +547,7 @@ public static class GuiSafetyRunner
             }
         }
         if (result == 0)
-            Console.WriteLine("::notice title=GUI safety::PASS: custom window, drag/minimize/close, settings, experimental calibration dialogs, synthetic notice selection and F10 cancellation, start/stop, and F9/F10 with the UI blocked. No GTA5 or physical keyboard was tested.");
+            Console.WriteLine("::notice title=GUI safety::PASS: 1080p/720p image import, notice and gear selection, cropped/transparent/incorrect images rejected, F10 cancellation and busy-state safety; custom window, settings, start/stop, and F9/F10 with blocked UI. No GTA5 or physical keyboard was tested.");
         return result;
     }
 }
