@@ -21,7 +21,9 @@ public static class UpdateNetworkRunner
         return result;
     }
 
-    public static int Run(string source, string directory)
+    public static int Run(string source, string directory) { return Run(source, directory, "0.0.0"); }
+
+    public static int Run(string source, string directory, string installedVersion)
     {
         object staged = null;
         Type updater = null;
@@ -38,7 +40,7 @@ public static class UpdateNetworkRunner
             string customAddress = "http://10.20.30.40:8765";
             append.Invoke(null, new object[] { target, customAddress });
             string oldHash = Hash(target);
-            object release = find.Invoke(null, new object[] { new Version(0, 0, 0) });
+            object release = find.Invoke(null, new object[] { new Version(installedVersion) });
             if (release == null) throw new InvalidOperationException("No usable stable Eternal Core release with a SHA-256 digest was selected.");
             string tag = (string)release.GetType().GetField("Tag").GetValue(release);
             staged = prepare.Invoke(null, new object[] { release, target });
@@ -49,7 +51,7 @@ public static class UpdateNetworkRunner
                 throw new InvalidOperationException("Downloaded EXE did not retain the configured endpoint.");
             if (Hash(target) != oldHash) throw new InvalidOperationException("Preparing the update modified the installed EXE.");
             if (Hash(payload) != Hash(helper)) throw new InvalidOperationException("Helper does not match staged EXE.");
-            Console.WriteLine("::notice title=Live GitHub updater::PASS: selected " + tag +
+            Console.WriteLine("::notice title=Live GitHub updater::PASS: starting from " + installedVersion + ", selected " + tag +
                 ", downloaded and verified its GitHub size/SHA-256 and PE version, staged without installation, and preserved the test endpoint.");
             return 0;
         }
